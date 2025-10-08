@@ -1,7 +1,7 @@
 /* =========================================================
    BokPiloten – Front state & UI (v1.3) – ref toggle / no tone
    ========================================================= */
-
+const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev"; 
 const els = {
   body: document.body,
   form: document.getElementById('storyForm'),
@@ -234,17 +234,55 @@ function onPhotoChange(){
   reader.readAsDataURL(file);
 }
 
-function onSubmit(e){
+async function onSubmit(e){
   e.preventDefault();
   const problems = validateForm();
   if(problems.length){
-    alert('Korrigera innan förhandsvisning:\n\n• ' + problems.join('\n• '));
+    alert('Korrigera:\n\n• ' + problems.join('\n• '));
     return;
   }
-  saveForm();
-  state.pages = makeDemoPages(state.form.pages, state.form.name, state.form.theme || 'ett äventyr');
-  setStatus(`Visar de ${state.visibleCount} första sidorna. Övriga är suddade tills du skapar boken.`);
-  renderPreview(state.pages, state.visibleCount);
+
+  // plocka state från formuläret
+  readForm();
+
+  const payload = {
+    name: state.form.name,
+    age: state.form.age,
+    pages: state.form.pages,
+    category: state.form.category,
+    style: state.form.style,
+    theme: state.form.theme,
+    refMode: state.form.refMode,        // 'desc' | 'photo'
+    traits: state.form.traits || null   // textbeskrivning om 'desc'
+    // photoDataUrl: state.form.photoDataUrl  // vi skickar INTE med foto ännu
+  };
+
+  try{
+    setStatus('Skickar till story-agent...');
+    const res = await fetch(`${BACKEND}/api/story`, {
+      method:'POST',
+      headers:{ 'content-type':'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+
+    if(data?.error){
+      setStatus(null);
+      console.error("Story error:", data.error);
+      alert("Tyvärr uppstod ett fel: " + data.error);
+      return;
+    }
+
+    // 👉 Första målet: landa i console
+    console.log("Story response:", data);
+
+    setStatus('Klar! (kolla console)');
+    // Senare: mappa data.story.book.pages → renderPreview(...)
+  }catch(err){
+    setStatus(null);
+    console.error(err);
+    alert('Nätverksfel eller serverfel. Försök igen.');
+  }
 }
 
 function onDemo(){
