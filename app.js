@@ -1,63 +1,32 @@
-// app.js – steg 1: layout + presets för kategori och stil (ingen API-koppling än)
+// app.js – preview auto-show + smooth scroll + badges
 const $ = (q, r=document)=> r.querySelector(q);
 const $$ = (q, r=document)=> Array.from(r.querySelectorAll(q));
 
 const form = $('#story-form');
+const preview = $('#preview');
 const bookEl = $('#book');
 const statusEl = $('#status');
 const exportBtn = $('#btn-export');
 const mockBtn = $('#btn-mock');
 const clearBtn = $('#btn-clear');
-const preview = $('#preview');
 const badgeCat = $('#badge-cat');
 const badgeStyle = $('#badge-style');
 const styleSelect = $('#style');
 const catHint = $('#cat-hint');
 const styleHint = $('#style-hint');
 
-// Presets för kategori & stil (enkla texter för UI och senare prompts)
 const CAT_PRESETS = {
-  kids: {
-    label: 'Barn',
-    hint: 'Varm ton, enkla meningar, akvarell/pastell.',
-    defaultStyle: 'storybook'
-  },
-  pets: {
-    label: 'Husdjur',
-    hint: 'Lekfull ton, nos-nivå, färgkrita.',
-    defaultStyle: 'storybook'
-  },
-  adult: {
-    label: 'Vuxen',
-    hint: 'Humoristisk ton (SFW), serietidningskänsla.',
-    defaultStyle: 'comic'
-  }
+  kids:  { label:'Barn',    hint:'Varm ton, enkla meningar, akvarell/pastell.' },
+  pets:  { label:'Husdjur', hint:'Lekfull ton, nos-nivå, färgkrita.' },
+  adult: { label:'Vuxen',   hint:'Humoristisk ton (SFW), serietidningskänsla.' }
 };
-
 const STYLE_PRESETS = {
-  storybook: {
-    label: 'Barnbok',
-    hint: 'Akvarell, mjuka penseldrag, pastell.',
-    badge: 'storybook'
-  },
-  comic: {
-    label: 'Serietidning',
-    hint: 'Tjockare konturer, halftone, stark kontrast.',
-    badge: 'comic'
-  },
-  painting: {
-    label: 'Målning',
-    hint: 'Oljemåleri/impasto, texturer, penseldrag.',
-    badge: 'painting'
-  },
-  realism: {
-    label: 'Realism',
-    hint: 'Naturliga proportioner, foto-lika detaljer.',
-    badge: 'realism'
-  }
+  storybook:{ label:'Barnbok',     hint:'Akvarell, mjuka penseldrag, pastell.', badge:'storybook' },
+  comic:    { label:'Serietidning',hint:'Tjockare konturer, halftone, kontrast.', badge:'comic' },
+  painting: { label:'Målning',     hint:'Oljemåleri/impasto, texturer.', badge:'painting' },
+  realism:  { label:'Realism',     hint:'Naturliga proportioner, foto-lika detaljer.', badge:'realism' }
 };
 
-// Enkel state-maskin
 let state = {
   phase: 'idle', // idle → story_ready → preview_ready
   form: {
@@ -88,15 +57,33 @@ function updateBadges(){
   badgeStyle.dataset.style = STYLE_PRESETS[style].badge;
 }
 
-function ensurePreviewVisibility(){
-  if(state.pages.length > 0){ preview.classList.remove('hidden'); }
-  else { preview.classList.add('hidden'); }
+function revealPreviewAndScroll(){
+  // visa preview om vi har sidor
+  if(state.pages.length > 0){
+    const wasHidden = preview.classList.contains('hidden');
+    preview.classList.remove('hidden');
+    updateBadges();
+
+    // scrolla mjukt bara när preview nyss dök upp eller när man klickar "Demosidor"
+    if (wasHidden) {
+      // liten delay så layouten hinner måla
+      requestAnimationFrame(()=>{
+        const header = document.querySelector('.site-header');
+        const headerH = header ? header.getBoundingClientRect().height : 0;
+        const top = preview.getBoundingClientRect().top + window.scrollY - (headerH + 12);
+        window.scrollTo({ top, behavior:'smooth' });
+      });
+    }
+  } else {
+    preview.classList.add('hidden');
+  }
 }
 
 function render(){
-  ensurePreviewVisibility();
-  updateBadges();
+  // toggla preview + badges
+  revealPreviewAndScroll();
 
+  // bygg sidor
   bookEl.innerHTML = '';
   if(!state.pages.length){
     setStatus('Inga sidor ännu. Fyll i formuläret och klicka ”Skapa grund”, eller prova demo.');
@@ -133,31 +120,24 @@ function render(){
   });
 }
 
-// Händelser: kategori & stil uppdaterar hints
-$$('input[name="category"]').forEach(radio=>{
-  radio.addEventListener('change', ()=>{
-    const val = $('input[name="category"]:checked').value;
-    state.form.category = val;
-    catHint.textContent = CAT_PRESETS[val].hint;
-    // auto-välj default stil för vald kategori om användaren inte redan ändrat
-    if(!state.userChangedStyle){
-      state.form.style = CAT_PRESETS[val].defaultStyle;
-      styleSelect.value = state.form.style;
-      styleHint.textContent = STYLE_PRESETS[state.form.style].hint;
-    }
+/* ————— Interaktion ————— */
+
+// Kategori & stil → uppdatera hints/badges
+$$('input[name="category"]').forEach(r=>{
+  r.addEventListener('change', ()=>{
+    state.form.category = $('input[name="category"]:checked').value;
+    catHint.textContent = CAT_PRESETS[state.form.category].hint;
     updateBadges();
   });
 });
 
 styleSelect.addEventListener('change', ()=>{
-  const val = styleSelect.value;
-  state.form.style = val;
-  state.userChangedStyle = true;
-  styleHint.textContent = STYLE_PRESETS[val].hint;
+  state.form.style = styleSelect.value;
+  styleHint.textContent = STYLE_PRESETS[state.form.style].hint;
   updateBadges();
 });
 
-// Form – steg 1: skapa grund (mockade sidor)
+// Form → skapa grund (text placeholders tills API kopplas)
 form.addEventListener('submit', (e)=>{
   e.preventDefault();
   const fd = new FormData(form);
@@ -171,7 +151,6 @@ form.addEventListener('submit', (e)=>{
   state.phase = 'story_ready';
   state.title = `${state.form.name} – ett äventyr`;
 
-  // Mocka sidor tills vi kopplar API
   const txt = state.form.theme || 'Ett litet äventyr börjar…';
   state.pages = Array.from({length: state.form.pages}, (_,i)=>({
     id:`p${i+1}`,
@@ -182,7 +161,7 @@ form.addEventListener('submit', (e)=>{
 });
 
 // Demo-sidor
-$('#btn-mock')?.addEventListener('click', ()=>{
+mockBtn?.addEventListener('click', ()=>{
   state.phase = 'story_ready';
   state.pages = [
     { id:'p1', text:'Här är Nova. Hon är 6 år gammal och älskar äventyr.' },
@@ -193,13 +172,14 @@ $('#btn-mock')?.addEventListener('click', ()=>{
   render();
 });
 
-$('#btn-clear')?.addEventListener('click', ()=>{
+// Rensa
+clearBtn?.addEventListener('click', ()=>{
   state.phase = 'idle';
   state.pages = [];
   render();
 });
 
-// Enkel redigering (utan API än)
+// Redigering (modal)
 const pageModal = $('#pageModal');
 const modalText = $('#modalText');
 bookEl.addEventListener('click', (e)=>{
@@ -224,7 +204,7 @@ bookEl.addEventListener('click', (e)=>{
   }
 });
 
-// Hjälp
+// Utility
 function escapeHtml(s){
   return String(s)
     .replaceAll('&','&amp;')
@@ -234,10 +214,10 @@ function escapeHtml(s){
     .replaceAll("'",'&#039;');
 }
 
-// Init: sätt initiala hints/badges
+// Init
 (function init(){
-  catHint.textContent = CAT_PRESETS[state.form.category].hint;
+  catHint.textContent   = CAT_PRESETS[state.form.category].hint;
   styleHint.textContent = STYLE_PRESETS[state.form.style].hint;
   updateBadges();
-  // preview är dold tills sidor finns
+  render(); // initial state (preview hålls dold)
 })();
