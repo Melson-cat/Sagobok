@@ -11,8 +11,8 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <!-- Header -->
-  <header class="site-header" data-auto-hide>
+  <!-- Header (hero tar vi sen) -->
+  <header class="site-header">
     <a href="/" class="brand" aria-label="AI-Sagobok">
       <img src="images/logo.svg" alt="AI-Sagobok" />
       <span class="brand-name">AI-Sagobok</span>
@@ -27,7 +27,6 @@
     <button id="navToggle" class="hamburger" aria-label="Öppna meny">☰</button>
   </header>
 
-  <!-- Mobilmeny -->
   <div class="mobile-menu" id="mobileMenu" aria-hidden="true">
     <nav>
       <a href="#" aria-current="page">Skapa</a>
@@ -36,94 +35,93 @@
     </nav>
   </div>
 
-  <!-- Hero / Intro -->
-  <section class="hero container">
-    <h1>Skapa en personlig sagobok med AI</h1>
-    <p class="lead">
-      Fyll i några enkla fält. Vi skriver sagan, illustrerar sidorna och bygger en förhandsvisning åt dig.
-    </p>
-  </section>
-
-  <main class="container main-grid">
-    <!-- Inputpanel -->
-    <aside class="panel form-panel">
+  <main class="container stack">
+    <!-- BRED, LÅG FORM – allt syns direkt -->
+    <section class="panel form-panel-wide">
       <form id="story-form" novalidate>
-        <!-- Namn -->
-        <div class="field floating">
-          <input id="childName" name="name" placeholder=" " required />
-          <label for="childName">Namn på huvudperson</label>
-        </div>
+        <div class="form-grid">
+          <!-- Namn -->
+          <div class="field floating short">
+            <input id="childName" name="name" placeholder=" " required />
+            <label for="childName">Namn</label>
+          </div>
 
-        <!-- Ålder + sidor -->
-        <div class="row-2">
-          <div class="field floating">
+          <!-- Ålder -->
+          <div class="field floating short">
             <input id="childAge" name="age" type="number" min="2" max="12" value="6" placeholder=" " required />
             <label for="childAge">Ålder</label>
           </div>
-          <div class="field floating">
+
+          <!-- Sidor -->
+          <div class="field floating short">
             <input id="pages" name="pages" type="number" min="6" max="20" value="10" placeholder=" " required />
-            <label for="pages">Antal sidor</label>
+            <label for="pages">Sidor</label>
+          </div>
+
+          <!-- Tema -->
+          <div class="field floating span-2">
+            <input id="theme" name="theme" placeholder=" " required />
+            <label for="theme">Tema / kort handling</label>
+          </div>
+
+          <!-- Stil -->
+          <div class="field select-field short">
+            <label for="style">Stil</label>
+            <select id="style" name="style">
+              <option value="storybook" selected>Barnbok</option>
+              <option value="comic">Serietidning</option>
+              <option value="painting">Målning</option>
+              <option value="realism">Realism</option>
+            </select>
+            <p class="hint" id="style-hint">Akvarell, mjuka penseldrag, pastell.</p>
+          </div>
+
+          <!-- Kategori -->
+          <fieldset class="field seg-field short">
+            <legend>Kategori</legend>
+            <div class="seg">
+              <label class="seg-item">
+                <input type="radio" name="category" value="kids" checked />
+                <span>Barn</span>
+              </label>
+              <label class="seg-item">
+                <input type="radio" name="category" value="pets" />
+                <span>Husdjur</span>
+              </label>
+              <label class="seg-item">
+                <input type="radio" name="category" value="adult" />
+                <span>Vuxen</span>
+              </label>
+            </div>
+            <p class="hint" id="cat-hint">Varm ton, enkla meningar, akvarell/pastell.</p>
+          </fieldset>
+
+          <!-- Konsekvens -->
+          <fieldset class="field checks short">
+            <legend>Konsekvens</legend>
+            <label class="check">
+              <input type="checkbox" id="keepAspect" checked />
+              <span>Håll 4:3</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" id="keepCamera" checked />
+              <span>Få kameravinklar</span>
+            </label>
+          </fieldset>
+
+          <!-- Knappar -->
+          <div class="actions-row span-3">
+            <button type="submit" class="btn btn-primary">Skapa grund</button>
+            <button id="btn-mock" type="button" class="btn btn-ghost">Demosidor</button>
+            <button id="btn-clear" type="button" class="btn btn-ghost">Rensa</button>
           </div>
         </div>
 
-        <!-- Tema -->
-        <div class="field floating">
-          <input id="theme" name="theme" placeholder=" " required />
-          <label for="theme">Tema / kort handling</label>
-        </div>
-
-        <!-- Kategori (segmented) -->
-        <fieldset class="field">
-          <legend>Kategori</legend>
-          <div class="seg">
-            <label class="seg-item">
-              <input type="radio" name="category" value="kids" checked />
-              <span>Barn</span>
-            </label>
-            <label class="seg-item">
-              <input type="radio" name="category" value="pets" />
-              <span>Husdjur</span>
-            </label>
-            <label class="seg-item">
-              <input type="radio" name="category" value="adult" />
-              <span>Vuxen</span>
-            </label>
-          </div>
-          <p class="hint" id="cat-hint">Varm ton, enkla meningar, akvarell/pastell.</p>
-        </fieldset>
-
-        <!-- Stil -->
-        <div class="field select-field">
-          <label for="style">Illustrationsstil</label>
-          <select id="style" name="style">
-            <option value="storybook" selected>Barnbok</option>
-            <option value="comic">Serietidning</option>
-            <option value="painting">Målning</option>
-            <option value="realism">Realism</option>
-          </select>
-          <p class="hint" id="style-hint">Akvarell, mjuka penseldrag, pastell.</p>
-        </div>
-
-        <!-- Konsekvens & format -->
-        <fieldset class="field checks">
-          <legend>Konsekvens & format</legend>
-          <label class="check">
-            <input type="checkbox" id="keepAspect" checked />
-            <span>Håll 4:3-format</span>
-          </label>
-          <label class="check">
-            <input type="checkbox" id="keepCamera" checked />
-            <span>Begränsa kameravinklar</span>
-          </label>
-        </fieldset>
-
-        <button type="submit" class="btn btn-primary btn-wide">Skapa grund</button>
-        <button id="btn-mock" type="button" class="btn btn-ghost btn-wide">Fyll med demosidor</button>
-        <p class="tiny-hint">Vi kopplar API i nästa steg. Förhandsvisningen visas när det finns sidor.</p>
+        <p class="tiny-hint">Förhandsvisningen visas här nedanför när det finns sidor.</p>
       </form>
-    </aside>
+    </section>
 
-    <!-- Förhandsvisning (dold tills sidor finns) -->
+    <!-- Förhandsvisning – precis under formuläret -->
     <section id="preview" class="panel preview-panel hidden" aria-live="polite">
       <div class="panel-header">
         <div>
@@ -134,15 +132,11 @@
           </div>
         </div>
         <div class="panel-tools">
-          <button id="btn-clear" class="btn btn-ghost">Rensa</button>
           <button id="btn-export" class="btn btn-secondary" disabled>Exportera PDF</button>
         </div>
       </div>
 
-      <!-- statusrad -->
       <div id="status" class="status hidden" role="status"></div>
-
-      <!-- boksidor -->
       <div id="book" class="book-grid" aria-label="Boksidor"></div>
     </section>
   </main>
@@ -151,7 +145,7 @@
     <small>© AI-Sagobok. Prototyp.</small>
   </footer>
 
-  <!-- Modal för redigering -->
+  <!-- Modal för redigering (oförändrad funktion) -->
   <dialog id="pageModal" class="modal">
     <form method="dialog">
       <header><h3>Redigera sida</h3></header>
@@ -167,7 +161,7 @@
   </dialog>
 
   <script>
-    // enkel nav-toggle (frivilligt)
+    // enkel mobilmeny – behåll för nu
     const navBtn = document.getElementById('navToggle');
     const mobile = document.getElementById('mobileMenu');
     if (navBtn && mobile){
