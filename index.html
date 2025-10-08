@@ -84,28 +84,36 @@
           </div>
         </div>
         <!-- Rad 3 -->
-        <div class="form-row">
-          <div class="field">
-            <label for="traits">Kännetecken</label>
-            <textarea id="traits" rows="3" placeholder="Ex: lockigt hår, blå jacka, gula stövlar"></textarea>
-          </div>
-          <div class="field">
-            <label for="charPhoto">Ladda upp foto (valfritt)</label>
-            <input id="charPhoto" type="file" accept="image/*" />
-            <div class="upload-preview">
-              <img id="photoPreview" class="hidden" alt="Förhandsvisning" />
-            </div>
-          </div>
-          <div class="field">
-            <label>Ton / språk</label>
-            <select id="tone">
-              <option value="vardaglig" selected>Vardaglig & varm</option>
-              <option value="spännande">Spännande</option>
-              <option value="humor">Humor</option>
-              <option value="poetisk">Poetisk</option>
-            </select>
-          </div>
-        </div>
+       <!-- Rad 3: Karaktärsreferens (toggle) -->
+<div class="form-row">
+  <div class="field col-span-3">
+    <label>Karaktärsreferens</label>
+
+    <!-- Segmented toggle -->
+    <div class="seg" role="tablist" aria-label="Karaktärsreferens">
+      <button type="button" class="seg-btn active" id="refDescBtn" role="tab" aria-selected="true">Beskrivning</button>
+      <button type="button" class="seg-btn" id="refPhotoBtn" role="tab" aria-selected="false">Foto</button>
+    </div>
+  </div>
+
+  <!-- Beskrivning -->
+  <div class="field col-span-2" id="traitsBlock">
+    <label for="traits">Kännetecken (beskrivning)</label>
+    <textarea id="traits" rows="3" placeholder="Ex: lockigt hår, blå jacka, gula stövlar, ryggsäck med stjärna"></textarea>
+    <p class="hint">Kort och konkret – hjälper AI:n hålla karaktären konsekvent.</p>
+  </div>
+
+  <!-- Foto -->
+  <div class="field col-span-2 hidden" id="photoBlock">
+    <label for="charPhoto">Ladda upp foto (valfritt)</label>
+    <input id="charPhoto" type="file" accept="image/*" />
+    <div class="upload-preview">
+      <img id="photoPreview" class="hidden" alt="Förhandsvisning" />
+    </div>
+    <p class="hint">Används om bild-till-bild stöds. Annars faller vi tillbaka på beskrivning.</p>
+  </div>
+</div>
+
 
         <div class="actions">
           <button type="submit" class="btn btn-primary">Skapa förhandsvisning</button>
