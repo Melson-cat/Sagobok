@@ -4,127 +4,159 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AI-Sagobok</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Quicksand -->
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header class="site-header">
-    <div class="container header-inner">
-      <div class="brand">
-        <span class="logo" aria-hidden="true">📚</span>
-        <h1>AI-Sagobok</h1>
-      </div>
-      <nav class="top-actions" aria-label="Snabbåtgärder">
-        <button id="btn-export" class="btn btn-ghost" disabled>Exportera PDF</button>
-      </nav>
-    </div>
+  <!-- Header -->
+  <header class="site-header" data-auto-hide>
+    <a href="/" class="brand" aria-label="AI-Sagobok">
+      <img src="images/logo.svg" alt="AI-Sagobok" />
+      <span class="brand-name">AI-Sagobok</span>
+    </a>
+
+    <nav class="main-nav" aria-label="Huvudmeny">
+      <a href="#" aria-current="page">Skapa</a>
+      <a href="#">Exempel</a>
+      <a href="#">Kontakt</a>
+    </nav>
+
+    <button id="navToggle" class="hamburger" aria-label="Öppna meny">☰</button>
   </header>
 
-  <main class="container">
-    <ol class="steps" aria-label="Skapasteg">
-      <li class="active">1. Layout</li>
-      <li>2. Skriv sagan (GPT-4)</li>
-      <li>3. Skapa bilder (Gemini)</li>
-      <li>4. Förhandsvisa & Exportera</li>
-    </ol>
+  <!-- Mobilmeny -->
+  <div class="mobile-menu" id="mobileMenu" aria-hidden="true">
+    <nav>
+      <a href="#" aria-current="page">Skapa</a>
+      <a href="#">Exempel</a>
+      <a href="#">Kontakt</a>
+    </nav>
+  </div>
 
-    <section class="grid">
-      <aside class="panel">
-        <h2>1) Dina uppgifter</h2>
+  <!-- Hero / Intro -->
+  <section class="hero container">
+    <h1>Skapa en personlig sagobok med AI</h1>
+    <p class="lead">
+      Fyll i några enkla fält. Vi skriver sagan, illustrerar sidorna och bygger en förhandsvisning åt dig.
+    </p>
+  </section>
 
-        <form id="story-form" novalidate>
-          <div class="field">
-            <label for="childName">Namn på huvudperson</label>
-            <input id="childName" name="name" placeholder="Nova" required />
-          </div>
-
-          <div class="field field-row">
-            <div>
-              <label for="childAge">Ålder</label>
-              <input id="childAge" name="age" type="number" min="2" max="12" value="6" required />
-            </div>
-            <div>
-              <label for="pages">Antal sidor</label>
-              <input id="pages" name="pages" type="number" min="6" max="20" value="10" required />
-            </div>
-          </div>
-
-          <div class="field">
-            <label for="theme">Tema / handling (kort)</label>
-            <input id="theme" name="theme" placeholder="Skogsäventyr vid bäcken" required />
-          </div>
-
-          <fieldset class="field">
-            <legend>Kategori</legend>
-            <div class="seg">
-              <label class="seg-item">
-                <input type="radio" name="category" value="kids" checked />
-                <span>Barn</span>
-              </label>
-              <label class="seg-item">
-                <input type="radio" name="category" value="pets" />
-                <span>Husdjur</span>
-              </label>
-              <label class="seg-item">
-                <input type="radio" name="category" value="adult" />
-                <span>Vuxen</span>
-              </label>
-            </div>
-            <p class="hint" id="cat-hint">Varm ton, enkla meningar, akvarell/pastell.</p>
-          </fieldset>
-
-          <div class="field">
-            <label for="style">Illustrationsstil</label>
-            <select id="style" name="style">
-              <option value="storybook" selected>Barnbok</option>
-              <option value="comic">Serietidning</option>
-              <option value="painting">Målning</option>
-              <option value="realism">Realism</option>
-            </select>
-            <p class="hint" id="style-hint">Akvarell, mjuka penseldrag, pastell.</p>
-          </div>
-
-          <fieldset class="field">
-            <legend>Konsekvens & format</legend>
-            <label class="check"><input type="checkbox" id="keepAspect" checked /> 4:3-format</label>
-            <label class="check"><input type="checkbox" id="keepCamera" checked /> Begränsa kameravinklar</label>
-          </fieldset>
-
-          <div class="field">
-            <button type="submit" class="btn btn-primary">Skapa grund</button>
-          </div>
-        </form>
-
-        <div id="tips" class="tips">
-          <strong>Tips:</strong> Kort och tydligt tema ger bättre resultat. Vi kopplar API i steg 2–3.
+  <main class="container main-grid">
+    <!-- Inputpanel -->
+    <aside class="panel form-panel">
+      <form id="story-form" novalidate>
+        <!-- Namn -->
+        <div class="field floating">
+          <input id="childName" name="name" placeholder=" " required />
+          <label for="childName">Namn på huvudperson</label>
         </div>
-      </aside>
 
-      <!-- Förhandsvisning: dold tills vi har sidor -->
-      <section id="preview" class="panel hidden">
-        <div class="panel-header">
+        <!-- Ålder + sidor -->
+        <div class="row-2">
+          <div class="field floating">
+            <input id="childAge" name="age" type="number" min="2" max="12" value="6" placeholder=" " required />
+            <label for="childAge">Ålder</label>
+          </div>
+          <div class="field floating">
+            <input id="pages" name="pages" type="number" min="6" max="20" value="10" placeholder=" " required />
+            <label for="pages">Antal sidor</label>
+          </div>
+        </div>
+
+        <!-- Tema -->
+        <div class="field floating">
+          <input id="theme" name="theme" placeholder=" " required />
+          <label for="theme">Tema / kort handling</label>
+        </div>
+
+        <!-- Kategori (segmented) -->
+        <fieldset class="field">
+          <legend>Kategori</legend>
+          <div class="seg">
+            <label class="seg-item">
+              <input type="radio" name="category" value="kids" checked />
+              <span>Barn</span>
+            </label>
+            <label class="seg-item">
+              <input type="radio" name="category" value="pets" />
+              <span>Husdjur</span>
+            </label>
+            <label class="seg-item">
+              <input type="radio" name="category" value="adult" />
+              <span>Vuxen</span>
+            </label>
+          </div>
+          <p class="hint" id="cat-hint">Varm ton, enkla meningar, akvarell/pastell.</p>
+        </fieldset>
+
+        <!-- Stil -->
+        <div class="field select-field">
+          <label for="style">Illustrationsstil</label>
+          <select id="style" name="style">
+            <option value="storybook" selected>Barnbok</option>
+            <option value="comic">Serietidning</option>
+            <option value="painting">Målning</option>
+            <option value="realism">Realism</option>
+          </select>
+          <p class="hint" id="style-hint">Akvarell, mjuka penseldrag, pastell.</p>
+        </div>
+
+        <!-- Konsekvens & format -->
+        <fieldset class="field checks">
+          <legend>Konsekvens & format</legend>
+          <label class="check">
+            <input type="checkbox" id="keepAspect" checked />
+            <span>Håll 4:3-format</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="keepCamera" checked />
+            <span>Begränsa kameravinklar</span>
+          </label>
+        </fieldset>
+
+        <button type="submit" class="btn btn-primary btn-wide">Skapa grund</button>
+        <button id="btn-mock" type="button" class="btn btn-ghost btn-wide">Fyll med demosidor</button>
+        <p class="tiny-hint">Vi kopplar API i nästa steg. Förhandsvisningen visas när det finns sidor.</p>
+      </form>
+    </aside>
+
+    <!-- Förhandsvisning (dold tills sidor finns) -->
+    <section id="preview" class="panel preview-panel hidden" aria-live="polite">
+      <div class="panel-header">
+        <div>
           <h2>Förhandsvisning</h2>
-          <div class="panel-tools">
-            <button id="btn-mock" class="btn btn-ghost">Fyll med demo-sidor</button>
-            <button id="btn-clear" class="btn btn-ghost">Rensa</button>
+          <div class="meta">
+            <span id="badge-cat" class="badge">Kategori: Barn</span>
+            <span id="badge-style" class="badge" data-style="storybook">Stil: Barnbok</span>
           </div>
         </div>
-
-        <div class="meta">
-          <span id="badge-cat" class="badge">Kategori: Barn</span>
-          <span id="badge-style" class="badge">Stil: Barnbok</span>
+        <div class="panel-tools">
+          <button id="btn-clear" class="btn btn-ghost">Rensa</button>
+          <button id="btn-export" class="btn btn-secondary" disabled>Exportera PDF</button>
         </div>
+      </div>
 
-        <div id="status" class="status hidden" role="status" aria-live="polite"></div>
-        <div id="book" class="book-grid" aria-label="Boksidor"></div>
-      </section>
+      <!-- statusrad -->
+      <div id="status" class="status hidden" role="status"></div>
+
+      <!-- boksidor -->
+      <div id="book" class="book-grid" aria-label="Boksidor"></div>
     </section>
   </main>
 
+  <footer class="site-footer container">
+    <small>© AI-Sagobok. Prototyp.</small>
+  </footer>
+
+  <!-- Modal för redigering -->
   <dialog id="pageModal" class="modal">
     <form method="dialog">
       <header><h3>Redigera sida</h3></header>
       <div class="modal-body">
-        <label for="modalText">Text</label>
+        <label for="modalText" class="sr-only">Text</label>
         <textarea id="modalText" rows="6"></textarea>
       </div>
       <footer class="modal-actions">
@@ -134,12 +166,18 @@
     </form>
   </dialog>
 
-  <footer class="site-footer">
-    <div class="container">
-      <small>© AI-Sagobok. Prototyp.</small>
-    </div>
-  </footer>
-
+  <script>
+    // enkel nav-toggle (frivilligt)
+    const navBtn = document.getElementById('navToggle');
+    const mobile = document.getElementById('mobileMenu');
+    if (navBtn && mobile){
+      navBtn.addEventListener('click', ()=>{
+        mobile.classList.toggle('open');
+        mobile.setAttribute('aria-hidden', mobile.classList.contains('open') ? 'false' : 'true');
+      });
+      mobile.addEventListener('click', (e)=>{ if(e.target === mobile) mobile.classList.remove('open'); });
+    }
+  </script>
   <script src="app.js"></script>
 </body>
 </html>
