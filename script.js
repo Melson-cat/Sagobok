@@ -243,6 +243,20 @@ function onPhotoChange(){
   reader.readAsDataURL(file);
 }
 
+function renderSkeleton(count=4){
+  grid.innerHTML = '';
+  for(let i=0;i<count;i++){
+    const el = document.createElement('article');
+    el.className = 'thumb';
+    el.innerHTML = `
+      <div class="imgwrap"><div class="skeleton"></div></div>
+      <div class="txt"><span class="skeleton" style="display:block;height:12px;margin-bottom:8px"></span>
+      <span class="skeleton" style="display:block;height:12px;width:60%"></span></div>`;
+    grid.appendChild(el);
+  }
+  preview.classList.remove('hidden');
+}
+
 async function onSubmit(e){
   e.preventDefault();
 
@@ -264,7 +278,7 @@ async function onSubmit(e){
     refMode: state.form.refMode,
     traits: state.form.traits || null
   };
-
+renderSkeleton(4);
   try{
     setStatus('Skickar till story-agent...');
     setLoading(true);
