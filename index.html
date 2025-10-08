@@ -1,166 +1,111 @@
 <!DOCTYPE html>
 <html lang="sv">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI-Sagobok</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BokPiloten – Skapa din AI-bok</title>
+  <link rel="stylesheet" href="style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Quicksand:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body data-theme="kids">
+
   <header class="site-header">
-    <a href="/" class="brand" aria-label="AI-Sagobok">
-      <img src="images/logo.svg" alt="AI-Sagobok" />
-      <span class="brand-name">AI-Sagobok</span>
+    <a href="/" class="brand">
+      <img src="images/pilot-logo.png" alt="BokPiloten">
+      <span>BokPiloten</span>
     </a>
-
-    <nav class="main-nav" aria-label="Huvudmeny">
-      <a href="#" aria-current="page">Skapa</a>
+    <nav class="main-nav">
+      <a href="#">Skapa bok</a>
       <a href="#">Exempel</a>
-      <a href="#">Kontakt</a>
+      <a href="#">Om oss</a>
     </nav>
-
-    <button id="navToggle" class="hamburger" aria-label="Öppna meny">☰</button>
+    <button id="navToggle" class="hamburger" aria-label="Meny">&#9776;</button>
   </header>
 
-  <div class="mobile-menu" id="mobileMenu" aria-hidden="true">
+  <div class="mobile-menu">
     <nav>
-      <a href="#" aria-current="page">Skapa</a>
+      <a href="#">Skapa bok</a>
       <a href="#">Exempel</a>
-      <a href="#">Kontakt</a>
+      <a href="#">Om oss</a>
     </nav>
   </div>
 
-  <main class="container stack">
-    <!-- FORM-PANEL: tydligt färgad, svävande, strikt grid -->
-    <section class="panel form-panel-strong">
-      <form id="story-form" novalidate>
-        <!-- RAD 1: Namn · Ålder · Antal sidor -->
+  <main class="container">
+    <section class="intro">
+      <h1>Skapa din egen AI-illustrerade bok</h1>
+      <p>
+        Fyll i några detaljer, välj stil och se din berättelse ta form med både text och bilder.
+      </p>
+    </section>
+
+    <section id="bookForm">
+      <form id="storyForm">
         <div class="form-row">
           <div class="field">
-            <label for="childName">Namn</label>
-            <input id="childName" name="name" />
+            <label for="name">Namn</label>
+            <input id="name" placeholder="Ex: Nova">
           </div>
           <div class="field">
-            <label for="childAge">Ålder</label>
-            <input id="childAge" name="age" type="number" min="2" max="120" value="6" />
+            <label for="age">Ålder</label>
+            <input id="age" type="number" min="1" value="6">
           </div>
           <div class="field">
             <label for="pages">Antal sidor</label>
-            <select id="pages" name="pages">
-              <option value="12" selected>Kort – 12 sidor</option>
-              <option value="16">Medium – 16 sidor</option>
-              <option value="20">Stor – 20 sidor</option>
+            <select id="pages">
+              <option value="12">Kort (12)</option>
+              <option value="16" selected>Medium (16)</option>
+              <option value="20">Lång (20)</option>
             </select>
           </div>
         </div>
 
-        <!-- RAD 2: Kategori · Stil · Tema -->
         <div class="form-row">
           <div class="field">
             <label for="category">Kategori</label>
-            <select id="category" name="category">
+            <select id="category">
               <option value="kids" selected>Barn</option>
               <option value="pets">Husdjur</option>
               <option value="adult">Vuxen</option>
             </select>
-            <p class="hint" id="cat-hint">Varm och trygg ton.</p>
           </div>
-
           <div class="field">
             <label for="style">Illustrationsstil</label>
-            <select id="style" name="style">
+            <select id="style">
               <option value="storybook" selected>Barnbok</option>
               <option value="comic">Serietidning</option>
               <option value="painting">Målning</option>
               <option value="realism">Realism</option>
             </select>
-            <p class="hint" id="style-hint">Akvarell, mjuka penseldrag.</p>
           </div>
-
           <div class="field">
             <label for="theme">Tema / kort handling</label>
-            <input id="theme" name="theme" placeholder="Ex: skogsäventyr vid bäcken" />
+            <input id="theme" placeholder="Ex: Skogsäventyr vid bäcken">
           </div>
         </div>
 
-        <!-- RAD 3: Karaktärsreferens -->
-        <div class="form-row">
-          <div class="field">
-            <label for="refMode">Karaktärsreferens</label>
-            <select id="refMode" name="refMode">
-              <option value="desc" selected>Beskrivning</option>
-              <option value="photo">Ladda upp foto</option>
-            </select>
-            <p class="hint">Används för att hålla karaktären konsekvent i bilderna.</p>
-          </div>
-
-          <div id="traitsBlock" class="field field-span-2">
-            <label for="traits">Kännetecken (beskrivning)</label>
-            <textarea id="traits" name="traits" rows="3" placeholder="Ex: lockigt brunt hår, blå jacka, gula stövlar, ryggsäck med stjärnmärke"></textarea>
-            <p class="hint">Kort, tydligt, konkreta kännetecken och återkommande rekvisita.</p>
-          </div>
-
-          <div id="photoBlock" class="field field-span-2 hidden">
-            <label for="charPhoto">Ladda upp foto (valfritt)</label>
-            <input id="charPhoto" name="charPhoto" type="file" accept="image/*" />
-            <div class="upload-preview">
-              <img id="photoPreview" alt="Förhandsvisning" class="hidden" />
-            </div>
-            <p class="hint">Om API:et stödjer image-to-image använder vi det annars traits.</p>
-          </div>
+        <div class="field">
+          <label for="traits">Kännetecken</label>
+          <textarea id="traits" rows="3" placeholder="Ex: lockigt hår, blå jacka, gula stövlar"></textarea>
         </div>
 
-        <div class="actions-row">
-          <button type="submit" class="btn btn-primary">Skapa grund</button>
-          <button id="btn-mock" type="button" class="btn btn-ghost">Demosidor</button>
-          <button id="btn-clear" type="button" class="btn btn-ghost">Rensa</button>
+        <div class="actions">
+          <button type="submit" class="btn btn-primary">Skapa förhandsvisning</button>
+          <button id="demoBtn" type="button" class="btn btn-ghost">Visa demo</button>
         </div>
-        <p class="tiny-hint">Förhandsvisningen visas här nedanför när det finns sidor.</p>
       </form>
     </section>
 
-    <!-- FÖRHANDSVISNING -->
-    <section id="preview" class="panel preview-panel hidden" aria-live="polite">
-      <div class="panel-header">
-        <div>
-          <h2>Förhandsvisning</h2>
-          <div class="meta">
-            <span id="badge-cat" class="badge">Kategori: Barn</span>
-            <span id="badge-style" class="badge" data-style="storybook">Stil: Barnbok</span>
-          </div>
-        </div>
-        <div class="panel-tools">
-          <button id="btn-export" class="btn btn-secondary" disabled>Exportera PDF</button>
-        </div>
-      </div>
-
-      <div id="status" class="status hidden" role="status"></div>
-      <div id="book" class="book-grid" aria-label="Boksidor"></div>
+    <section id="preview" class="hidden">
+      <h2>Förhandsvisning</h2>
+      <div id="bookPreview"></div>
     </section>
   </main>
 
-  <footer class="site-footer container">
-    <small>© AI-Sagobok. Prototyp.</small>
+  <footer class="site-footer">
+    <p>© 2025 BokPiloten – Byggd med 💚 i Sverige</p>
   </footer>
 
-  <!-- Modal för redigering (oförändrad) -->
-  <dialog id="pageModal" class="modal">
-    <form method="dialog">
-      <header><h3>Redigera sida</h3></header>
-      <div class="modal-body">
-        <label for="modalText" class="sr-only">Text</label>
-        <textarea id="modalText" rows="6"></textarea>
-      </div>
-      <footer class="modal-actions">
-        <button class="btn btn-ghost">Avbryt</button>
-        <button id="modalSave" class="btn btn-primary" value="save">Spara</button>
-      </footer>
-    </form>
-  </dialog>
-
-  <script src="app.js"></script>
+  <script src="script.js"></script>
 </body>
 </html>
