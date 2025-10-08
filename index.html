@@ -10,8 +10,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Quicksand:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css" />
 </head>
-<body>
-  <!-- Header (hero tar vi sen) -->
+<body data-theme="kids">
+  <!-- Header (hero fixar vi senare) -->
   <header class="site-header">
     <a href="/" class="brand" aria-label="AI-Sagobok">
       <img src="images/logo.svg" alt="AI-Sagobok" />
@@ -36,7 +36,7 @@
   </div>
 
   <main class="container stack">
-    <!-- BRED, LÅG FORM – allt syns direkt -->
+    <!-- BRED & LÅG FORM – förenklad -->
     <section class="panel form-panel-wide">
       <form id="story-form" novalidate>
         <div class="form-grid">
@@ -52,10 +52,14 @@
             <label for="childAge">Ålder</label>
           </div>
 
-          <!-- Sidor -->
-          <div class="field floating short">
-            <input id="pages" name="pages" type="number" min="6" max="20" value="10" placeholder=" " required />
-            <label for="pages">Sidor</label>
+          <!-- Antal sidor (fixa 12/16/20) -->
+          <div class="field select-field short">
+            <label for="pages">Antal sidor</label>
+            <select id="pages" name="pages">
+              <option value="12" selected>Kort – 12 sidor</option>
+              <option value="16">Medium – 16 sidor</option>
+              <option value="20">Stor – 20 sidor</option>
+            </select>
           </div>
 
           <!-- Tema -->
@@ -64,9 +68,20 @@
             <label for="theme">Tema / kort handling</label>
           </div>
 
-          <!-- Stil -->
+          <!-- Kategori (dropdown) -->
           <div class="field select-field short">
-            <label for="style">Stil</label>
+            <label for="category">Kategori</label>
+            <select id="category" name="category">
+              <option value="kids" selected>Barn</option>
+              <option value="pets">Husdjur</option>
+              <option value="adult">Vuxen</option>
+            </select>
+            <p class="hint" id="cat-hint">Varm ton, enkla meningar, akvarell/pastell.</p>
+          </div>
+
+          <!-- Stil (dropdown) -->
+          <div class="field select-field short">
+            <label for="style">Illustrationsstil</label>
             <select id="style" name="style">
               <option value="storybook" selected>Barnbok</option>
               <option value="comic">Serietidning</option>
@@ -75,39 +90,6 @@
             </select>
             <p class="hint" id="style-hint">Akvarell, mjuka penseldrag, pastell.</p>
           </div>
-
-          <!-- Kategori -->
-          <fieldset class="field seg-field short">
-            <legend>Kategori</legend>
-            <div class="seg">
-              <label class="seg-item">
-                <input type="radio" name="category" value="kids" checked />
-                <span>Barn</span>
-              </label>
-              <label class="seg-item">
-                <input type="radio" name="category" value="pets" />
-                <span>Husdjur</span>
-              </label>
-              <label class="seg-item">
-                <input type="radio" name="category" value="adult" />
-                <span>Vuxen</span>
-              </label>
-            </div>
-            <p class="hint" id="cat-hint">Varm ton, enkla meningar, akvarell/pastell.</p>
-          </fieldset>
-
-          <!-- Konsekvens -->
-          <fieldset class="field checks short">
-            <legend>Konsekvens</legend>
-            <label class="check">
-              <input type="checkbox" id="keepAspect" checked />
-              <span>Håll 4:3</span>
-            </label>
-            <label class="check">
-              <input type="checkbox" id="keepCamera" checked />
-              <span>Få kameravinklar</span>
-            </label>
-          </fieldset>
 
           <!-- Knappar -->
           <div class="actions-row span-3">
@@ -121,7 +103,7 @@
       </form>
     </section>
 
-    <!-- Förhandsvisning – precis under formuläret -->
+    <!-- Förhandsvisning – direkt under formuläret -->
     <section id="preview" class="panel preview-panel hidden" aria-live="polite">
       <div class="panel-header">
         <div>
@@ -145,7 +127,7 @@
     <small>© AI-Sagobok. Prototyp.</small>
   </footer>
 
-  <!-- Modal för redigering (oförändrad funktion) -->
+  <!-- Modal för redigering -->
   <dialog id="pageModal" class="modal">
     <form method="dialog">
       <header><h3>Redigera sida</h3></header>
@@ -161,7 +143,7 @@
   </dialog>
 
   <script>
-    // enkel mobilmeny – behåll för nu
+    // enkel mobilmeny
     const navBtn = document.getElementById('navToggle');
     const mobile = document.getElementById('mobileMenu');
     if (navBtn && mobile){

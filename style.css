@@ -1,8 +1,8 @@
 /* ============================================================
-   AI-Sagobok – Bred, låg form + preview under
+   AI-Sagobok – Förenklad form (dropdowns) + tema per kategori
    ============================================================ */
 
-/* Design-tokens */
+/* Bas-palett (kids default) */
 :root{
   --brand:#668068; --accent:#c0cfc1; --light:#e8e6dc; --dark:#363531; --head-bg:#f8f7f1;
   --bg-grad:linear-gradient(135deg,var(--light) 0%,#fff 100%);
@@ -12,6 +12,26 @@
   --sh-md:0 4px 14px rgba(0,0,0,.12);
   --sh-lg:0 8px 26px rgba(0,0,0,.16);
   --ink:var(--dark);
+}
+
+/* Tema overrides */
+body[data-theme="kids"]{
+  --brand:#4B70E2;          /* blå */
+  --accent:#8FD6B3;         /* grön pastell */
+  --light:#F3F6FF;          /* ljus bakgrund */
+  --head-bg:#ffffff;
+}
+body[data-theme="pets"]{
+  --brand:#FF8A5B;          /* aprikos */
+  --accent:#36C1B3;         /* turkos */
+  --light:#FFF5EF;
+  --head-bg:#ffffff;
+}
+body[data-theme="adult"]{
+  --brand:#1B2A6B;          /* djup blå */
+  --accent:#FF3366;         /* neon-rosa accent */
+  --light:#F3F5FF;
+  --head-bg:#ffffff;
 }
 
 /* Bas */
@@ -50,7 +70,7 @@ img{display:block;max-width:100%;height:auto}
 }
 .mobile-menu.open{opacity:1;pointer-events:auto}
 .mobile-menu nav{
-  background:var(--light);width:min(80%,320px);height:100%;
+  background:#fff;width:min(80%,320px);height:100%;
   padding:90px 28px 40px;display:flex;flex-direction:column;gap:28px;
   box-shadow:-4px 0 12px rgba(0,0,0,.08);
 }
@@ -62,7 +82,7 @@ img{display:block;max-width:100%;height:auto}
 
 /* Paneler */
 .panel{
-  background:rgba(255,255,255,.6);
+  background:rgba(255,255,255,.65);
   backdrop-filter:blur(10px);
   border:1px solid #e6e4da;
   border-radius:var(--r-lg);
@@ -80,28 +100,23 @@ img{display:block;max-width:100%;height:auto}
 }
 
 /* Spalter (desktop) */
-.field.short{grid-column: span 2}
+.field.short{grid-column: span 3}
 .field.select-field.short{grid-column: span 3}
-.seg-field.short{grid-column: span 3}
-.checks.short{grid-column: span 3}
 .span-2{grid-column: span 6}
 .span-3{grid-column: span 12}
 
-/* Responsiv nedbrytning */
+/* Responsiv */
 @media (max-width: 1000px){
-  .field.short{grid-column: span 3}
+  .field.short{grid-column: span 4}
   .field.select-field.short{grid-column: span 4}
-  .seg-field.short{grid-column: span 5}
-  .checks.short{grid-column: span 6}
   .span-2{grid-column: span 12}
 }
 @media (max-width: 640px){
   .form-grid{grid-template-columns: repeat(6, 1fr)}
-  .field.short,.field.select-field.short,.seg-field.short,.checks.short,
-  .span-2,.span-3{grid-column: span 6}
+  .field.short,.field.select-field.short,.span-2,.span-3{grid-column: span 6}
 }
 
-/* Flytande inputs – kompakt (lägre höjd) */
+/* Flytande inputs – kompakt */
 .field{display:grid;gap:6px;margin:4px 0}
 .floating{position:relative}
 .floating input{
@@ -111,7 +126,7 @@ img{display:block;max-width:100%;height:auto}
   box-shadow:0 1px 3px rgba(0,0,0,.05);
   transition:border .18s, box-shadow .18s;
 }
-.floating input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(102,128,104,.15)}
+.floating input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px color-mix(in srgb, var(--brand) 20%, transparent)}
 .floating label{
   position:absolute; left:10px; top:9px; padding:0 6px;
   background:#fff; color:#6a786a; border-radius:8px;
@@ -133,16 +148,6 @@ select{
   box-shadow:0 1px 3px rgba(0,0,0,.05);
 }
 .hint{color:#6a786a;font-size:12px;margin-top:4px}
-
-/* Segmented control – i rad */
-.seg{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
-.seg-item{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;border:1px solid #cfd6cf;background:#fff;cursor:pointer}
-.seg-item input{accent-color:var(--brand)}
-
-/* Checks – två små rader */
-.checks{display:flex;gap:12px;flex-wrap:wrap}
-.check{display:flex;align-items:center;gap:8px}
-.check span{font-size:14px}
 
 /* Knapprad */
 .actions-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:2px}

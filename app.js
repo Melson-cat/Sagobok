@@ -1,4 +1,4 @@
-// app.js – preview auto-show + smooth scroll + badges
+// app.js – dropdowns för kategori/stil, fasta sidantal, tema-switch + preview
 const $ = (q, r=document)=> r.querySelector(q);
 const $$ = (q, r=document)=> Array.from(r.querySelectorAll(q));
 
@@ -12,6 +12,8 @@ const clearBtn = $('#btn-clear');
 const badgeCat = $('#badge-cat');
 const badgeStyle = $('#badge-style');
 const styleSelect = $('#style');
+const catSelect = $('#category');
+const pagesSelect = $('#pages');
 const catHint = $('#cat-hint');
 const styleHint = $('#style-hint');
 
@@ -28,16 +30,14 @@ const STYLE_PRESETS = {
 };
 
 let state = {
-  phase: 'idle', // idle → story_ready → preview_ready
+  phase: 'idle',
   form: {
     name: 'Nova',
     age: 6,
-    pages: 10,
+    pages: 12,            // default kort
     theme: '',
     category: 'kids',
-    style: 'storybook',
-    keepAspect: true,
-    keepCamera: true
+    style: 'storybook'
   },
   title: 'Min AI-Sagobok',
   pages: [] // { id, text, imgUrl? }
@@ -49,24 +49,23 @@ function setStatus(msg){
   statusEl.classList.remove('hidden');
 }
 
+function updateTheme(){
+  // kategoristyrd palett
+  document.body.setAttribute('data-theme', state.form.category);
+}
+
 function updateBadges(){
-  const cat = state.form.category;
-  const style = state.form.style;
-  badgeCat.textContent = `Kategori: ${CAT_PRESETS[cat].label}`;
-  badgeStyle.textContent = `Stil: ${STYLE_PRESETS[style].label}`;
-  badgeStyle.dataset.style = STYLE_PRESETS[style].badge;
+  badgeCat.textContent = `Kategori: ${CAT_PRESETS[state.form.category].label}`;
+  badgeStyle.textContent = `Stil: ${STYLE_PRESETS[state.form.style].label}`;
+  badgeStyle.dataset.style = STYLE_PRESETS[state.form.style].badge;
 }
 
 function revealPreviewAndScroll(){
-  // visa preview om vi har sidor
   if(state.pages.length > 0){
     const wasHidden = preview.classList.contains('hidden');
     preview.classList.remove('hidden');
     updateBadges();
-
-    // scrolla mjukt bara när preview nyss dök upp eller när man klickar "Demosidor"
     if (wasHidden) {
-      // liten delay så layouten hinner måla
       requestAnimationFrame(()=>{
         const header = document.querySelector('.site-header');
         const headerH = header ? header.getBoundingClientRect().height : 0;
@@ -80,10 +79,8 @@ function revealPreviewAndScroll(){
 }
 
 function render(){
-  // toggla preview + badges
   revealPreviewAndScroll();
 
-  // bygg sidor
   bookEl.innerHTML = '';
   if(!state.pages.length){
     setStatus('Inga sidor ännu. Fyll i formuläret och klicka ”Skapa grund”, eller prova demo.');
@@ -120,33 +117,31 @@ function render(){
   });
 }
 
-/* ————— Interaktion ————— */
+/* ——— Interaktion ——— */
 
-// Kategori & stil → uppdatera hints/badges
-$$('input[name="category"]').forEach(r=>{
-  r.addEventListener('change', ()=>{
-    state.form.category = $('input[name="category"]:checked').value;
-    catHint.textContent = CAT_PRESETS[state.form.category].hint;
-    updateBadges();
-  });
+// Kategori → tema + hint + badge
+catSelect.addEventListener('change', ()=>{
+  state.form.category = catSelect.value;
+  catHint.textContent = CAT_PRESETS[state.form.category].hint;
+  updateTheme();
+  updateBadges();
 });
 
+// Stil → hint + badge
 styleSelect.addEventListener('change', ()=>{
   state.form.style = styleSelect.value;
   styleHint.textContent = STYLE_PRESETS[state.form.style].hint;
   updateBadges();
 });
 
-// Form → skapa grund (text placeholders tills API kopplas)
+// Form → skapa grund (sidantal från select)
 form.addEventListener('submit', (e)=>{
   e.preventDefault();
   const fd = new FormData(form);
   state.form.name = (fd.get('name') || 'Nova').toString().trim();
   state.form.age = Number(fd.get('age') || 6);
-  state.form.pages = Math.max(6, Math.min(20, Number(fd.get('pages') || 10)));
+  state.form.pages = Number(fd.get('pages') || 12);
   state.form.theme = (fd.get('theme') || '').toString().trim();
-  state.form.keepAspect = !!$('#keepAspect')?.checked;
-  state.form.keepCamera = !!$('#keepCamera')?.checked;
 
   state.phase = 'story_ready';
   state.title = `${state.form.name} – ett äventyr`;
@@ -163,11 +158,20 @@ form.addEventListener('submit', (e)=>{
 // Demo-sidor
 mockBtn?.addEventListener('click', ()=>{
   state.phase = 'story_ready';
+  state.form.pages = 12;
   state.pages = [
     { id:'p1', text:'Här är Nova. Hon är 6 år gammal och älskar äventyr.' },
     { id:'p2', text:'Vid bäcken hittar Nova ett löv som flyter. Hon följer det nyfiket.' },
     { id:'p3', text:'En liten träbro leder över vattnet. Nova tar mod till sig och går över.' },
-    { id:'p4', text:'I gläntan står ett tält. Ryggsäcken får vila medan hon läser en bok.' }
+    { id:'p4', text:'I gläntan står ett tält. Ryggsäcken får vila medan hon läser en bok.' },
+    { id:'p5', text:'Molnen speglar sig i vattnet när vinden viskar i träden.' },
+    { id:'p6', text:'Nova möter en ekorre som visar en gömd stig.' },
+    { id:'p7', text:'Stigen leder till en solig glänta med blommor.' },
+    { id:'p8', text:'Hon bygger en liten lövbåt och sjösätter den.' },
+    { id:'p9', text:'Båten fastnar – Nova räddar den med en pinne.' },
+    { id:'p10', text:'På bron vinkar hon till spegelbilden i vattnet.' },
+    { id:'p11', text:'I tältet tänder hon lampan och läser vidare.' },
+    { id:'p12', text:'Dagen avslutas med en varm filt och stjärnljus.' }
   ];
   render();
 });
@@ -218,6 +222,6 @@ function escapeHtml(s){
 (function init(){
   catHint.textContent   = CAT_PRESETS[state.form.category].hint;
   styleHint.textContent = STYLE_PRESETS[state.form.style].hint;
+  updateTheme();
   updateBadges();
-  render(); // initial state (preview hålls dold)
 })();
