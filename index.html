@@ -34,24 +34,20 @@
   </div>
 
   <main class="container stack">
-    <!-- BRED & LÅG FORM -->
-    <section class="panel form-panel-wide">
+    <!-- FORM-PANEL: tydligt färgad, svävande, strikt grid -->
+    <section class="panel form-panel-strong">
       <form id="story-form" novalidate>
-        <div class="form-grid">
-          <!-- Namn -->
-          <div class="field floating short">
-            <input id="childName" name="name" placeholder=" " required />
+        <!-- RAD 1: Namn · Ålder · Antal sidor -->
+        <div class="form-row">
+          <div class="field">
             <label for="childName">Namn</label>
+            <input id="childName" name="name" />
           </div>
-
-          <!-- Ålder -->
-          <div class="field floating short">
-            <input id="childAge" name="age" type="number" min="2" max="120" value="6" placeholder=" " required />
+          <div class="field">
             <label for="childAge">Ålder</label>
+            <input id="childAge" name="age" type="number" min="2" max="120" value="6" />
           </div>
-
-          <!-- Antal sidor -->
-          <div class="field select-field short">
+          <div class="field">
             <label for="pages">Antal sidor</label>
             <select id="pages" name="pages">
               <option value="12" selected>Kort – 12 sidor</option>
@@ -59,15 +55,11 @@
               <option value="20">Stor – 20 sidor</option>
             </select>
           </div>
+        </div>
 
-          <!-- Tema -->
-          <div class="field floating span-2">
-            <input id="theme" name="theme" placeholder=" " required />
-            <label for="theme">Tema / kort handling</label>
-          </div>
-
-          <!-- Kategori (dropdown) -->
-          <div class="field select-field short">
+        <!-- RAD 2: Kategori · Stil · Tema -->
+        <div class="form-row">
+          <div class="field">
             <label for="category">Kategori</label>
             <select id="category" name="category">
               <option value="kids" selected>Barn</option>
@@ -77,8 +69,7 @@
             <p class="hint" id="cat-hint">Varm och trygg ton.</p>
           </div>
 
-          <!-- Stil (dropdown) -->
-          <div class="field select-field short">
+          <div class="field">
             <label for="style">Illustrationsstil</label>
             <select id="style" name="style">
               <option value="storybook" selected>Barnbok</option>
@@ -89,8 +80,15 @@
             <p class="hint" id="style-hint">Akvarell, mjuka penseldrag.</p>
           </div>
 
-          <!-- Karaktärsreferens: val -->
-          <div class="field select-field short">
+          <div class="field">
+            <label for="theme">Tema / kort handling</label>
+            <input id="theme" name="theme" placeholder="Ex: skogsäventyr vid bäcken" />
+          </div>
+        </div>
+
+        <!-- RAD 3: Karaktärsreferens -->
+        <div class="form-row">
+          <div class="field">
             <label for="refMode">Karaktärsreferens</label>
             <select id="refMode" name="refMode">
               <option value="desc" selected>Beskrivning</option>
@@ -99,36 +97,32 @@
             <p class="hint">Används för att hålla karaktären konsekvent i bilderna.</p>
           </div>
 
-          <!-- Beskrivning (traits) -->
-          <div id="traitsBlock" class="field span-3">
+          <div id="traitsBlock" class="field field-span-2">
             <label for="traits">Kännetecken (beskrivning)</label>
             <textarea id="traits" name="traits" rows="3" placeholder="Ex: lockigt brunt hår, blå jacka, gula stövlar, ryggsäck med stjärnmärke"></textarea>
             <p class="hint">Kort, tydligt, konkreta kännetecken och återkommande rekvisita.</p>
           </div>
 
-          <!-- Foto-upload -->
-          <div id="photoBlock" class="field span-3 hidden">
+          <div id="photoBlock" class="field field-span-2 hidden">
             <label for="charPhoto">Ladda upp foto (valfritt)</label>
             <input id="charPhoto" name="charPhoto" type="file" accept="image/*" />
             <div class="upload-preview">
               <img id="photoPreview" alt="Förhandsvisning" class="hidden" />
-              <p class="tiny-hint">Vi stödjer foto som referens (image-to-image) i nästa steg om API:et tillåter.</p>
             </div>
-          </div>
-
-          <!-- Knappar -->
-          <div class="actions-row span-3">
-            <button type="submit" class="btn btn-primary">Skapa grund</button>
-            <button id="btn-mock" type="button" class="btn btn-ghost">Demosidor</button>
-            <button id="btn-clear" type="button" class="btn btn-ghost">Rensa</button>
+            <p class="hint">Om API:et stödjer image-to-image använder vi det annars traits.</p>
           </div>
         </div>
 
+        <div class="actions-row">
+          <button type="submit" class="btn btn-primary">Skapa grund</button>
+          <button id="btn-mock" type="button" class="btn btn-ghost">Demosidor</button>
+          <button id="btn-clear" type="button" class="btn btn-ghost">Rensa</button>
+        </div>
         <p class="tiny-hint">Förhandsvisningen visas här nedanför när det finns sidor.</p>
       </form>
     </section>
 
-    <!-- Förhandsvisning – under formuläret -->
+    <!-- FÖRHANDSVISNING -->
     <section id="preview" class="panel preview-panel hidden" aria-live="polite">
       <div class="panel-header">
         <div>
@@ -152,7 +146,7 @@
     <small>© AI-Sagobok. Prototyp.</small>
   </footer>
 
-  <!-- Modal för redigering -->
+  <!-- Modal för redigering (oförändrad) -->
   <dialog id="pageModal" class="modal">
     <form method="dialog">
       <header><h3>Redigera sida</h3></header>

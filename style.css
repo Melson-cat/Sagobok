@@ -1,56 +1,73 @@
 /* ============================================================
-   AI-Sagobok – Kategoriteman + förenklad form + upload-preview
+   AI-Sagobok – starkare temaskiften + färgad inputyta + linjering
    ============================================================ */
 
 /* Bas-tokens (överridas per tema) */
 :root{
   --brand:#668068; --accent:#c0cfc1;
-  --bg1:#e8e6dc; --bg2:#ffffff;     /* för bakgrundsgradient */
-  --surface:#ffffff;                /* paneler */
-  --ink:#2f3130; --muted:#69736b; --border:#e3e0d6;
+  --bg1:#e8e6dc; --bg2:#ffffff;      /* sidbakgrund */
+  --surface:#ffffff;                 /* paneler */
+  --surface-tint:#f8fafc;            /* panel-insida */
+  --ink:#2f3130; --muted:#69736b; 
+  --border:#e3e0d6;
+  --input-bg:#ffffff;                /* inputfältens bakgrund */
+  --input-border:#d9dfe6;
+  --input-shadow: 0 1px 2px rgba(0,0,0,.06) inset;
   --grad-main:linear-gradient(90deg,var(--brand) 0%,var(--accent) 100%);
   --r-lg:18px; --r-md:12px; --r-sm:10px;
-  --sh-sm:0 1px 3px rgba(0,0,0,.08);
-  --sh-md:0 4px 14px rgba(0,0,0,.12);
-  --sh-lg:0 8px 26px rgba(0,0,0,.16);
+  --sh-sm:0 2px 8px rgba(0,0,0,.08);
+  --sh-md:0 8px 26px rgba(0,0,0,.12);
+  --sh-lg:0 14px 42px rgba(0,0,0,.16);
 }
 
 /* ——— Teman ——— */
 
-/* Barn: mjukt blågrönt, ljus, vänligt */
+/* Barn – salviagrönt/blått, mjuk och ljus */
 body[data-theme="kids"]{
-  --brand:#4B70E2;
-  --accent:#8FD6B3;
-  --bg1:#EEF3FF;
-  --bg2:#FFFFFF;
+  --brand:#2F8E6E;       /* primär: djup grön */
+  --accent:#6DD3B1;      /* accent: mint */
+  --bg1:#EFFFF7;         /* gradient bakgrund 1 */
+  --bg2:#F8FFFC;         /* gradient bakgrund 2 */
   --surface:#FFFFFF;
-  --ink:#253047;
-  --muted:#5c6b85;
-  --border:#e2e8ff;
+  --surface-tint:#F4FFF9; /* panel-insida svagt grön */
+  --ink:#103B2F;
+  --muted:#5a7a72;
+  --border:#cfe9df;
+
+  --input-bg:#F9FFFB;    /* inputs har ljusare grönt */
+  --input-border:#BFECDC;
 }
 
-/* Husdjur: lekfull aprikos + turkos, varm ljusgrund */
+/* Husdjur – lekfull aprikos/turkos */
 body[data-theme="pets"]{
-  --brand:#FF8A5B;
-  --accent:#36C1B3;
-  --bg1:#FFF3EC;
+  --brand:#FF7B4F;
+  --accent:#2BC8BA;
+  --bg1:#FFF1EA;
   --bg2:#FFFFFF;
   --surface:#FFFFFF;
-  --ink:#4a332a;
+  --surface-tint:#FFF7F2;
+  --ink:#3E2A24;
   --muted:#7a5d54;
-  --border:#ffe2d2;
+  --border:#FFD9C9;
+
+  --input-bg:#FFF9F5;
+  --input-border:#FFD1BE;
 }
 
-/* Vuxen: mognare djupblå + magentaaccent, svalare bakgrund */
+/* Vuxen – moget midnatt + magentaaccent */
 body[data-theme="adult"]{
-  --brand:#1B2A6B;
-  --accent:#FF3366;
-  --bg1:#F0F3FF;
+  --brand:#152659;
+  --accent:#E33A72;
+  --bg1:#EFF2FF;
   --bg2:#FFFFFF;
   --surface:#FFFFFF;
-  --ink:#22293d;
-  --muted:#596076;
-  --border:#dfe4ff;
+  --surface-tint:#F4F6FF;
+  --ink:#1D243A;
+  --muted:#56607A;
+  --border:#DCE2FF;
+
+  --input-bg:#F7F9FF;
+  --input-border:#CBD6FF;
 }
 
 /* ——— Baslayout ——— */
@@ -97,95 +114,88 @@ img{display:block;max-width:100%;height:auto}
   box-shadow:-4px 0 12px rgba(0,0,0,.08);
 }
 
-/* Paneler */
+/* Panel – mer “svävande” + färgad insida */
 .panel{
-  background:color-mix(in srgb, var(--surface) 90%, white 10%);
-  backdrop-filter:blur(10px);
+  background:var(--surface);
   border:1px solid var(--border);
   border-radius:var(--r-lg);
-  box-shadow:var(--sh-sm);
-  padding:16px;
+  box-shadow:var(--sh-md);
+  padding:0;
+  overflow:hidden;
 }
+.form-panel-strong{
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-tint) 85%, white 15%), var(--surface) 100%);
+  border:1px solid color-mix(in srgb, var(--brand) 12%, var(--border) 88%);
+}
+.form-panel-strong form{ padding:18px; }
 
-/* Form – bred & låg */
-.form-panel-wide{padding:18px}
-.form-grid{
+/* Strikt grid & linjering */
+.form-row{
   display:grid;
   grid-template-columns: repeat(12, 1fr);
   gap:12px;
-  align-items:start;
+  margin-bottom:10px;
 }
-.field{display:grid;gap:6px;margin:4px 0}
-.field.short{grid-column: span 3}
-.field.select-field.short{grid-column: span 3}
-.span-2{grid-column: span 6}
-.span-3{grid-column: span 12}
+.form-row .field{ grid-column: span 4; }       /* 3 fält per rad på desktop */
+.field.field-span-2{ grid-column: span 8; }    /* traits/photo tar 2/3 bredd */
 
-@media (max-width:1000px){
-  .field.short{grid-column: span 4}
-  .field.select-field.short{grid-column: span 4}
-  .span-2{grid-column: span 12}
+@media (max-width: 1020px){
+  .form-row .field{ grid-column: span 6; }     /* 2 per rad */
+  .field.field-span-2{ grid-column: span 12; }
 }
-@media (max-width:640px){
-  .form-grid{grid-template-columns: repeat(6, 1fr)}
-  .field.short,.field.select-field.short,.span-2,.span-3{grid-column: span 6}
+@media (max-width: 640px){
+  .form-row .field{ grid-column: span 12; }    /* stack */
 }
 
-/* Floating inputs */
-.floating{position:relative}
-.floating input{
-  width:100%; padding:12px 12px 10px;
-  border-radius:10px; border:1px solid var(--border); background:#fff;
-  font:italic 16px Quicksand,sans-serif;
-  box-shadow:0 1px 3px rgba(0,0,0,.05);
-  transition:border .18s, box-shadow .18s;
-}
-.floating input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px color-mix(in srgb, var(--brand) 20%, transparent)}
-.floating label{
-  position:absolute; left:10px; top:9px; padding:0 6px;
-  background:#fff; color:var(--muted); border-radius:8px;
-  font:600 12px Quicksand,sans-serif; letter-spacing:.1px;
-  transform-origin:left top; transition:all .16s ease;
-}
-.floating input::placeholder{opacity:0}
-.floating input:focus + label,
-.floating input:not(:placeholder-shown) + label{
-  transform:translateY(-16px) scale(.92);
-  color:var(--brand);
+/* Fält – rubrik över, jämn höjd */
+.field{ display:grid; gap:8px; align-items:start; }
+.field label{
+  font:700 13px Quicksand,sans-serif; color:var(--ink); letter-spacing:.1px; font-style:normal;
 }
 
-/* Selects + hints */
-.select-field label{font:700 13px Quicksand,sans-serif;color:var(--brand);font-style:normal}
-select{
-  width:100%; padding:10px 12px; border-radius:10px;
-  border:1px solid var(--border); background:#fff;
-  font:italic 15px Quicksand,sans-serif; color:var(--brand);
-  box-shadow:0 1px 3px rgba(0,0,0,.05);
+/* Inputs – ljus nyans av temat + inre skugga */
+input, select, textarea{
+  width:100%;
+  padding:12px 12px;
+  border-radius:12px;
+  border:1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--ink);
+  box-shadow: var(--input-shadow);
+  transition: border .15s, box-shadow .15s, background .2s;
 }
-.hint{color:var(--muted);font-size:12px;margin-top:4px}
+textarea{ min-height:96px; resize:vertical; }
+input::placeholder, textarea::placeholder{ color: color-mix(in srgb, var(--ink) 40%, transparent); opacity:.65; }
+
+input:focus, select:focus, textarea:focus{
+  outline:none;
+  border-color: color-mix(in srgb, var(--brand) 55%, var(--input-border) 45%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 20%, transparent), var(--input-shadow);
+}
 
 /* Upload preview */
 .upload-preview{display:flex;align-items:center;gap:12px}
 .upload-preview img{
-  width:72px;height:72px;object-fit:cover;border-radius:10px;border:1px solid var(--border);box-shadow:var(--sh-sm)
+  width:72px;height:72px;object-fit:cover;border-radius:10px;
+  border:1px solid var(--border);box-shadow:var(--sh-sm);
 }
 
 /* Knappar */
-.actions-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:2px}
+.actions-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
 .btn{
   display:inline-flex;align-items:center;justify-content:center;gap:8px;
   border:0;border-radius:12px;cursor:pointer;transition:transform .15s, box-shadow .15s;
-  padding:10px 14px;
+  padding:11px 16px;
 }
 .btn-primary{background:var(--grad-main);color:#fff;box-shadow:var(--sh-md)}
 .btn-primary:hover{transform:translateY(-1px);box-shadow:var(--sh-lg)}
-.btn-ghost{background:transparent;color:var(--brand);border:1px solid var(--border)}
+.btn-ghost{background:transparent;color:var(--brand);border:1px solid var(--input-border)}
 .btn-ghost:hover{box-shadow:var(--sh-sm)}
 .btn-secondary{background:#fff;color:var(--brand);border:2px solid var(--brand)}
 .btn-secondary:hover{background:var(--brand);color:#fff}
 
 /* Preview */
-.preview-panel{padding:18px}
+.preview-panel{ padding:18px; }
 .panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
 .meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
 .badge{display:inline-block;padding:6px 10px;border-radius:999px;background:color-mix(in srgb, var(--brand) 12%, white 88%);border:1px solid var(--border);color:var(--ink);font:700 12px Quicksand,sans-serif}
@@ -211,8 +221,8 @@ select{
 @media (max-width:620px){ .page{grid-template-columns:1fr} }
 
 .page .imgbox{
-  background:color-mix(in srgb, var(--brand) 6%, #eef1f7 94%);
-  border:1px dashed color-mix(in srgb, var(--brand) 20%, #d5dbeb 80%);
+  background:color-mix(in srgb, var(--brand) 8%, #eef1f7 92%);
+  border:1px dashed color-mix(in srgb, var(--brand) 24%, #d5dbeb 76%);
   border-radius:10px;min-height:200px;display:grid;place-items:center;color:#7a8390
 }
 .page .imgbox img{border-radius:10px}
@@ -227,7 +237,7 @@ select{
 .modal header{padding:12px 14px;border-bottom:1px solid var(--border)}
 .modal .modal-body{padding:12px 14px}
 .modal textarea{
-  width:100%;min-height:160px;resize:vertical;padding:10px;border:1px solid var(--border);border-radius:10px;background:#fff;
+  width:100%;min-height:160px;resize:vertical;padding:10px;border:1px solid var(--input-border);border-radius:10px;background:#fff;
   font:italic 16px Quicksand,sans-serif;
 }
 .modal .modal-actions{display:flex;gap:10px;justify-content:flex-end;padding:12px 14px;border-top:1px solid var(--border)}
@@ -235,3 +245,4 @@ select{
 /* Footer */
 .site-footer{text-align:center;color:var(--muted);padding:28px 0 48px}
 .tiny-hint{color:var(--muted);font-size:12px}
+
