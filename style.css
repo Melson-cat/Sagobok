@@ -25,19 +25,19 @@
 body[data-theme="kids"]{
   --bg:#f6fbf7;                 /* mjuk grönvit */
   --panel:#eef6f1;              /* ett snäpp mörkare än bg */
-  --brand:#2b8c68;              /* skogsgrön */
+  --brand:#3fb88c;              /* skogsgrön */
   --brand-2:#9fd8c4;
   --focus:#a6dcff;
-  --field: color-mix(in srgb, white 92%, var(--bg)); /* nästan vitt */
+  --field: color-mix(in srgb, white 94%, var(--bg)); /* nästan vitt */
 }
 /* Husdjur = lugn ljusblå */
 body[data-theme="pets"]{
-  --bg:#f6f8ff;                 /* mjuk ljusblå */
-  --panel:#eef1fb;
+  --bg:#c0e5fc;                 /* mjuk ljusblå */
+  --panel:#dfe2ec;
   --brand:#5f79f2;              /* snäll blå */
   --brand-2:#c3cffd;
   --focus:#c6d7ff;
-  --field: color-mix(in srgb, white 92%, var(--bg));
+  --field: color-mix(in srgb, white 94%, var(--bg));
 }
 
 /* ========= Reset/typografi ========= */
@@ -259,4 +259,63 @@ input:focus, select:focus, textarea:focus{
 }
 @media (max-width:480px){
   .thumb-grid{ grid-template-columns:1fr; }
+}
+/* --- Buttons: hover/active pop --- */
+.btn{
+  transition: box-shadow .18s ease, transform .07s ease, opacity .15s ease, background .18s ease;
+}
+.btn:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 12px 26px color-mix(in srgb, var(--brand) 34%, transparent);
+}
+.btn:active{
+  transform: translateY(0);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--brand) 28%, transparent);
+}
+
+.btn-primary{
+  background: linear-gradient(180deg, var(--brand), color-mix(in srgb, var(--brand) 88%, black));
+}
+.btn-primary:hover{
+  filter: brightness(1.02);
+}
+.btn-primary:active{
+  filter: brightness(.98);
+}
+
+.btn-ghost{
+  background: transparent;
+  border-color: var(--border);
+}
+.btn-ghost:hover{
+  background: color-mix(in srgb, var(--field) 75%, white);
+  box-shadow: 0 6px 16px rgba(0,0,0,.05);
+}
+
+/* --- Segmented toggle-buttons --- */
+.seg-btn{
+  transition: box-shadow .18s ease, transform .07s ease, background .18s ease, color .18s ease;
+}
+.seg-btn:hover{
+  color: var(--text);
+  background: color-mix(in srgb, white 88%, var(--panel));
+  box-shadow: 0 6px 16px rgba(0,0,0,.05);
+}
+.seg-btn.active{
+  background: white;
+  color: var(--text);
+  box-shadow:
+    0 2px 6px rgba(0,0,0,.06),
+    0 8px 18px rgba(0,0,0,.06),
+    inset 0 0 0 1px var(--border);
+}
+/* --- Inputs: lite extra “float” på hover --- */
+input, select, textarea{
+  transition: box-shadow .18s ease, border-color .18s ease, transform .06s ease, background .18s ease;
+}
+input:hover, select:hover, textarea:hover{
+  box-shadow:
+    0 3px 10px rgba(0,0,0,.045),
+    0 14px 28px rgba(0,0,0,.06),
+    inset 0 1px 0 rgba(255,255,255,.72);
 }
