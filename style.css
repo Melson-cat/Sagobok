@@ -1,97 +1,91 @@
-/* ============================================================
-   AI-Sagobok – starkare temaskiften + färgad inputyta + linjering
-   ============================================================ */
+/* ============ Pastell, mjuka toner + perfekt linjering ============ */
 
-/* Bas-tokens (överridas per tema) */
+/* Bas (överskrivs per tema) */
 :root{
-  --brand:#668068; --accent:#c0cfc1;
-  --bg1:#e8e6dc; --bg2:#ffffff;      /* sidbakgrund */
-  --surface:#ffffff;                 /* paneler */
-  --surface-tint:#f8fafc;            /* panel-insida */
-  --ink:#2f3130; --muted:#69736b; 
-  --border:#e3e0d6;
-  --input-bg:#ffffff;                /* inputfältens bakgrund */
-  --input-border:#d9dfe6;
-  --input-shadow: 0 1px 2px rgba(0,0,0,.06) inset;
-  --grad-main:linear-gradient(90deg,var(--brand) 0%,var(--accent) 100%);
+  --brand:#6fa48f; --accent:#bfe4d2;
+
+  --bg1:#f7faf9; --bg2:#ffffff;         /* sidbakgrund, mjuk */
+  --surface:#ffffff;                     /* panel */
+  --surface-tint:#fbfdfc;                /* panel-insida svagt tonad */
+
+  --ink:#243530; --muted:#6b7c75;
+  --border:#e7efe9;
+
+  /* Inputs: nästan vita, bara en aning färg */
+  --input-bg: color-mix(in srgb, white 96%, var(--brand) 4%);
+  --input-border: color-mix(in srgb, var(--brand) 14%, #e9efec 86%);
+  --input-shadow: 0 1px 0 rgba(0,0,0,.03) inset;
+
+  --grad-main: linear-gradient(90deg, var(--brand) 0%, var(--accent) 100%);
   --r-lg:18px; --r-md:12px; --r-sm:10px;
-  --sh-sm:0 2px 8px rgba(0,0,0,.08);
-  --sh-md:0 8px 26px rgba(0,0,0,.12);
-  --sh-lg:0 14px 42px rgba(0,0,0,.16);
+  --sh-sm:0 2px 8px rgba(0,0,0,.06);
+  --sh-md:0 8px 28px rgba(0,0,0,.10);
+  --sh-lg:0 14px 44px rgba(0,0,0,.14);
 }
 
-/* ——— Teman ——— */
-
-/* Barn – salviagrönt/blått, mjuk och ljus */
+/* -------- Teman (pastell) -------- */
+/* Barn – skogsgrön/blå ton, väldigt mjuk */
 body[data-theme="kids"]{
-  --brand:#2F8E6E;       /* primär: djup grön */
-  --accent:#6DD3B1;      /* accent: mint */
-  --bg1:#EFFFF7;         /* gradient bakgrund 1 */
-  --bg2:#F8FFFC;         /* gradient bakgrund 2 */
-  --surface:#FFFFFF;
-  --surface-tint:#F4FFF9; /* panel-insida svagt grön */
-  --ink:#103B2F;
-  --muted:#5a7a72;
-  --border:#cfe9df;
+  --brand:#3c8f6f;              /* djupare grön som bas */
+  --accent:#a8e4c8;             /* mintpastell */
+  --bg1:#f4fbf7; --bg2:#ffffff;
+  --surface-tint:#f7fdf9;
 
-  --input-bg:#F9FFFB;    /* inputs har ljusare grönt */
-  --input-border:#BFECDC;
+  --ink:#213b32; --muted:#64847a; --border:#d9efe4;
+
+  --input-bg: color-mix(in srgb, white 97%, var(--brand) 3%);
+  --input-border: color-mix(in srgb, var(--brand) 10%, #e6f3ed 90%);
 }
 
-/* Husdjur – lekfull aprikos/turkos */
+/* Husdjur – aprikos/turkos i låg mättnad */
 body[data-theme="pets"]{
-  --brand:#FF7B4F;
-  --accent:#2BC8BA;
-  --bg1:#FFF1EA;
-  --bg2:#FFFFFF;
-  --surface:#FFFFFF;
-  --surface-tint:#FFF7F2;
-  --ink:#3E2A24;
-  --muted:#7a5d54;
-  --border:#FFD9C9;
+  --brand:#ff8b66;
+  --accent:#66d6cd;
+  --bg1:#fff8f4; --bg2:#ffffff;
+  --surface-tint:#fffaf7;
 
-  --input-bg:#FFF9F5;
-  --input-border:#FFD1BE;
+  --ink:#3e2f29; --muted:#7f675f; --border:#ffe6da;
+
+  --input-bg: color-mix(in srgb, white 97%, #ff8b66 3%);
+  --input-border:#ffe0d4;
 }
 
-/* Vuxen – moget midnatt + magentaaccent */
+/* Vuxen – midnatt + hallonaccent, svalt */
 body[data-theme="adult"]{
-  --brand:#152659;
-  --accent:#E33A72;
-  --bg1:#EFF2FF;
-  --bg2:#FFFFFF;
-  --surface:#FFFFFF;
-  --surface-tint:#F4F6FF;
-  --ink:#1D243A;
-  --muted:#56607A;
-  --border:#DCE2FF;
+  --brand:#22346f;
+  --accent:#f06d96;
+  --bg1:#f6f8ff; --bg2:#ffffff;
+  --surface-tint:#f7f9ff;
 
-  --input-bg:#F7F9FF;
-  --input-border:#CBD6FF;
+  --ink:#222a3d; --muted:#5d6883; --border:#e0e5ff;
+
+  --input-bg: color-mix(in srgb, white 97%, #22346f 3%);
+  --input-border:#d7defa;
 }
 
-/* ——— Baslayout ——— */
+/* -------- Baslayout -------- */
 *{box-sizing:border-box}
 html,body{max-width:100%;overflow-x:hidden}
 html{scroll-behavior:smooth}
 body{
-  font:400 italic 17px/1.5 "Quicksand",system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+  font:400 italic 17px/1.5 "Quicksand", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
   color:var(--ink);
-  background:linear-gradient(135deg,var(--bg1) 0%, var(--bg2) 100%);
+  background:linear-gradient(135deg, var(--bg1) 0%, var(--bg2) 100%);
   margin:0; padding-top:88px;
 }
 img{display:block;max-width:100%;height:auto}
 .container{max-width:1200px;margin:0 auto;padding:0 18px}
 .stack{display:grid;gap:18px}
 .hidden{display:none!important}
-.sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 
-/* Header */
+/* Header (oförändrad) */
 .site-header{
   position:fixed; inset:0 0 auto 0; height:74px; z-index:3000;
   display:flex; align-items:center; gap:16px;
   padding:0 clamp(14px,4vw,60px);
-  background:var(--surface); box-shadow:var(--sh-sm); border-bottom:1px solid var(--border);
+  background:var(--surface);
+  border-bottom:1px solid var(--border);
+  box-shadow:var(--sh-sm);
 }
 .brand{display:flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none}
 .brand img{height:44px;width:44px;object-fit:contain}
@@ -100,60 +94,50 @@ img{display:block;max-width:100%;height:auto}
 .main-nav a{font:600 16px Quicksand,sans-serif;color:var(--ink);text-decoration:none;position:relative}
 .main-nav a::after{content:"";position:absolute;left:0;bottom:-6px;height:2px;width:0;background:var(--brand);transition:width .25s}
 .main-nav a:hover{color:var(--brand)} .main-nav a:hover::after{width:100%}
-.hamburger{display:none;background:none;border:none;font-size:26px;color:var(--ink);margin-left:auto}
-@media (max-width:900px){ .main-nav{display:none} .hamburger{display:block} }
 
-.mobile-menu{
-  position:fixed;inset:0;background:#0006;display:flex;justify-content:flex-end;
-  opacity:0;pointer-events:none;transition:opacity .3s;z-index:2900;
-}
-.mobile-menu.open{opacity:1;pointer-events:auto}
-.mobile-menu nav{
-  background:var(--surface);width:min(80%,320px);height:100%;
-  padding:90px 28px 40px;display:flex;flex-direction:column;gap:28px;
-  box-shadow:-4px 0 12px rgba(0,0,0,.08);
-}
-
-/* Panel – mer “svävande” + färgad insida */
+/* Panel – svävande + diskret färgbar i toppen */
 .panel{
-  background:var(--surface);
+  position:relative;
+  background: var(--surface);
   border:1px solid var(--border);
-  border-radius:var(--r-lg);
-  box-shadow:var(--sh-md);
-  padding:0;
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-md);
   overflow:hidden;
 }
-.form-panel-strong{
-  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-tint) 85%, white 15%), var(--surface) 100%);
-  border:1px solid color-mix(in srgb, var(--brand) 12%, var(--border) 88%);
+.panel::before{
+  content:""; position:absolute; inset:0 0 auto 0; height:4px;
+  background: linear-gradient(90deg, var(--brand) 0%, var(--accent) 100%);
+  opacity:.9;
 }
+.form-panel-strong{ background: linear-gradient(180deg, var(--surface-tint), var(--surface) 100%); }
 .form-panel-strong form{ padding:18px; }
 
-/* Strikt grid & linjering */
+/* Strikt grid – tre jämnbreda kolumner */
 .form-row{
   display:grid;
   grid-template-columns: repeat(12, 1fr);
   gap:12px;
   margin-bottom:10px;
+  align-items:end;            /* <— gör att kontrollerna ligger i samma linje */
 }
-.form-row .field{ grid-column: span 4; }       /* 3 fält per rad på desktop */
-.field.field-span-2{ grid-column: span 8; }    /* traits/photo tar 2/3 bredd */
+.form-row .field{ grid-column: span 4; }       /* 3 per rad */
+.field.field-span-2{ grid-column: span 8; }    /* traits/photo över två kolumner */
 
-@media (max-width: 1020px){
+@media (max-width:1020px){
   .form-row .field{ grid-column: span 6; }     /* 2 per rad */
   .field.field-span-2{ grid-column: span 12; }
 }
-@media (max-width: 640px){
+@media (max-width:640px){
   .form-row .field{ grid-column: span 12; }    /* stack */
 }
 
-/* Fält – rubrik över, jämn höjd */
+/* Fält – labels med samma stil överallt */
 .field{ display:grid; gap:8px; align-items:start; }
 .field label{
-  font:700 13px Quicksand,sans-serif; color:var(--ink); letter-spacing:.1px; font-style:normal;
+  font:700 13px Quicksand,sans-serif; color:var(--ink); letter-spacing:.08px; font-style:normal;
 }
 
-/* Inputs – ljus nyans av temat + inre skugga */
+/* Inputs – nästan vita, subtil border & skugga */
 input, select, textarea{
   width:100%;
   padding:12px 12px;
@@ -163,21 +147,26 @@ input, select, textarea{
   color: var(--ink);
   box-shadow: var(--input-shadow);
   transition: border .15s, box-shadow .15s, background .2s;
+  min-height:48px;            /* samma höjd för select/input */
 }
 textarea{ min-height:96px; resize:vertical; }
-input::placeholder, textarea::placeholder{ color: color-mix(in srgb, var(--ink) 40%, transparent); opacity:.65; }
-
+input::placeholder, textarea::placeholder{
+  color: color-mix(in srgb, var(--ink) 30%, transparent); opacity:.65;
+}
 input:focus, select:focus, textarea:focus{
   outline:none;
-  border-color: color-mix(in srgb, var(--brand) 55%, var(--input-border) 45%);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 20%, transparent), var(--input-shadow);
+  border-color: color-mix(in srgb, var(--brand) 45%, var(--input-border) 55%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 16%, transparent), var(--input-shadow);
 }
 
-/* Upload preview */
+/* Hints */
+.hint{ color:var(--muted); font-size:12px; margin-top:2px; font-style:italic; }
+
+/* Upload preview (oförändrad) */
 .upload-preview{display:flex;align-items:center;gap:12px}
 .upload-preview img{
   width:72px;height:72px;object-fit:cover;border-radius:10px;
-  border:1px solid var(--border);box-shadow:var(--sh-sm);
+  border:1px solid var(--border); box-shadow:var(--sh-sm);
 }
 
 /* Knappar */
@@ -194,35 +183,30 @@ input:focus, select:focus, textarea:focus{
 .btn-secondary{background:#fff;color:var(--brand);border:2px solid var(--brand)}
 .btn-secondary:hover{background:var(--brand);color:#fff}
 
-/* Preview */
+/* Preview (oförändrat för övrigt) */
 .preview-panel{ padding:18px; }
 .panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
 .meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
-.badge{display:inline-block;padding:6px 10px;border-radius:999px;background:color-mix(in srgb, var(--brand) 12%, white 88%);border:1px solid var(--border);color:var(--ink);font:700 12px Quicksand,sans-serif}
-.badge[data-style="comic"]{background:#fff1e5;border-color:#ffd5a8;color:#7a4100}
-.badge[data-style="painting"]{background:#f2efff;border-color:#d8d2ff;color:#3d2f8a}
-.badge[data-style="realism"]{background:#e6f9f9;border-color:#b6efef;color:#025a5a}
-.badge[data-style="storybook"]{background:#eaf0ff;border-color:#cddcff;color:#2a3a80}
+.badge{display:inline-block;padding:6px 10px;border-radius:999px;background:color-mix(in srgb, var(--brand) 10%, white 90%);border:1px solid var(--border);color:var(--ink);font:700 12px Quicksand,sans-serif}
+.badge[data-style="comic"]{background:#fff5ea;border-color:#ffe0bd;color:#7a4100}
+.badge[data-style="painting"]{background:#f5f2ff;border-color:#e2dcff;color:#3d2f8a}
+.badge[data-style="realism"]{background:#eefbfb;border-color:#d6f1f1;color:#025a5a}
+.badge[data-style="storybook"]{background:#edf4ff;border-color:#dbe6ff;color:#2a3a80}
 
-.status{display:block;margin:8px 0 10px;background:#fff6d8;border:1px solid #ffe49b;color:#553;padding:8px 10px;border-radius:10px}
+.status{display:block;margin:8px 0 10px;background:#fffaf0;border:1px solid #ffe7bc;color:#5a4a2a;padding:8px 10px;border-radius:10px}
 
-/* Boksidor */
-.book-grid{
-  display:grid;gap:12px;
-  grid-template-columns:repeat(2, minmax(280px, 1fr));
-}
+/* Boksidor (oförändrat) */
+.book-grid{ display:grid; gap:12px; grid-template-columns:repeat(2, minmax(280px, 1fr)); }
 @media (max-width:860px){ .book-grid{grid-template-columns:1fr} }
-
 .page{
   display:grid;grid-template-columns:300px 1fr;gap:10px;
   background:#fff;border:1px solid var(--border);border-radius:14px;padding:10px;
   box-shadow:0 2px 10px rgba(0,0,0,.06);
 }
 @media (max-width:620px){ .page{grid-template-columns:1fr} }
-
 .page .imgbox{
-  background:color-mix(in srgb, var(--brand) 8%, #eef1f7 92%);
-  border:1px dashed color-mix(in srgb, var(--brand) 24%, #d5dbeb 76%);
+  background:color-mix(in srgb, var(--brand) 6%, #eef1f7 94%);
+  border:1px dashed color-mix(in srgb, var(--brand) 18%, #d5dbeb 82%);
   border-radius:10px;min-height:200px;display:grid;place-items:center;color:#7a8390
 }
 .page .imgbox img{border-radius:10px}
@@ -231,7 +215,7 @@ input:focus, select:focus, textarea:focus{
 .page p{margin:0;color:var(--ink)}
 .page .actions{display:flex;gap:8px}
 
-/* Modal */
+/* Modal (oförändrad) */
 .modal{border:none;border-radius:16px;padding:0;width:min(740px,96vw)}
 .modal::backdrop{background:rgba(10,12,20,.45)}
 .modal header{padding:12px 14px;border-bottom:1px solid var(--border)}
@@ -241,8 +225,6 @@ input:focus, select:focus, textarea:focus{
   font:italic 16px Quicksand,sans-serif;
 }
 .modal .modal-actions{display:flex;gap:10px;justify-content:flex-end;padding:12px 14px;border-top:1px solid var(--border)}
-
-/* Footer */
 .site-footer{text-align:center;color:var(--muted);padding:28px 0 48px}
 .tiny-hint{color:var(--muted);font-size:12px}
 
