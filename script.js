@@ -243,19 +243,26 @@ function onPhotoChange(){
   reader.readAsDataURL(file);
 }
 
-function renderSkeleton(count=4){
-  grid.innerHTML = '';
+function renderSkeleton(count = 4){
+  const gridEl = document.getElementById('bookPreview');
+  const previewEl = document.getElementById('preview');
+  if (!gridEl || !previewEl) return;
+
+  gridEl.innerHTML = '';
   for(let i=0;i<count;i++){
     const el = document.createElement('article');
     el.className = 'thumb';
     el.innerHTML = `
       <div class="imgwrap"><div class="skeleton"></div></div>
-      <div class="txt"><span class="skeleton" style="display:block;height:12px;margin-bottom:8px"></span>
-      <span class="skeleton" style="display:block;height:12px;width:60%"></span></div>`;
-    grid.appendChild(el);
+      <div class="txt">
+        <span class="skeleton" style="display:block;height:12px;margin-bottom:8px"></span>
+        <span class="skeleton" style="display:block;height:12px;width:60%"></span>
+      </div>`;
+    gridEl.appendChild(el);
   }
-  preview.classList.remove('hidden');
+  previewEl.classList.remove('hidden');
 }
+
 
 async function onSubmit(e){
   e.preventDefault();
