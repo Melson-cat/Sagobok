@@ -1,4 +1,4 @@
-// app.js – dropdowns för kategori/stil, fasta sidantal, tema-switch + preview
+// app.js – tema byts med kategori, traits/foto-väljare, preview auto-show
 const $ = (q, r=document)=> r.querySelector(q);
 const $$ = (q, r=document)=> Array.from(r.querySelectorAll(q));
 
@@ -11,22 +11,30 @@ const mockBtn = $('#btn-mock');
 const clearBtn = $('#btn-clear');
 const badgeCat = $('#badge-cat');
 const badgeStyle = $('#badge-style');
-const styleSelect = $('#style');
+
 const catSelect = $('#category');
+const styleSelect = $('#style');
 const pagesSelect = $('#pages');
+
 const catHint = $('#cat-hint');
 const styleHint = $('#style-hint');
 
+const refMode = $('#refMode');
+const traitsBlock = $('#traitsBlock');
+const photoBlock = $('#photoBlock');
+const photoInput = $('#charPhoto');
+const photoPreview = $('#photoPreview');
+
 const CAT_PRESETS = {
-  kids:  { label:'Barn',    hint:'Varm ton, enkla meningar, akvarell/pastell.' },
-  pets:  { label:'Husdjur', hint:'Lekfull ton, nos-nivå, färgkrita.' },
-  adult: { label:'Vuxen',   hint:'Humoristisk ton (SFW), serietidningskänsla.' }
+  kids:  { label:'Barn',    hint:'Varm och trygg ton.' },
+  pets:  { label:'Husdjur', hint:'Lekfull, busig ton.' },
+  adult: { label:'Vuxen',   hint:'Humor/komik (SFW), lite mognare.' }
 };
 const STYLE_PRESETS = {
-  storybook:{ label:'Barnbok',     hint:'Akvarell, mjuka penseldrag, pastell.', badge:'storybook' },
-  comic:    { label:'Serietidning',hint:'Tjockare konturer, halftone, kontrast.', badge:'comic' },
-  painting: { label:'Målning',     hint:'Oljemåleri/impasto, texturer.', badge:'painting' },
-  realism:  { label:'Realism',     hint:'Naturliga proportioner, foto-lika detaljer.', badge:'realism' }
+  storybook:{ label:'Barnbok',     hint:'Akvarell, mjuka penseldrag.', badge:'storybook' },
+  comic:    { label:'Serietidning',hint:'Tjocka konturer, halftone.',  badge:'comic' },
+  painting: { label:'Målning',     hint:'Oljemåleri/impasto.',         badge:'painting' },
+  realism:  { label:'Realism',     hint:'Naturliga proportioner.',     badge:'realism' }
 };
 
 let state = {
@@ -34,10 +42,13 @@ let state = {
   form: {
     name: 'Nova',
     age: 6,
-    pages: 12,            // default kort
+    pages: 12,
     theme: '',
     category: 'kids',
-    style: 'storybook'
+    style: 'storybook',
+    refMode: 'desc',
+    traits: '',
+    photoDataUrl: null
   },
   title: 'Min AI-Sagobok',
   pages: [] // { id, text, imgUrl? }
@@ -50,7 +61,6 @@ function setStatus(msg){
 }
 
 function updateTheme(){
-  // kategoristyrd palett
   document.body.setAttribute('data-theme', state.form.category);
 }
 
@@ -119,7 +129,7 @@ function render(){
 
 /* ——— Interaktion ——— */
 
-// Kategori → tema + hint + badge
+// Kategori → tema + hint + badges
 catSelect.addEventListener('change', ()=>{
   state.form.category = catSelect.value;
   catHint.textContent = CAT_PRESETS[state.form.category].hint;
@@ -134,7 +144,28 @@ styleSelect.addEventListener('change', ()=>{
   updateBadges();
 });
 
-// Form → skapa grund (sidantal från select)
+// Karaktärsreferens: visa beskrivning eller foto
+refMode.addEventListener('change', ()=>{
+  state.form.refMode = refMode.value;
+  const usePhoto = state.form.refMode === 'photo';
+  photoBlock.classList.toggle('hidden', !usePhoto);
+  traitsBlock.classList.toggle('hidden', usePhoto);
+});
+
+// Foto-förhandsvisning
+photoInput.addEventListener('change', ()=>{
+  const file = photoInput.files?.[0];
+  if(!file){ state.form.photoDataUrl = null; photoPreview.src=''; photoPreview.classList.add('hidden'); return; }
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    state.form.photoDataUrl = reader.result;
+    photoPreview.src = state.form.photoDataUrl;
+    photoPreview.classList.remove('hidden');
+  };
+  reader.readAsDataURL(file);
+});
+
+// Form → skapa grund
 form.addEventListener('submit', (e)=>{
   e.preventDefault();
   const fd = new FormData(form);
@@ -142,6 +173,10 @@ form.addEventListener('submit', (e)=>{
   state.form.age = Number(fd.get('age') || 6);
   state.form.pages = Number(fd.get('pages') || 12);
   state.form.theme = (fd.get('theme') || '').toString().trim();
+  state.form.category = (fd.get('category') || 'kids').toString();
+  state.form.style = (fd.get('style') || 'storybook').toString();
+  state.form.refMode = (fd.get('refMode') || 'desc').toString();
+  state.form.traits = ($('#traits')?.value || '').trim();
 
   state.phase = 'story_ready';
   state.title = `${state.form.name} – ett äventyr`;
@@ -152,6 +187,8 @@ form.addEventListener('submit', (e)=>{
     text:`(Sida ${i+1}) ${txt}`
   }));
 
+  updateTheme();
+  updateBadges();
   render();
 });
 
@@ -208,7 +245,7 @@ bookEl.addEventListener('click', (e)=>{
   }
 });
 
-// Utility
+// Utils
 function escapeHtml(s){
   return String(s)
     .replaceAll('&','&amp;')
@@ -220,6 +257,7 @@ function escapeHtml(s){
 
 // Init
 (function init(){
+  // sätt initial hints, tema, badges
   catHint.textContent   = CAT_PRESETS[state.form.category].hint;
   styleHint.textContent = STYLE_PRESETS[state.form.style].hint;
   updateTheme();

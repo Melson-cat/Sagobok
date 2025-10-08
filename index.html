@@ -6,12 +6,10 @@
   <title>AI-Sagobok</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <!-- Quicksand -->
-  <link href="https://fonts.googleapis.com/css2?family=Quicksand:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css" />
 </head>
 <body data-theme="kids">
-  <!-- Header (hero fixar vi senare) -->
   <header class="site-header">
     <a href="/" class="brand" aria-label="AI-Sagobok">
       <img src="images/logo.svg" alt="AI-Sagobok" />
@@ -36,7 +34,7 @@
   </div>
 
   <main class="container stack">
-    <!-- BRED & LÅG FORM – förenklad -->
+    <!-- BRED & LÅG FORM -->
     <section class="panel form-panel-wide">
       <form id="story-form" novalidate>
         <div class="form-grid">
@@ -48,11 +46,11 @@
 
           <!-- Ålder -->
           <div class="field floating short">
-            <input id="childAge" name="age" type="number" min="2" max="12" value="6" placeholder=" " required />
+            <input id="childAge" name="age" type="number" min="2" max="120" value="6" placeholder=" " required />
             <label for="childAge">Ålder</label>
           </div>
 
-          <!-- Antal sidor (fixa 12/16/20) -->
+          <!-- Antal sidor -->
           <div class="field select-field short">
             <label for="pages">Antal sidor</label>
             <select id="pages" name="pages">
@@ -76,7 +74,7 @@
               <option value="pets">Husdjur</option>
               <option value="adult">Vuxen</option>
             </select>
-            <p class="hint" id="cat-hint">Varm ton, enkla meningar, akvarell/pastell.</p>
+            <p class="hint" id="cat-hint">Varm och trygg ton.</p>
           </div>
 
           <!-- Stil (dropdown) -->
@@ -88,7 +86,34 @@
               <option value="painting">Målning</option>
               <option value="realism">Realism</option>
             </select>
-            <p class="hint" id="style-hint">Akvarell, mjuka penseldrag, pastell.</p>
+            <p class="hint" id="style-hint">Akvarell, mjuka penseldrag.</p>
+          </div>
+
+          <!-- Karaktärsreferens: val -->
+          <div class="field select-field short">
+            <label for="refMode">Karaktärsreferens</label>
+            <select id="refMode" name="refMode">
+              <option value="desc" selected>Beskrivning</option>
+              <option value="photo">Ladda upp foto</option>
+            </select>
+            <p class="hint">Används för att hålla karaktären konsekvent i bilderna.</p>
+          </div>
+
+          <!-- Beskrivning (traits) -->
+          <div id="traitsBlock" class="field span-3">
+            <label for="traits">Kännetecken (beskrivning)</label>
+            <textarea id="traits" name="traits" rows="3" placeholder="Ex: lockigt brunt hår, blå jacka, gula stövlar, ryggsäck med stjärnmärke"></textarea>
+            <p class="hint">Kort, tydligt, konkreta kännetecken och återkommande rekvisita.</p>
+          </div>
+
+          <!-- Foto-upload -->
+          <div id="photoBlock" class="field span-3 hidden">
+            <label for="charPhoto">Ladda upp foto (valfritt)</label>
+            <input id="charPhoto" name="charPhoto" type="file" accept="image/*" />
+            <div class="upload-preview">
+              <img id="photoPreview" alt="Förhandsvisning" class="hidden" />
+              <p class="tiny-hint">Vi stödjer foto som referens (image-to-image) i nästa steg om API:et tillåter.</p>
+            </div>
           </div>
 
           <!-- Knappar -->
@@ -103,7 +128,7 @@
       </form>
     </section>
 
-    <!-- Förhandsvisning – direkt under formuläret -->
+    <!-- Förhandsvisning – under formuläret -->
     <section id="preview" class="panel preview-panel hidden" aria-live="polite">
       <div class="panel-header">
         <div>
@@ -142,18 +167,6 @@
     </form>
   </dialog>
 
-  <script>
-    // enkel mobilmeny
-    const navBtn = document.getElementById('navToggle');
-    const mobile = document.getElementById('mobileMenu');
-    if (navBtn && mobile){
-      navBtn.addEventListener('click', ()=>{
-        mobile.classList.toggle('open');
-        mobile.setAttribute('aria-hidden', mobile.classList.contains('open') ? 'false' : 'true');
-      });
-      mobile.addEventListener('click', (e)=>{ if(e.target === mobile) mobile.classList.remove('open'); });
-    }
-  </script>
   <script src="app.js"></script>
 </body>
 </html>
