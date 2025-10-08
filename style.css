@@ -1,49 +1,275 @@
-/* Lägg till/utöka ovanpå din befintliga style.css */
+/* ========= Design tokens ========= */
+:root{
+  --bg:#f6fbf7;              /* svagt grönvit bakgrund */
+  --card:#ffffff;            /* panel-kort */
+  --text:#253038;            /* primärtext */
+  --muted:#7b8a95;           /* sekundärtext */
+  --brand:#2a9d74;           /* piloten-grön */
+  --brand-2:#79d1b1;         /* ljusgrön accent */
+  --focus:#86c5ff;           /* fokusring */
+  --danger:#ff6b6b;
 
-/* Header */
+  --border:rgba(0,0,0,.08);
+  --shadow:0 8px 24px rgba(13,38,45,.06);
+
+  --r-lg:16px;
+  --r:12px;
+  --r-sm:10px;
+
+  --field:#f2f7f3;          /* inputs bakgrund */
+  --field-border:rgba(10,30,25,.10);
+
+  --lock-blur: 6px;
+}
+
+/* ========= Reset/typografi ========= */
+*{ box-sizing:border-box; }
+html,body{ margin:0; padding:0; }
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family: "Quicksand", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  line-height:1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ========= Header ========= */
 .site-header{
-  position:sticky; top:0; z-index:50;
-  display:flex; align-items:center; justify-content:space-between;
-  padding:10px 16px; background:rgba(255,255,255,.9); backdrop-filter:saturate(1.2) blur(6px);
-  box-shadow:0 2px 10px rgba(0,0,0,.06);
+  position:sticky; top:0; z-index:20;
+  background:rgba(255,255,255,.7);
+  backdrop-filter: saturate(1.2) blur(8px);
+  border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:18px;
+  padding:10px 16px;
 }
-.brand{display:flex; align-items:center; gap:10px; text-decoration:none; color:inherit; font-weight:800}
-.brand img{width:40px;height:40px;object-fit:contain}
-.main-nav a{margin:0 10px; text-decoration:none; color:#334; font-weight:700; position:relative}
-.main-nav a:after{content:""; position:absolute; left:0; bottom:-4px; height:2px; width:0; background:currentColor; transition:width .2s}
-.main-nav a:hover:after{width:100%}
-.hamburger{display:none}
-@media(max-width:800px){
-  .main-nav{display:none}
-  .hamburger{display:block; background:transparent; border:none; font-size:22px}
+.brand{ display:flex; align-items:center; gap:10px; text-decoration:none; color:inherit; }
+.brand img{ width:36px; height:36px; object-fit:contain; }
+.brand span{ font-weight:700; letter-spacing:.2px; }
+
+.main-nav{ margin-left:auto; display:flex; gap:18px; }
+.main-nav a{
+  color:var(--text); text-decoration:none; font-weight:600;
+  opacity:.85;
+}
+.main-nav a:hover{ opacity:1; }
+
+.hamburger{ display:none; margin-left:auto; }
+
+/* ========= Container & sektioner ========= */
+.container{
+  max-width:1100px;
+  margin:0 auto;
+  padding:32px 16px 64px;
+}
+.intro h1{
+  font-size: clamp(28px, 4vw, 42px);
+  margin:0 0 8px;
+  text-align:center;
+}
+.intro p{
+  margin:0 auto 24px;
+  max-width:720px;
+  text-align:center;
+  color:var(--muted);
 }
 
-/* Hero */
-.hero{
-  background:linear-gradient(160deg, rgba(139,209,162,.25), transparent 60%);
-  padding:36px 16px 14px; text-align:center;
+/* ========= Panel (kort) ========= */
+.panel{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:var(--r-lg);
+  box-shadow:var(--shadow);
+  padding:20px;
 }
-.hero-inner{max-width:860px;margin:0 auto}
-.hero h1{margin:0 0 8px; font-size:2rem}
-.hero p{color:#556}
-.hero-points{list-style:none; padding:0; margin:14px 0 18px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap}
-.hero-points li{background:#fff; border-radius:999px; padding:8px 12px; box-shadow:0 4px 12px rgba(0,0,0,.06); font-weight:700}
-.cta{
-  display:inline-block; padding:12px 18px; border-radius:12px; color:#fff; text-decoration:none; font-weight:800;
-  background:var(--kids-accent); box-shadow:var(--shadow);
+
+/* ========= Form ========= */
+form{ display:grid; gap:18px; }
+.form-row{
+  display:grid; gap:14px;
+  grid-template-columns: repeat(3, 1fr);
 }
-body.pets-active .cta{ background:var(--pets-accent) }
+.field{ display:flex; flex-direction:column; gap:8px; }
+.field.col-span-2{ grid-column: span 2; }
+.field.col-span-3{ grid-column: span 3; }
 
-/* Info-sektioner */
-.info-section{max-width:860px;margin:22px auto; padding:0 16px}
-.steps{counter-reset:step; padding-left:0; list-style:none}
-.steps li{margin:8px 0; padding-left:14px; position:relative}
-.steps li::before{counter-increment:step; content:counter(step) "."; position:absolute; left:0; color:#889}
+label{ font-weight:700; font-size:.95rem; }
+.hint{ color:var(--muted); font-size:.90rem; margin:4px 0 0; }
 
-/* Form tweaks */
-.card-title{margin:2px 0 10px}
-.input-col.col-12{grid-column:1 / -1}
-.hint{color:#7e889f; font-size:.85rem; margin-top:4px}
+/* Inputs */
+input, select, textarea{
+  appearance:none;
+  background:var(--field);
+  border:1px solid var(--field-border);
+  border-radius:var(--r);
+  padding:12px 14px;
+  font: inherit;
+  color:inherit;
+  transition:border-color .15s ease, background .15s ease, box-shadow .15s ease;
+}
+textarea{ resize: vertical; }
+input:focus, select:focus, textarea:focus{
+  outline: none;
+  border-color: var(--brand);
+  background:#eef7f2;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 40%, transparent);
+}
 
-/* Footer */
-.site-footer{text-align:center; padding:20px; color:#8a93a7}
+/* Segmented toggle (kategori + karaktärsreferens) */
+.seg{
+  background:var(--field);
+  border:1px solid var(--field-border);
+  border-radius:999px;
+  padding:4px;
+  display:inline-flex; gap:4px;
+}
+.seg-btn{
+  border:0; background:transparent; padding:8px 14px;
+  border-radius:999px; font-weight:700; cursor:pointer;
+  color:var(--muted);
+}
+.seg-btn.active{
+  background:var(--card);
+  color:var(--text);
+  box-shadow: 0 1px 0 rgba(0,0,0,.03), inset 0 0 0 1px var(--border);
+}
+
+/* Upload preview */
+.upload-preview{
+  background:var(--field);
+  border:1px dashed var(--field-border);
+  border-radius:var(--r);
+  padding:10px; min-height:80px; display:flex; align-items:center; justify-content:center;
+}
+.upload-preview img{ max-height:140px; max-width:100%; border-radius:var(--r-sm); }
+
+/* Buttons */
+.actions{ display:flex; gap:10px; flex-wrap:wrap; }
+.btn{
+  appearance:none; border:1px solid transparent; background:var(--card);
+  border-radius:999px; padding:12px 18px; font-weight:700; cursor:pointer;
+}
+.btn-primary{
+  background:linear-gradient(180deg, var(--brand), color-mix(in srgb, var(--brand) 88%, black));
+  color:white;
+  box-shadow: 0 6px 16px rgba(42,157,116,.25);
+}
+.btn-primary:disabled{ opacity:.7; cursor:not-allowed; }
+.btn-ghost{
+  border-color:var(--border);
+  color:var(--text);
+  background:transparent;
+}
+.spinner{
+  display:inline-block; width:16px; height:16px; margin-left:8px;
+  border-radius:50%; border:2px solid rgba(255,255,255,.6);
+  border-top-color: rgba(255,255,255,0);
+  animation: sp .9s linear infinite;
+}
+@keyframes sp { to { transform: rotate(1turn);} }
+
+/* ========= Preview ========= */
+#preview{ margin-top:22px; }
+.preview-note{ color:var(--muted); }
+
+.status-bar{
+  background:#e9f7ef;
+  border:1px solid #cfeadb;
+  color:#135a43;
+  border-radius:var(--r);
+  padding:10px 12px;
+  margin:0 0 12px;
+  font-weight:600;
+}
+.status-bar.hidden{ display:none; }
+
+.thumb-grid{
+  display:grid; gap:16px;
+  grid-template-columns: repeat(4, 1fr);
+}
+.thumb{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:var(--r);
+  overflow:hidden;
+  box-shadow:var(--shadow);
+  display:flex; flex-direction:column;
+}
+.thumb .imgwrap{ position:relative; aspect-ratio: 3 / 2; background:#eef3ef; overflow:hidden; }
+.thumb img{ width:100%; height:100%; object-fit:cover; display:block; }
+.thumb .txt{ padding:12px; font-size:.98rem; }
+
+/* Låsta sidor (blur + lock-overlay) */
+.thumb.locked .imgwrap{ filter: blur(var(--lock-blur)); }
+.thumb.locked .txt{ filter: blur(2px); }
+.thumb.locked{
+  position:relative;
+}
+.thumb.locked::after{
+  content:"Lås upp genom att skapa boken";
+  position:absolute; inset:auto 8px 8px 8px;
+  background:rgba(37,48,56,.85);
+  color:white; font-weight:700; text-align:center;
+  border-radius:var(--r);
+  padding:10px 8px;
+}
+
+/* Skeletons */
+.skeleton{
+  background: linear-gradient(90deg, #e9f2ec, #f6fbf7, #e9f2ec);
+  background-size: 200% 100%;
+  animation: shimmer 1.2s infinite linear;
+  border-radius:8px;
+  width:100%; height:100%;
+}
+@keyframes shimmer{
+  0%{ background-position: 0 0; }
+  100%{ background-position: -200% 0; }
+}
+.img-fallback{
+  display:flex; align-items:center; justify-content:center; font-weight:700;
+  color:var(--muted); height:100%;
+}
+
+/* ========= About/footer ========= */
+.about{
+  margin-top:28px;
+  color:var(--muted);
+  background:transparent;
+}
+.site-footer{
+  margin-top:40px; padding:20px 16px; text-align:center;
+  color:var(--muted);
+}
+
+/* ========= Mobile menu ========= */
+.mobile-menu{
+  display:none;
+  position:fixed; inset:56px 0 0 0; z-index:30;
+  background:rgba(255,255,255,.95);
+  backdrop-filter: blur(6px);
+  border-top:1px solid var(--border);
+  padding:18px;
+}
+.mobile-menu.open{ display:block; }
+.mobile-menu nav{ display:flex; flex-direction:column; gap:12px; }
+.mobile-menu a{ color:var(--text); text-decoration:none; font-weight:700; }
+
+/* ========= Helpers ========= */
+.hidden{ display:none !important; }
+
+/* ========= Responsivt ========= */
+@media (max-width: 980px){
+  .thumb-grid{ grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 760px){
+  .site-header{ gap:8px; }
+  .main-nav{ display:none; }
+  .hamburger{ display:inline-flex; align-items:center; justify-content:center; }
+  .form-row{ grid-template-columns: 1fr; }
+  .field.col-span-2, .field.col-span-3{ grid-column: auto; }
+  .thumb-grid{ grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px){
+  .thumb-grid{ grid-template-columns: 1fr; }
+}

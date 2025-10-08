@@ -3,139 +3,149 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Bokpiloten – Skapa mysiga böcker för barn & husdjur</title>
+  <title>BokPiloten – Skapa din AI-illustrerade bok</title>
   <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;600;700&display=swap" rel="stylesheet" />
 </head>
-<body class="kids-active">
-  <!-- Header -->
+<body data-theme="kids">
   <header class="site-header">
-    <a class="brand" href="/">
-      <img src="images/pilot-logo.png" alt="Bokpiloten" />
-      <span>Bokpiloten</span>
+    <a href="/" class="brand">
+      <img src="images/pilot-logo.png" alt="BokPiloten" />
+      <span>BokPiloten</span>
     </a>
-    <nav class="main-nav">
-      <a href="#form-section">Skapa</a>
-      <a href="#how">Så funkar det</a>
-      <a href="#faq">FAQ</a>
+    <nav class="main-nav" aria-label="Huvudmeny">
+      <a href="#bookForm">Skapa bok</a>
+      <a href="#examples">Exempel</a>
+      <a href="#about">Om oss</a>
     </nav>
-    <button class="hamburger" aria-label="Meny">☰</button>
+    <button id="navToggle" class="hamburger" aria-label="Meny" aria-expanded="false">☰</button>
   </header>
 
-  <!-- Hero -->
-  <section class="hero">
-    <div class="hero-inner">
-      <h1>Gör en personlig bok på några minuter</h1>
-      <p>Mysiga berättelser för barn och husdjur – med konsekventa bilder och varm ton.</p>
-      <ul class="hero-points">
-        <li>✅ Fokus på barn & husdjur</li>
-        <li>✅ Konsekventa karaktärer & färgpalett</li>
-        <li>✅ Förhandsvisa 3–4 sidor gratis</li>
-      </ul>
-      <a href="#form-section" class="cta">Kom igång</a>
-    </div>
-  </section>
+  <!-- Mobilmeny -->
+  <div class="mobile-menu" id="mobileMenu" aria-hidden="true">
+    <nav>
+      <a href="#bookForm">Skapa bok</a>
+      <a href="#examples">Exempel</a>
+      <a href="#about">Om oss</a>
+    </nav>
+  </div>
 
-  <main>
-    <!-- Form-kort -->
-    <section id="form-section" class="card">
-      <h2 class="card-title">Börja här</h2>
+  <main class="container">
+    <section class="intro">
+      <h1>Skapa din egen AI-illustrerade bok</h1>
+      <p>Fyll i några detaljer, välj stil och se din berättelse ta form med både text och bilder.</p>
+    </section>
 
-      <!-- Kategori först -->
-      <div class="category-toggle" role="tablist" aria-label="Kategori">
-        <button class="toggle-btn active" data-cat="kids" role="tab" aria-selected="true">👧 Barn</button>
-        <button class="toggle-btn" data-cat="pets" role="tab" aria-selected="false">🐾 Husdjur</button>
-      </div>
-
+    <!-- FORMULÄR -->
+    <section id="bookForm" class="panel">
       <form id="storyForm" novalidate>
-        <div class="row">
-          <div class="input-col">
+
+        <!-- Rad 0: Kategori (segmented toggle högst upp) -->
+        <div class="form-row">
+          <div class="field col-span-3">
+            <label>Kategori</label>
+            <div class="seg" role="tablist" aria-label="Kategori">
+              <button type="button" class="seg-btn active" id="catKidsBtn" role="tab" aria-selected="true">Barn</button>
+              <button type="button" class="seg-btn" id="catPetsBtn" role="tab" aria-selected="false">Husdjur</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Rad 1 -->
+        <div class="form-row">
+          <div class="field">
             <label for="name">Namn</label>
-            <input id="name" type="text" placeholder="t.ex. Nova eller Melson" required />
-            <small class="hint">Huvudpersonens namn.</small>
+            <input id="name" placeholder="Ex: Nova" />
           </div>
-          <div class="input-col">
+          <div class="field">
             <label for="age">Ålder</label>
-            <input id="age" type="number" min="1" max="18" value="6" />
-            <small class="hint">Används för språk & bibel.</small>
+            <input id="age" type="number" min="1" value="6" />
           </div>
-        </div>
-
-        <div class="row">
-          <div class="input-col col-12">
-            <label for="traits">Beskrivning (utseende / drag)</label>
-            <textarea id="traits" rows="2" placeholder="t.ex. rött hår, fräknar, lite busig"></textarea>
-            <small class="hint">Tips: blanda fysiska kännetecken (bild) + personlighet (story).</small>
-          </div>
-        </div>
-
-        <div class="row">
-          <div class="input-col">
-            <label for="style">Stil</label>
-            <select id="style">
-              <option value="storybook">Barnbok (illustrerad)</option>
-              <option value="comic">Serietidning</option>
-              <option value="painting">Målad stil</option>
-              <option value="realism">Realistisk stil</option>
-            </select>
-          </div>
-          <div class="input-col">
-            <label for="pages">Längd</label>
+          <div class="field">
+            <label for="pages">Antal sidor</label>
             <select id="pages">
-              <option value="12">Kort (12 sidor)</option>
-              <option value="16">Mellan (16 sidor)</option>
-              <option value="20">Lång (20 sidor)</option>
+              <option value="12">Kort (12)</option>
+              <option value="16" selected>Medium (16)</option>
+              <option value="20">Lång (20)</option>
             </select>
           </div>
         </div>
 
-        <div class="row">
-          <div class="input-col col-12">
-            <label for="theme">Tema / handling</label>
-            <input id="theme" type="text" placeholder="t.ex. ett oväntat äventyr i skogen" />
-            <small class="hint">En mening räcker – agenten väver in det.</small>
+        <!-- Rad 2 -->
+        <div class="form-row">
+          <div class="field">
+            <label for="style">Illustrationsstil</label>
+            <select id="style">
+              <option value="storybook" selected>Barnbok</option>
+              <option value="comic">Serietidning</option>
+              <option value="painting">Målning</option>
+              <option value="realism">Realism</option>
+            </select>
+          </div>
+          <div class="field col-span-2">
+            <label for="theme">Tema / kort handling</label>
+            <input id="theme" placeholder="Ex: Skogsäventyr vid bäcken" />
           </div>
         </div>
 
-        <div class="btn-wrap">
-          <button type="submit" class="primary-btn">✨ Skapa förhandsvisning</button>
+        <!-- Rad 3: Karaktärsreferens toggle -->
+        <div class="form-row">
+          <div class="field col-span-3">
+            <label>Karaktärsreferens</label>
+            <div class="seg" role="tablist" aria-label="Karaktärsreferens">
+              <button type="button" class="seg-btn active" id="refDescBtn" role="tab" aria-selected="true">Beskrivning</button>
+              <button type="button" class="seg-btn" id="refPhotoBtn" role="tab" aria-selected="false">Foto</button>
+            </div>
+          </div>
+
+          <!-- Beskrivning -->
+          <div class="field col-span-2" id="traitsBlock">
+            <label for="traits">Kännetecken (beskrivning)</label>
+            <textarea id="traits" rows="3" placeholder="Ex: lockigt hår, blå jacka, gula stövlar, ryggsäck med stjärna"></textarea>
+            <p class="hint">Kort och konkret – hjälper AI:n hålla karaktären konsekvent.</p>
+          </div>
+
+          <!-- Foto -->
+          <div class="field col-span-2 hidden" id="photoBlock">
+            <label for="charPhoto">Ladda upp foto (valfritt)</label>
+            <input id="charPhoto" type="file" accept="image/*" />
+            <div class="upload-preview">
+              <img id="photoPreview" class="hidden" alt="Förhandsvisning" />
+            </div>
+            <p class="hint">Används om bild-till-bild stöds. Annars faller vi tillbaka på beskrivning.</p>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button type="submit" class="btn btn-primary">Skapa förhandsvisning</button>
+          <button id="demoBtn" type="button" class="btn btn-ghost">Visa demo</button>
         </div>
       </form>
     </section>
 
-    <!-- How it works -->
-    <section id="how" class="info-section">
-      <h2>Så funkar det</h2>
-      <ol class="steps">
-        <li>Välj kategori (Barn/Husdjur) och fyll i namn, ålder och beskrivning.</li>
-        <li>Vi skapar en kort bok + bibel som säkerställer konsekventa bilder.</li>
-        <li>Du förhandsvisar 3–4 sidor (resten suddas).</li>
-        <li>När du är nöjd skapar vi hela boken och du kan köpa PDF/tryck.</li>
-      </ol>
-    </section>
-
-    <!-- Preview -->
+    <!-- FÖRHANDSVISNING -->
     <section id="preview" class="hidden">
+      <div id="statusBar" class="status-bar hidden"></div>
       <h2>Förhandsvisning</h2>
-      <div id="bookPreview" class="grid"></div>
-      <p id="status" class="status"></p>
+      <p class="preview-note">Du ser de <strong>4 första</strong> sidorna skarpt. Resterande är suddade tills du skapar boken.</p>
+      <div id="bookPreview" class="thumb-grid"></div>
     </section>
 
-    <!-- FAQ -->
-    <section id="faq" class="info-section">
-      <h2>Vanliga frågor</h2>
-      <details>
-        <summary>Hur många sidor kan jag förhandsvisa?</summary>
-        <p>Vi visar normalt 3–4 sidor skarpt. Resten suddas tills du väljer att skapa hela boken.</p>
-      </details>
-      <details>
-        <summary>Kan jag ladda upp foto?</summary>
-        <p>Snart! Just nu funkar beskrivning bäst. Foto kommer i steg 2.</p>
-      </details>
+    <!-- Dummy-ankare för menyn -->
+    <section id="examples" class="about">
+      <h3>Exempel</h3>
+      <p class="hint">Kommer snart.</p>
+    </section>
+
+    <section id="about" class="about">
+      <h3>Om BokPiloten</h3>
+      <p>Vi hjälper dig skapa personliga, AI-illustrerade böcker – snabbt och enkelt.</p>
     </section>
   </main>
 
   <footer class="site-footer">
-    <p>© Bokpiloten 2025 · Byggd med 💖</p>
+    <p>© 2025 BokPiloten</p>
   </footer>
 
   <script src="script.js"></script>
