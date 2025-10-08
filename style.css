@@ -2,6 +2,7 @@
   --bg:#f7f8fb; --card:#ffffff; --ink:#1f2430; --muted:#667085;
   --brand:#4b70e2; --accent:#5edbb1; --danger:#ff6b6b; --border:#e6e8ef;
   --r:14px; --r-sm:10px; --shadow:0 8px 24px rgba(20,25,40,.06);
+  --comic:#ff8a00; --painting:#7a5cff; --realism:#00a3a3; --storybook:#4b70e2;
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
@@ -32,7 +33,7 @@ body{background:var(--bg);color:var(--ink);font:14px/1.5 system-ui, -apple-syste
 .field{display:grid;gap:6px;margin:10px 0}
 .field-row{grid-template-columns:1fr 1fr;gap:10px}
 label{font-weight:600}
-input,textarea{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:var(--r-sm);background:#fff}
+input,textarea,select{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:var(--r-sm);background:#fff}
 textarea{resize:vertical}
 
 .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border:1px solid var(--border);border-radius:999px;background:#fff;cursor:pointer}
@@ -56,6 +57,17 @@ textarea{resize:vertical}
 .page p{margin:0;color:#38435a}
 .page .actions{display:flex;gap:8px;margin-top:8px}
 
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg-item{display:flex;align-items:center;gap:8px;border:1px solid var(--border);padding:6px 10px;border-radius:999px;background:#fff;cursor:pointer}
+.seg-item input{accent-color:var(--brand)}
+.hint{color:var(--muted);font-size:12px;margin:4px 0 0}
+
+.badge{display:inline-block;padding:6px 10px;border-radius:999px;border:1px solid var(--border);background:#f8f9fe;font-size:12px;margin-right:8px}
+.badge[data-style="comic"]{background:#fff1e5;border-color:#ffd5a8;color:#7a4100}
+.badge[data-style="painting"]{background:#f2efff;border-color:#d8d2ff;color:#3d2f8a}
+.badge[data-style="realism"]{background:#e6f9f9;border-color:#b6efef;color:#025a5a}
+.badge[data-style="storybook"]{background:#eaf0ff;border-color:#cddcff;color:#2a3a80}
+
 .modal{border:none;border-radius:var(--r);padding:0;width:min(750px,96vw)}
 .modal::backdrop{background:rgba(10,12,20,.45)}
 .modal header{padding:14px 16px;border-bottom:1px solid var(--border)}
@@ -63,3 +75,4 @@ textarea{resize:vertical}
 .modal .modal-actions{display:flex;gap:10px;justify-content:flex-end;padding:12px 16px;border-top:1px solid var(--border)}
 
 .tips{background:#f0faf6;border:1px solid #c9efdf;color:#165b45;padding:10px 12px;border-radius:var(--r-sm)}
+.meta{display:flex;gap:8px;align-items:center;margin-bottom:10px}

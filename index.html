@@ -20,7 +20,6 @@
   </header>
 
   <main class="container">
-    <!-- Stegindikator -->
     <ol class="steps" aria-label="Skapasteg">
       <li class="active">1. Layout</li>
       <li>2. Skriv sagan (GPT-4)</li>
@@ -28,10 +27,10 @@
       <li>4. Förhandsvisa & Exportera</li>
     </ol>
 
-    <!-- Sidokolumner: formulär + preview -->
     <section class="grid">
       <aside class="panel">
         <h2>1) Dina uppgifter</h2>
+
         <form id="story-form" novalidate>
           <div class="field">
             <label for="childName">Namn på huvudperson</label>
@@ -54,9 +53,34 @@
             <input id="theme" name="theme" placeholder="Skogsäventyr vid bäcken" required />
           </div>
 
+          <fieldset class="field">
+            <legend>Kategori</legend>
+            <div class="seg">
+              <label class="seg-item">
+                <input type="radio" name="category" value="kids" checked />
+                <span>Barn</span>
+              </label>
+              <label class="seg-item">
+                <input type="radio" name="category" value="pets" />
+                <span>Husdjur</span>
+              </label>
+              <label class="seg-item">
+                <input type="radio" name="category" value="adult" />
+                <span>Vuxen</span>
+              </label>
+            </div>
+            <p class="hint" id="cat-hint">Varm ton, enkla meningar, akvarell/pastell.</p>
+          </fieldset>
+
           <div class="field">
-            <label for="artStyle">Illustrationsstil (frivillig)</label>
-            <input id="artStyle" name="artStyle" placeholder="Akvarell, mjuka penseldrag, pastell" />
+            <label for="style">Illustrationsstil</label>
+            <select id="style" name="style">
+              <option value="storybook" selected>Barnbok</option>
+              <option value="comic">Serietidning</option>
+              <option value="painting">Målning</option>
+              <option value="realism">Realism</option>
+            </select>
+            <p class="hint" id="style-hint">Akvarell, mjuka penseldrag, pastell.</p>
           </div>
 
           <fieldset class="field">
@@ -71,11 +95,12 @@
         </form>
 
         <div id="tips" class="tips">
-          <strong>Tips:</strong> Kort och tydligt tema ger bättre resultat. Vi fyller sagan i steg 2.
+          <strong>Tips:</strong> Kort och tydligt tema ger bättre resultat. Vi kopplar API i steg 2–3.
         </div>
       </aside>
 
-      <section class="panel">
+      <!-- Förhandsvisning: dold tills vi har sidor -->
+      <section id="preview" class="panel hidden">
         <div class="panel-header">
           <h2>Förhandsvisning</h2>
           <div class="panel-tools">
@@ -84,21 +109,20 @@
           </div>
         </div>
 
-        <!-- Status/Banners -->
-        <div id="status" class="status hidden" role="status" aria-live="polite"></div>
+        <div class="meta">
+          <span id="badge-cat" class="badge">Kategori: Barn</span>
+          <span id="badge-style" class="badge">Stil: Barnbok</span>
+        </div>
 
-        <!-- Bokgrid -->
+        <div id="status" class="status hidden" role="status" aria-live="polite"></div>
         <div id="book" class="book-grid" aria-label="Boksidor"></div>
       </section>
     </section>
   </main>
 
-  <!-- Modal för enkel sida (framtida redigering) -->
   <dialog id="pageModal" class="modal">
     <form method="dialog">
-      <header>
-        <h3>Redigera sida</h3>
-      </header>
+      <header><h3>Redigera sida</h3></header>
       <div class="modal-body">
         <label for="modalText">Text</label>
         <textarea id="modalText" rows="6"></textarea>
@@ -112,7 +136,7 @@
 
   <footer class="site-footer">
     <div class="container">
-      <small>© AI-Sagobok. Prototyp för demoändamål.</small>
+      <small>© AI-Sagobok. Prototyp.</small>
     </div>
   </footer>
 
