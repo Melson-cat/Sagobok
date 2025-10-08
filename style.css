@@ -1,44 +1,43 @@
 /* ========= Basvariabler ========= */
 :root{
-  /* neutrals */
   --text:#223038;
   --muted:#7d8b95;
-  --border:rgba(0,0,0,.08);
-  --shadow:0 10px 30px rgba(20,30,35,.06);
+  --border:rgba(0,0,0,.06);
+  --shadow:0 10px 26px rgba(20,30,35,.05);
 
   /* default (överrids av tema) */
-  --bg:#f6fbf7;
-  --panel:#edf7f0;
-  --brand:#2aa176;
-  --brand-2:#88d4b6;
-  --focus:#80caff;
+  --bg:#f7fbf9;          /* bakgrund */
+  --panel:#eff6f2;       /* panel */
+  --brand:#2b8c68;       /* accent */
+  --brand-2:#a6dac5;     /* ljus accent */
+  --focus:#a7d7ff;
 
-  --field:#eef6f1;
-  --field-border:rgba(10,30,25,.12);
+  /* inputs – nästan vita med en touch av bakgrunden */
+  --field: color-mix(in srgb, white 88%, var(--bg));
+  --field-border: rgba(30,50,40,.10);
 
-  --r-xl:18px;
-  --r:12px;
-  --r-sm:10px;
-
+  --r-xl:18px; --r:14px; --r-sm:10px;
   --lock-blur:6px;
 }
 
 /* ========= Teman ========= */
+/* Barn = skogsgrön */
 body[data-theme="kids"]{
-  --bg:#f6fbf7;           /* svagt grönt */
-  --panel:#edf7f0;        /* tonad panel */
-  --field:#eef6f1;
-  --brand:#2aa176;        /* grön */
-  --brand-2:#88d4b6;
-  --focus:#96d8ff;
+  --bg:#f6fbf7;                 /* mjuk grönvit */
+  --panel:#eef6f1;              /* ett snäpp mörkare än bg */
+  --brand:#2b8c68;              /* skogsgrön */
+  --brand-2:#9fd8c4;
+  --focus:#a6dcff;
+  --field: color-mix(in srgb, white 92%, var(--bg)); /* nästan vitt */
 }
+/* Husdjur = lugn ljusblå */
 body[data-theme="pets"]{
-  --bg:#f7f6ff;           /* svagt lilablast */
-  --panel:#eef0fb;
-  --field:#f3f5ff;
-  --brand:#6f7df8;        /* blå-lila */
-  --brand-2:#b7c1ff;
-  --focus:#bcd0ff;
+  --bg:#f6f8ff;                 /* mjuk ljusblå */
+  --panel:#eef1fb;
+  --brand:#5f79f2;              /* snäll blå */
+  --brand-2:#c3cffd;
+  --focus:#c6d7ff;
+  --field: color-mix(in srgb, white 92%, var(--bg));
 }
 
 /* ========= Reset/typografi ========= */
@@ -57,7 +56,7 @@ body{
 .site-header{
   position:sticky; top:0; z-index:20;
   background:color-mix(in srgb, var(--panel) 65%, white);
-  backdrop-filter:saturate(1.1) blur(8px);
+  backdrop-filter: blur(8px) saturate(1.05);
   border-bottom:1px solid var(--border);
   display:flex; align-items:center; gap:18px;
   padding:10px 16px;
@@ -78,11 +77,11 @@ body{
 .panel{
   background:var(--panel);
   border:1px solid var(--border);
-  border-radius:var(--r-xl);
+  border-radius:22px;
   box-shadow:var(--shadow);
-  padding:20px;
-  max-width:960px;         /* smalare ruta */
-  margin:0 auto;           /* centrera */
+  padding:22px;
+  max-width:920px;     /* lite smalare */
+  margin:0 auto;
 }
 
 /* ========= Form ========= */
@@ -95,32 +94,48 @@ form{ display:grid; gap:18px; }
 label{ font-weight:700; font-size:.98rem; }
 .hint{ color:var(--muted); font-size:.9rem; margin:4px 0 0; }
 
-/* Inputs – tight & rena */
+/* ========= Inputs – mjuka & “flytande” ========= */
 input, select, textarea{
   appearance:none;
-  background:var(--field);
+  background:var(--field);                 /* nästan vitt, svag tint av bg */
   border:1px solid var(--field-border);
-  border-radius:22px;                 /* tydligt rundade */
-  padding:10px 14px;                  /* tightare */
+  border-radius:18px;
+  padding:12px 14px;
   font:inherit; color:inherit;
-  transition:border-color .15s ease, box-shadow .15s ease, background .15s ease;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.6);
+  transition: box-shadow .18s ease, border-color .18s ease, transform .06s ease, background .18s ease;
+  /* subtilt neumorfiskt pop */
+  box-shadow:
+    0 2px 6px rgba(0,0,0,.03),
+    0 10px 24px rgba(0,0,0,.05),
+    inset 0 1px 0 rgba(255,255,255,.65);
 }
 textarea{ resize:vertical; border-radius:16px; }
+input:hover, select:hover, textarea:hover{
+  box-shadow:
+    0 3px 8px rgba(0,0,0,.04),
+    0 12px 28px rgba(0,0,0,.06),
+    inset 0 1px 0 rgba(255,255,255,.70);
+}
 input:focus, select:focus, textarea:focus{
   outline:none;
-  border-color:var(--brand);
-  background:color-mix(in srgb, var(--field) 80%, white);
-  box-shadow:0 0 0 3px color-mix(in srgb, var(--focus) 45%, transparent);
+  border-color:color-mix(in srgb, var(--brand) 70%, black 0%);
+  background:color-mix(in srgb, var(--field) 85%, white);
+  box-shadow:
+    0 6px 22px color-mix(in srgb, var(--brand-2) 32%, transparent),
+    0 2px 8px rgba(0,0,0,.06),
+    inset 0 1px 0 rgba(255,255,255,.75);
+  transform: translateY(-1px);
 }
 
-/* Segmented toggles (kategori + karaktärsreferens) */
+/* ========= Segmented toggles – kompakta ========= */
 .seg{
-  background:color-mix(in srgb, var(--field) 80%, white);
+  background:color-mix(in srgb, var(--field) 86%, white);
   border:1px solid var(--field-border);
   border-radius:999px;
-  padding:6px;
+  padding:5px;
   display:inline-flex; gap:6px;
+  align-self:flex-start;              /* gör den kompakt (inte full bredd) */
+  max-width:max-content;
 }
 .seg-btn{
   border:0; background:transparent; padding:8px 14px;
@@ -130,7 +145,10 @@ input:focus, select:focus, textarea:focus{
 .seg-btn.active{
   background:white;
   color:var(--text);
-  box-shadow:0 1px 0 rgba(0,0,0,.03), inset 0 0 0 1px var(--border);
+  box-shadow:
+    0 1px 0 rgba(0,0,0,.03),
+    0 6px 14px rgba(0,0,0,.05),
+    inset 0 0 0 1px var(--border);
 }
 
 /* Upload preview */
@@ -142,7 +160,7 @@ input:focus, select:focus, textarea:focus{
 }
 .upload-preview img{ max-height:140px; max-width:100%; border-radius:var(--r-sm); }
 
-/* Buttons */
+/* ========= Buttons ========= */
 .actions{ display:flex; gap:10px; flex-wrap:wrap; }
 .btn{
   appearance:none; border:1px solid transparent; background:white;
@@ -151,7 +169,7 @@ input:focus, select:focus, textarea:focus{
 .btn-primary{
   background:linear-gradient(180deg, var(--brand), color-mix(in srgb, var(--brand) 88%, black));
   color:white;
-  box-shadow:0 8px 18px color-mix(in srgb, var(--brand) 35%, transparent);
+  box-shadow:0 10px 22px color-mix(in srgb, var(--brand) 28%, transparent);
 }
 .btn-primary:disabled{ opacity:.7; cursor:not-allowed; }
 .btn-ghost{ border-color:var(--border); color:var(--text); background:transparent; }
@@ -162,11 +180,11 @@ input:focus, select:focus, textarea:focus{
 @keyframes sp{ to{ transform:rotate(1turn);} }
 
 /* ========= Preview ========= */
-#preview{ margin-top:22px; max-width:960px; margin-inline:auto; }
+#preview{ margin-top:22px; max-width:920px; margin-inline:auto; }
 .preview-note{ color:var(--muted); }
 .status-bar{
-  background:color-mix(in srgb, var(--brand-2) 22%, white);
-  border:1px solid color-mix(in srgb, var(--brand-2) 35%, var(--border));
+  background:color-mix(in srgb, var(--brand-2) 18%, white);
+  border:1px solid color-mix(in srgb, var(--brand-2) 30%, var(--border));
   color:#0d4f38;
   border-radius:12px; padding:10px 12px; margin:0 0 12px; font-weight:600;
 }
@@ -201,7 +219,7 @@ input:focus, select:focus, textarea:focus{
 
 /* Skeleton shimmer */
 .skeleton{
-  background:linear-gradient(90deg, #e9f2ec, #f6fbf7, #e9f2ec);
+  background:linear-gradient(90deg, #eef3f0, #f9fcfb, #eef3f0);
   background-size:200% 100%;
   animation:shimmer 1.2s infinite linear;
   border-radius:8px; width:100%; height:100%;
