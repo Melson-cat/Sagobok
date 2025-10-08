@@ -29,6 +29,15 @@ const els = {
   mobileMenu: document.getElementById('mobileMenu'),
 };
 
+const submitBtn = document.querySelector('#storyForm .btn-primary');
+
+function setLoading(is){
+  if(!submitBtn) return;
+  submitBtn.disabled = is;
+  submitBtn.innerHTML = is ? 'Skapar berättelse… <span class="spinner"></span>' : 'Skapa förhandsvisning';
+}
+
+
 const state = {
   form: {
     name: 'Nova',
@@ -236,15 +245,15 @@ function onPhotoChange(){
 
 async function onSubmit(e){
   e.preventDefault();
+
   const problems = validateForm();
   if(problems.length){
     alert('Korrigera:\n\n• ' + problems.join('\n• '));
     return;
   }
 
-  // plocka state från formuläret
+  // samla state
   readForm();
-
   const payload = {
     name: state.form.name,
     age: state.form.age,
@@ -252,13 +261,15 @@ async function onSubmit(e){
     category: state.form.category,
     style: state.form.style,
     theme: state.form.theme,
-    refMode: state.form.refMode,        // 'desc' | 'photo'
-    traits: state.form.traits || null   // textbeskrivning om 'desc'
-    // photoDataUrl: state.form.photoDataUrl  // vi skickar INTE med foto ännu
+    refMode: state.form.refMode,
+    traits: state.form.traits || null
   };
+renderSkeleton(4);
 
   try{
     setStatus('Skickar till story-agent...');
+    setLoading(true);
+
     const res = await fetch(`${BACKEND}/api/story`, {
       method:'POST',
       headers:{ 'content-type':'application/json' },
@@ -273,16 +284,46 @@ async function onSubmit(e){
       return;
     }
 
-    // 👉 Första målet: landa i console
-    console.log("Story response:", data);
+    // 🔍 Gör console-läsningen tydlig
+    console.log("Story title:", data?.story?.book?.title);
+    console.log("Pages count:", data?.story?.book?.pages?.length);
+    console.dir(data.story);                                // expandera i devtools
+    console.log("Raw JSON:", JSON.stringify(data.story, null, 2));
+    window.lastStory = data.story;                          // lätt att inspektera senare
 
-    setStatus('Klar! (kolla console)');
-    // Senare: mappa data.story.book.pages → renderPreview(...)
+    // 🖼 Snabb första render: ta text per sida + placeholder-bilder
+    const pages = (data?.story?.book?.pages || []).map(p => ({
+      idx: p.page,
+      text: p.text,
+      img: `https://picsum.photos/seed/preview_${p.page}/600/400`
+    }));
+
+    const visible = data?.previewVisible ?? 4;
+    setStatus(`Visar de ${visible} första sidorna. Övriga är suddade tills du skapar boken.`);
+    renderPreview(pages, visible);
+
   }catch(err){
     setStatus(null);
     console.error(err);
     alert('Nätverksfel eller serverfel. Försök igen.');
+  }finally{
+    setLoading(false);
   }
+}
+
+
+function renderSkeleton(count=4){
+  grid.innerHTML = '';
+  for(let i=0;i<count;i++){
+    const el = document.createElement('article');
+    el.className = 'thumb';
+    el.innerHTML = `
+      <div class="imgwrap"><div class="skeleton"></div></div>
+      <div class="txt"><span class="skeleton" style="display:block;height:12px;margin-bottom:8px"></span>
+      <span class="skeleton" style="display:block;height:12px;width:60%"></span></div>`;
+    grid.appendChild(el);
+  }
+  preview.classList.remove('hidden');
 }
 
 function onDemo(){
