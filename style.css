@@ -228,3 +228,79 @@ input:focus, select:focus, textarea:focus{
 .site-footer{text-align:center;color:var(--muted);padding:28px 0 48px}
 .tiny-hint{color:var(--muted);font-size:12px}
 
+/* === Tema-overrides (pastell) – lägg sist i CSS ==================== */
+body[data-theme="kids"]{
+  --brand:#3c8f6f;           /* salviagrön (bas) */
+  --accent:#bfe4d2;          /* mintpastell */
+  --light:#f4fbf7;           /* sida/ytor */
+}
+body[data-theme="pets"]{
+  --brand:#ff8b66;           /* mjuk aprikos */
+  --accent:#ffe1d6;          /* aprikos pastell */
+  --light:#fff8f4;
+}
+body[data-theme="adult"]{
+  --brand:#1b2a6b;           /* moget blått */
+  --accent:#cdd6ff;          /* ljusblå pastell */
+  --light:#f1f4ff;
+}
+
+/* === Pastell-inputs (nästan vita, hint av temat) =================== */
+#quiz input, #quiz select, #quiz textarea{
+  background: color-mix(in srgb, #fff 97%, var(--brand) 3%) !important;
+  border-color: color-mix(in srgb, var(--brand) 15%, #dfe7e2 85%) !important;
+  box-shadow: 0 1px 0 rgba(0,0,0,.03) inset !important;
+}
+
+/* === Starkare “svävande” panel utan att bli tung =================== */
+#quiz{
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--light) 90%, #fff 10%),
+    #fff 100%);
+  border:1px solid color-mix(in srgb, var(--brand) 12%, #e7efe9 88%);
+  box-shadow: 0 10px 28px rgba(0,0,0,.10);
+}
+
+/* Tunn färgbar i överkant på panelen */
+#quiz::before{
+  content:""; display:block; height:4px; border-radius:12px 12px 0 0;
+  margin:-36px -32px 24px; /* matchar panel padding så den "smälter in" */
+  background: linear-gradient(90deg, var(--brand), var(--accent));
+  opacity:.9;
+}
+
+/* === Form-grid: 3 kolumner / rad + exakt linjering ================= */
+.form-row{
+  display:grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap:12px;
+  align-items:end; /* linjerar bottenkanter */
+  margin-bottom:10px;
+}
+.form-row .col-4{ grid-column: span 4; }  /* 3 per rad desktop */
+.form-row .col-8{ grid-column: span 8; }  /* traits/photo över 2 kolumner */
+
+@media (max-width:1020px){
+  .form-row .col-4{ grid-column: span 6; } /* 2 per rad */
+  .form-row .col-8{ grid-column: span 12; }
+}
+@media (max-width:640px){
+  .form-row .col-4{ grid-column: span 12; } /* stack */
+}
+
+/* Ensar label-utseendet (som Ålder) */
+#quiz .field label{
+  display:block;
+  text-align:left;
+  font:700 14px Quicksand, sans-serif;
+  color: var(--dark);
+  margin: 8px 4px 6px;
+}
+
+/* Hjälptext under select/inputs */
+#quiz .hint{
+  text-align:left;
+  font:italic 13px Quicksand, sans-serif;
+  color: color-mix(in srgb, var(--dark) 60%, transparent);
+  margin: 6px 4px 0;
+}
