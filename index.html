@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI-Sagobok</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">📚</span>
+        <h1>AI-Sagobok</h1>
+      </div>
+      <nav class="top-actions" aria-label="Snabbåtgärder">
+        <button id="btn-export" class="btn btn-ghost" disabled>Exportera PDF</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Stegindikator -->
+    <ol class="steps" aria-label="Skapasteg">
+      <li class="active">1. Layout</li>
+      <li>2. Skriv sagan (GPT-4)</li>
+      <li>3. Skapa bilder (Gemini)</li>
+      <li>4. Förhandsvisa & Exportera</li>
+    </ol>
+
+    <!-- Sidokolumner: formulär + preview -->
+    <section class="grid">
+      <aside class="panel">
+        <h2>1) Dina uppgifter</h2>
+        <form id="story-form" novalidate>
+          <div class="field">
+            <label for="childName">Namn på huvudperson</label>
+            <input id="childName" name="name" placeholder="Nova" required />
+          </div>
+
+          <div class="field field-row">
+            <div>
+              <label for="childAge">Ålder</label>
+              <input id="childAge" name="age" type="number" min="2" max="12" value="6" required />
+            </div>
+            <div>
+              <label for="pages">Antal sidor</label>
+              <input id="pages" name="pages" type="number" min="6" max="20" value="10" required />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="theme">Tema / handling (kort)</label>
+            <input id="theme" name="theme" placeholder="Skogsäventyr vid bäcken" required />
+          </div>
+
+          <div class="field">
+            <label for="artStyle">Illustrationsstil (frivillig)</label>
+            <input id="artStyle" name="artStyle" placeholder="Akvarell, mjuka penseldrag, pastell" />
+          </div>
+
+          <fieldset class="field">
+            <legend>Konsekvens & format</legend>
+            <label class="check"><input type="checkbox" id="keepAspect" checked /> 4:3-format</label>
+            <label class="check"><input type="checkbox" id="keepCamera" checked /> Begränsa kameravinklar</label>
+          </fieldset>
+
+          <div class="field">
+            <button type="submit" class="btn btn-primary">Skapa grund</button>
+          </div>
+        </form>
+
+        <div id="tips" class="tips">
+          <strong>Tips:</strong> Kort och tydligt tema ger bättre resultat. Vi fyller sagan i steg 2.
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Förhandsvisning</h2>
+          <div class="panel-tools">
+            <button id="btn-mock" class="btn btn-ghost">Fyll med demo-sidor</button>
+            <button id="btn-clear" class="btn btn-ghost">Rensa</button>
+          </div>
+        </div>
+
+        <!-- Status/Banners -->
+        <div id="status" class="status hidden" role="status" aria-live="polite"></div>
+
+        <!-- Bokgrid -->
+        <div id="book" class="book-grid" aria-label="Boksidor"></div>
+      </section>
+    </section>
+  </main>
+
+  <!-- Modal för enkel sida (framtida redigering) -->
+  <dialog id="pageModal" class="modal">
+    <form method="dialog">
+      <header>
+        <h3>Redigera sida</h3>
+      </header>
+      <div class="modal-body">
+        <label for="modalText">Text</label>
+        <textarea id="modalText" rows="6"></textarea>
+      </div>
+      <footer class="modal-actions">
+        <button class="btn btn-ghost">Avbryt</button>
+        <button id="modalSave" class="btn btn-primary" value="save">Spara</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <footer class="site-footer">
+    <div class="container">
+      <small>© AI-Sagobok. Prototyp för demoändamål.</small>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
