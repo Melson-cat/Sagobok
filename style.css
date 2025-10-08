@@ -33,7 +33,7 @@ body[data-theme="kids"]{
 /* Husdjur = lugn ljusblå */
 body[data-theme="pets"]{
   --bg:#c0e5fc;                 /* mjuk ljusblå */
-  --panel:#dfe2ec;
+  --panel:#badde7;
   --brand:#5f79f2;              /* snäll blå */
   --brand-2:#c3cffd;
   --focus:#c6d7ff;
