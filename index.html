@@ -1,54 +1,54 @@
 <!DOCTYPE html>
 <html lang="sv">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BokPiloten – Skapa din AI-bok</title>
-  <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BokPiloten – Skapa din AI-illustrerade bok</title>
+  <link rel="stylesheet" href="style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;600;700&display=swap" rel="stylesheet">
 </head>
 <body data-theme="kids">
-
   <header class="site-header">
     <a href="/" class="brand">
       <img src="images/pilot-logo.png" alt="BokPiloten">
       <span>BokPiloten</span>
     </a>
-    <nav class="main-nav">
-      <a href="#">Skapa bok</a>
-      <a href="#">Exempel</a>
-      <a href="#">Om oss</a>
+    <nav class="main-nav" aria-label="Huvudmeny">
+      <a href="#bookForm">Skapa bok</a>
+      <a href="#examples">Exempel</a>
+      <a href="#about">Om oss</a>
     </nav>
     <button id="navToggle" class="hamburger" aria-label="Meny">&#9776;</button>
   </header>
 
-  <div class="mobile-menu">
+  <!-- Mobilmeny (dold tills man öppnar den) -->
+  <div class="mobile-menu" id="mobileMenu" aria-hidden="true">
     <nav>
-      <a href="#">Skapa bok</a>
-      <a href="#">Exempel</a>
-      <a href="#">Om oss</a>
+      <a href="#bookForm">Skapa bok</a>
+      <a href="#examples">Exempel</a>
+      <a href="#about">Om oss</a>
     </nav>
   </div>
 
   <main class="container">
     <section class="intro">
       <h1>Skapa din egen AI-illustrerade bok</h1>
-      <p>
-        Fyll i några detaljer, välj stil och se din berättelse ta form med både text och bilder.
-      </p>
+      <p>Fyll i några detaljer, välj stil och se din berättelse ta form med både text och bilder.</p>
     </section>
 
-    <section id="bookForm">
-      <form id="storyForm">
+    <!-- FORMULÄR -->
+    <section id="bookForm" class="panel">
+      <form id="storyForm" novalidate>
+        <!-- Rad 1 -->
         <div class="form-row">
           <div class="field">
             <label for="name">Namn</label>
-            <input id="name" placeholder="Ex: Nova">
+            <input id="name" placeholder="Ex: Nova" />
           </div>
           <div class="field">
             <label for="age">Ålder</label>
-            <input id="age" type="number" min="1" value="6">
+            <input id="age" type="number" min="1" value="6" />
           </div>
           <div class="field">
             <label for="pages">Antal sidor</label>
@@ -59,7 +59,7 @@
             </select>
           </div>
         </div>
-
+        <!-- Rad 2 -->
         <div class="form-row">
           <div class="field">
             <label for="category">Kategori</label>
@@ -80,13 +80,31 @@
           </div>
           <div class="field">
             <label for="theme">Tema / kort handling</label>
-            <input id="theme" placeholder="Ex: Skogsäventyr vid bäcken">
+            <input id="theme" placeholder="Ex: Skogsäventyr vid bäcken" />
           </div>
         </div>
-
-        <div class="field">
-          <label for="traits">Kännetecken</label>
-          <textarea id="traits" rows="3" placeholder="Ex: lockigt hår, blå jacka, gula stövlar"></textarea>
+        <!-- Rad 3 -->
+        <div class="form-row">
+          <div class="field">
+            <label for="traits">Kännetecken</label>
+            <textarea id="traits" rows="3" placeholder="Ex: lockigt hår, blå jacka, gula stövlar"></textarea>
+          </div>
+          <div class="field">
+            <label for="charPhoto">Ladda upp foto (valfritt)</label>
+            <input id="charPhoto" type="file" accept="image/*" />
+            <div class="upload-preview">
+              <img id="photoPreview" class="hidden" alt="Förhandsvisning" />
+            </div>
+          </div>
+          <div class="field">
+            <label>Ton / språk</label>
+            <select id="tone">
+              <option value="vardaglig" selected>Vardaglig & varm</option>
+              <option value="spännande">Spännande</option>
+              <option value="humor">Humor</option>
+              <option value="poetisk">Poetisk</option>
+            </select>
+          </div>
         </div>
 
         <div class="actions">
@@ -96,14 +114,21 @@
       </form>
     </section>
 
+    <!-- FÖRHANDSVISNING -->
     <section id="preview" class="hidden">
       <h2>Förhandsvisning</h2>
-      <div id="bookPreview"></div>
+      <p class="preview-note">Du ser de <strong>4 första</strong> sidorna skarpt. Resterande är suddade tills du skapar boken.</p>
+      <div id="bookPreview" class="thumb-grid"></div>
+    </section>
+
+    <section id="about" class="about">
+      <h3>Om BokPiloten</h3>
+      <p>Vi hjälper dig skapa personliga, AI-illustrerade böcker – snabbt och enkelt.</p>
     </section>
   </main>
 
   <footer class="site-footer">
-    <p>© 2025 BokPiloten – Byggd med 💚 i Sverige</p>
+    <p>© 2025 BokPiloten</p>
   </footer>
 
   <script src="script.js"></script>
