@@ -301,11 +301,12 @@ function validateForm(){
 }
 
 /* ---- Submit ---- */
-async function onSubmit(e){
+/* ---- Submit ---- */
+async function onSubmit(e) {
   e.preventDefault();
 
   const problems = validateForm();
-  if(problems.length){
+  if (problems.length) {
     alert("Korrigera:\n\n• " + problems.join("\n• "));
     return;
   }
@@ -315,53 +316,108 @@ async function onSubmit(e){
     name: state.form.name,
     age: state.form.age,
     pages: state.form.pages,
-    category: state.form.category,  // "kids" | "pets"
+    category: state.form.category,
     style: state.form.style,
     theme: state.form.theme,
     refMode: state.form.refMode,
     traits: state.form.traits || null,
-    // foto skickas inte här; din backend förväntar text-traits (enligt nuvarande kod)
   };
 
   renderSkeleton(4);
   setLoading(true);
-  setStatus("Skickar till story-agent...");
+  setStatus("🪄 Skapar berättelse med AI …");
 
-  try{
+  try {
+    // === Steg 1: skapa story ===
     const res = await fetch(`${BACKEND}/api/story`, {
       method: "POST",
-      headers: { "content-type":"application/json" },
-      body: JSON.stringify(payload)
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
     });
+    const data = await res.json().catch(() => ({}));
 
-    const data = await res.json().catch(()=> ({}));
-
-    if(!res.ok || data?.error){
-      console.error("Story error:", res.status, data?.error);
+    if (!res.ok || data?.error) {
       setStatus(null);
       alert("Tyvärr uppstod ett fel: " + (data?.error || `HTTP ${res.status}`));
       return;
     }
 
-    // Debugvänligt i devtools
-    console.log("Story title:", data?.story?.book?.title);
-    console.log("Pages count:", data?.story?.book?.pages?.length);
-    console.dir(data.story);
-    console.log("Raw JSON:", JSON.stringify(data.story, null, 2));
+    console.log("Story JSON:", data.story);
     window.lastStory = data.story;
 
-    const pages = (data?.story?.book?.pages || []).map(p => ({
-      idx: p.page,
-      text: p.text,
-      // placeholder-img tills din bildgenerering kopplas in
-      img: `https://picsum.photos/seed/preview_${p.page}/600/400`
-    }));
-
     const visible = data?.previewVisible ?? state.visibleCount;
-    setStatus(`Visar de ${visible} första sidorna. Övriga är suddade tills du skapar boken.`);
-    renderPreview(pages, visible);
+    setStatus("✏️ Förbereder illustrationer …");
 
-  } catch (err){
+    // === Steg 2: hämta bildprompter och rendera progressivt ===
+    const prompts = data.image_prompts || [];
+    if (!prompts.length) {
+      setStatus("Ingen bilddata hittades.");
+      return;
+    }
+
+    // skapa tomma kort för varje sida direkt
+    els.previewGrid.innerHTML = "";
+    prompts.forEach((p, i) => {
+      const card = document.createElement("article");
+      card.className = "thumb";
+      if (i >= visible) card.classList.add("locked");
+      card.innerHTML = `
+        <div class="imgwrap"><div class="skeleton"></div><img alt="Sida ${p.page}" style="opacity:0" /></div>
+        <div class="txt skeleton" style="height:14px;width:70%;margin:12px auto"></div>
+      `;
+      els.previewGrid.appendChild(card);
+    });
+    els.previewSection.classList.remove("hidden");
+    smoothScrollTo(els.previewSection);
+
+    // === Steg 3: successivt ladda bilder via /api/images ===
+    setStatus("🎨 AI illustrerar sidor …");
+    const imgRes = await fetch(`${BACKEND}/api/images`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image_prompts: prompts }),
+    });
+
+    const imgData = await imgRes.json().catch(() => ({}));
+    if (!imgRes.ok || imgData?.error) {
+      throw new Error(imgData?.error || "Misslyckades att generera bilder");
+    }
+
+    const images = imgData.images || [];
+    console.log("Images:", images);
+
+    // === Steg 4: visa sidor en efter en ===
+    for (let i = 0; i < images.length; i++) {
+      const img = images[i];
+      const card = els.previewGrid.children[i];
+      if (!card) continue;
+
+      const imgEl = card.querySelector("img");
+      const skeletons = card.querySelectorAll(".skeleton");
+
+      setStatus(`🖌️ Illustrerar sida ${i + 1} av ${images.length} …`);
+      await new Promise((resolve) => {
+        const tmp = new Image();
+        tmp.onload = () => {
+          imgEl.src = tmp.src;
+          skeletons.forEach((s) => s.remove());
+          imgEl.style.opacity = "1";
+          const txt = document.createElement("div");
+          txt.className = "txt";
+          txt.textContent = data.story.book.pages[i]?.text || "";
+          card.appendChild(txt);
+          resolve();
+        };
+        tmp.onerror = resolve;
+        tmp.src = img.image_url || "";
+      });
+
+      // liten paus mellan varje (ger fin känsla)
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    setStatus("✅ Klart! Sagans förhandsvisning är redo.");
+  } catch (err) {
     console.error(err);
     setStatus(null);
     alert("Nätverksfel eller serverfel. Försök igen.");
@@ -370,45 +426,6 @@ async function onSubmit(e){
   }
 }
 
-/* ---- Demo-knapp ---- */
-function onDemo(){
-  state.visibleCount = 4;
-  const pages = makeDemoPages(12, state.form.name || "Nova", state.form.theme || "ett litet äventyr");
-  setStatus("Detta är en demo. Endast de 4 första visas skarpt.");
-  renderPreview(pages, state.visibleCount);
-}
-
-/* ---- Eventbindningar ---- */
-function bindEvents(){
-  // kategori
-  els.catKidsBtn?.addEventListener("click", ()=> setCategory("kids"));
-  els.catPetsBtn?.addEventListener("click", ()=> setCategory("pets"));
-
-  // karaktärsreferens
-  els.refDescBtn?.addEventListener("click", ()=> setRefMode("desc"));
-  els.refPhotoBtn?.addEventListener("click", ()=> setRefMode("photo"));
-
-  // foto
-  els.charPhoto?.addEventListener("change", onPhotoChange);
-
-  // inputs autosave
-  ["name","age","pages","style","theme","traits"].forEach(id=>{
-    const el = document.getElementById(id);
-    el?.addEventListener("input", ()=>{ readForm(); saveForm(); });
-  });
-
-  // submit + demo
-  els.form?.addEventListener("submit", onSubmit);
-  els.demoBtn?.addEventListener("click", onDemo);
-
-  // mobilmeny
-  els.navToggle?.addEventListener("click", ()=>{
-    els.mobileMenu.classList.toggle("open");
-    const open = els.mobileMenu.classList.contains("open");
-    els.navToggle.setAttribute("aria-expanded", open ? "true" : "false");
-    els.mobileMenu.setAttribute("aria-hidden", open ? "false" : "true");
-  });
-}
 
 /* ---- Init ---- */
 (function init(){
