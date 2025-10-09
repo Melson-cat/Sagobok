@@ -482,6 +482,41 @@ async function onSubmit(e) {
   }
 }
 
+/* ---- Eventbindningar ---- */
+function bindEvents() {
+  // kategori
+  els.catKidsBtn?.addEventListener("click", () => setCategory("kids"));
+  els.catPetsBtn?.addEventListener("click", () => setCategory("pets"));
+
+  // karaktärsreferens
+  els.refDescBtn?.addEventListener("click", () => setRefMode("desc"));
+  els.refPhotoBtn?.addEventListener("click", () => setRefMode("photo"));
+
+  // foto
+  els.charPhoto?.addEventListener("change", onPhotoChange);
+
+  // inputs autosave
+  ["name", "age", "pages", "style", "theme", "traits"].forEach((id) => {
+    const el = document.getElementById(id);
+    el?.addEventListener("input", () => {
+      readForm();
+      saveForm();
+    });
+  });
+
+  // submit + demo
+  els.form?.addEventListener("submit", onSubmit);
+  els.demoBtn?.addEventListener("click", onDemo);
+
+  // mobilmeny
+  els.navToggle?.addEventListener("click", () => {
+    els.mobileMenu.classList.toggle("open");
+    const open = els.mobileMenu.classList.contains("open");
+    els.navToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    els.mobileMenu.setAttribute("aria-hidden", open ? "false" : "true");
+  });
+}
+
 /* ---- Init ---- */
 (function init(){
   loadForm();
