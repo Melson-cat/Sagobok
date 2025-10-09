@@ -301,7 +301,6 @@ function validateForm(){
 }
 
 /* ---- Submit ---- */
-/* ---- Submit ---- */
 async function onSubmit(e) {
   e.preventDefault();
 
@@ -325,10 +324,36 @@ async function onSubmit(e) {
 
   renderSkeleton(4);
   setLoading(true);
+
+  // liten helper för progress-bar i statusfältet
+  function updateProgress(current, total, label) {
+    let bar = document.getElementById("statusBar");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "statusBar";
+      bar.className = "status-bar";
+      els.previewSection?.insertAdjacentElement("afterbegin", bar);
+    }
+    bar.classList.remove("hidden");
+
+    // skapa progresscontainer om den inte finns
+    let prog = bar.querySelector(".progress");
+    if (!prog) {
+      prog = document.createElement("div");
+      prog.className = "progress";
+      prog.innerHTML = `<div class="progress-track"><div class="progress-fill" style="width:0%"></div></div><span class="progress-label"></span>`;
+      bar.appendChild(prog);
+    }
+    const pct = total ? Math.round((current / total) * 100) : 0;
+    prog.querySelector(".progress-fill").style.width = pct + "%";
+    prog.querySelector(".progress-label").textContent = label || "";
+  }
+
   setStatus("🪄 Skapar berättelse med AI …");
+  updateProgress(0, 1, "Skapar berättelse …");
 
   try {
-    // === Steg 1: skapa story ===
+    // === Steg 1: Skapa story ===
     const res = await fetch(`${BACKEND}/api/story`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -346,23 +371,27 @@ async function onSubmit(e) {
     window.lastStory = data.story;
 
     const visible = data?.previewVisible ?? state.visibleCount;
-    setStatus("✏️ Förbereder illustrationer …");
-
-    // === Steg 2: hämta bildprompter och rendera progressivt ===
     const prompts = data.image_prompts || [];
-    if (!prompts.length) {
+    const pagesJson = data?.story?.book?.pages || [];
+    if (!prompts.length || !pagesJson.length) {
       setStatus("Ingen bilddata hittades.");
       return;
     }
 
-    // skapa tomma kort för varje sida direkt
+    // === Steg 2: Förbered kort – tomma bilder men rätt antal ===
+    setStatus("✏️ Förbereder illustrationer …");
+    updateProgress(0, prompts.length, "Förbereder kort …");
+
     els.previewGrid.innerHTML = "";
     prompts.forEach((p, i) => {
       const card = document.createElement("article");
       card.className = "thumb";
       if (i >= visible) card.classList.add("locked");
       card.innerHTML = `
-        <div class="imgwrap"><div class="skeleton"></div><img alt="Sida ${p.page}" style="opacity:0" /></div>
+        <div class="imgwrap">
+          <div class="skeleton"></div>
+          <img alt="Sida ${p.page}" style="opacity:0" />
+        </div>
         <div class="txt skeleton" style="height:14px;width:70%;margin:12px auto"></div>
       `;
       els.previewGrid.appendChild(card);
@@ -370,50 +399,77 @@ async function onSubmit(e) {
     els.previewSection.classList.remove("hidden");
     smoothScrollTo(els.previewSection);
 
-    // === Steg 3: successivt ladda bilder via /api/images ===
+    // === Steg 3: Generera bilder i backend ===
     setStatus("🎨 AI illustrerar sidor …");
+    updateProgress(0, prompts.length, "Illustrerar …");
+
     const imgRes = await fetch(`${BACKEND}/api/images`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ image_prompts: prompts }),
     });
-
     const imgData = await imgRes.json().catch(() => ({}));
     if (!imgRes.ok || imgData?.error) {
       throw new Error(imgData?.error || "Misslyckades att generera bilder");
     }
 
     const images = imgData.images || [];
-    console.log("Images:", images);
+    // Mappa efter sida om ordningen skulle diffa
+    const byPage = new Map(images.map(it => [it.page, it]));
 
-    // === Steg 4: visa sidor en efter en ===
-    for (let i = 0; i < images.length; i++) {
-      const img = images[i];
+    // === Steg 4: Visa sidor successivt med mjuk övergång ===
+    for (let i = 0; i < prompts.length; i++) {
+      const pageNo = prompts[i].page;
+      const imgInfo = byPage.get(pageNo);
       const card = els.previewGrid.children[i];
       if (!card) continue;
 
       const imgEl = card.querySelector("img");
       const skeletons = card.querySelectorAll(".skeleton");
 
-      setStatus(`🖌️ Illustrerar sida ${i + 1} av ${images.length} …`);
+      setStatus(`🖌️ Illustrerar sida ${i + 1} av ${prompts.length} …`);
+      updateProgress(i + 1, prompts.length, `Illustrerar sida ${i + 1}/${prompts.length} …`);
+
+      // Förinläs bild för fin fade-in
       await new Promise((resolve) => {
+        if (!imgInfo?.image_url) return resolve();
         const tmp = new Image();
         tmp.onload = () => {
           imgEl.src = tmp.src;
           skeletons.forEach((s) => s.remove());
           imgEl.style.opacity = "1";
+
+          // Lägg till texten nu när bilden är klar
+          const txtPrev = card.querySelector(".txt");
+          if (txtPrev) txtPrev.remove();
           const txt = document.createElement("div");
           txt.className = "txt";
-          txt.textContent = data.story.book.pages[i]?.text || "";
+          txt.textContent = pagesJson[i]?.text || "";
+          card.appendChild(txt);
+
+          resolve();
+        };
+        tmp.onerror = () => {
+          // fallback – skelett bort + felmeddelande
+          skeletons.forEach((s) => s.remove());
+          const fb = document.createElement("div");
+          fb.className = "img-fallback";
+          fb.textContent = "Kunde inte ladda bild";
+          card.querySelector(".imgwrap").appendChild(fb);
+
+          const txtPrev = card.querySelector(".txt");
+          if (txtPrev) txtPrev.remove();
+          const txt = document.createElement("div");
+          txt.className = "txt";
+          txt.textContent = pagesJson[i]?.text || "";
           card.appendChild(txt);
           resolve();
         };
-        tmp.onerror = resolve;
-        tmp.src = img.image_url || "";
+        tmp.src = imgInfo.image_url || "";
       });
 
-      // liten paus mellan varje (ger fin känsla)
-      await new Promise((r) => setTimeout(r, 400));
+      // liten, behaglig paus mellan sidor
+      await new Promise((r) => setTimeout(r, 350));
     }
 
     setStatus("✅ Klart! Sagans förhandsvisning är redo.");
@@ -425,7 +481,6 @@ async function onSubmit(e) {
     setLoading(false);
   }
 }
-
 
 /* ---- Init ---- */
 (function init(){
