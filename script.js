@@ -517,6 +517,13 @@ function bindEvents() {
   });
 }
 
+function onDemo() {
+  state.visibleCount = 4;
+  const pages = makeDemoPages(12, state.form.name || "Nova", state.form.theme || "ett litet äventyr");
+  setStatus("Detta är en demo. Endast de 4 första visas skarpt.");
+  renderPreview(pages, state.visibleCount);
+}
+
 /* ---- Init ---- */
 (function init(){
   loadForm();
