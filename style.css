@@ -324,3 +324,34 @@ input:hover, select:hover, textarea:hover{
 .progress-track { height: 6px; border-radius: 999px; background: rgba(0,0,0,0.07); overflow: hidden; }
 .progress-fill { height: 100%; width: 0%; background: rgba(0,0,0,0.25); transition: width .35s ease; }
 .progress-label { display: inline-block; margin-top: 6px; font-size: 12px; opacity: .8; }
+
+/* Avaktivera förhands-blur helt */
+.thumb.locked,
+.thumb.locked .imgwrap,
+.thumb.locked img {
+  filter: none !important;
+  opacity: 1 !important;
+}
+
+/* En tydlig felstate om bild saknas */
+.thumb .img-fallback {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  border-radius: 12px;
+  background: #fff7f7;
+  color: #b3261e;
+  font-size: 0.95rem;
+  padding: 16px;
+}
+.thumb .retry {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+  background: #fff;
+  cursor: pointer;
+}
