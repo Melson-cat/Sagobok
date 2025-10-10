@@ -372,7 +372,7 @@ async function onSubmit(e) {
     setStatus("🎨 AI illustrerar sidor … (live)");
     updateProgress(0, prompts.length, "Illustrerar …");
 
-    const streamRes = await fetch(`${BACKEND}/api/images/stream`, {
+    const streamRes = await fetch(`${BACKEND}/api/images`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ image_prompts: prompts }),
