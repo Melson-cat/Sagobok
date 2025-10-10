@@ -57,6 +57,7 @@ const state = {
     photoDataUrl: null,
   },
   visibleCount: 4,
+   imagePrompts: []
 };
 
 /* =================== Hjälpare =================== */
@@ -328,6 +329,7 @@ async function onSubmit(e) {
 
     const visible = data?.previewVisible ?? state.visibleCount;
     const prompts = data.image_prompts || [];
+    state.imagePrompts = prompts;
     const pagesJson = data?.story?.book?.pages || [];
     if (!prompts.length || !pagesJson.length) {
       setStatus("Ingen bilddata hittades.");
@@ -343,13 +345,20 @@ async function onSubmit(e) {
       const card = document.createElement("article");
       card.className = "thumb";
       if (i >= visible) card.classList.add("locked");
-      card.innerHTML = `
-        <div class="imgwrap">
-          <div class="skeleton"></div>
-          <img alt="Sida ${p.page}" style="opacity:0" />
-        </div>
-        <div class="txt">${escapeHtml(pagesJson[i]?.text || "")}</div>
-      `;
+     card.innerHTML = `
+  <div class="imgwrap" data-page="${p.page}">
+    <div class="skeleton"></div>
+    <img alt="Sida ${p.page}" style="opacity:0" />
+    <span class="img-provider hidden"></span>
+  </div>
+  <div class="txt">${escapeHtml(pagesJson[i]?.text || "")}</div>
+  <div class="retry-wrap hidden" style="padding:10px 12px;">
+    <button class="retry-btn retry" data-page="${p.page}">
+      🔄 Generera igen
+    </button>
+  </div>
+`;
+
       els.previewGrid.appendChild(card);
     });
     els.previewSection.classList.remove("hidden");
@@ -402,32 +411,64 @@ async function onSubmit(e) {
         const imgEl = card.querySelector("img");
         const skeleton = card.querySelector(".skeleton");
 
-        if (row.image_url) {
-          await new Promise((resolve) => {
-            const tmp = new Image();
-            tmp.onload = () => {
-              imgEl.src = tmp.src;
-              skeleton?.remove();
-              imgEl.style.opacity = "1";
-              resolve();
-            };
-            tmp.onerror = () => {
-              skeleton?.remove();
-              const fb = document.createElement("div");
-              fb.className = "img-fallback";
-              fb.textContent = "Kunde inte ladda bild";
-              card.querySelector(".imgwrap").appendChild(fb);
-              resolve();
-            };
-            tmp.src = row.image_url;
-          });
-        } else {
-          skeleton?.remove();
-          const fb = document.createElement("div");
-          fb.className = "img-fallback";
-          fb.textContent = "Kunde inte generera bild";
-          card.querySelector(".imgwrap").appendChild(fb);
-        }
+      if (row.image_url) {
+  await new Promise((resolve) => {
+    const tmp = new Image();
+    tmp.onload = () => {
+      imgEl.src = tmp.src;
+      skeleton?.remove();
+      imgEl.style.opacity = "1";
+
+      // visa provider-tag (valfritt men nice)
+      const prov = card.querySelector(".img-provider");
+      if (prov) {
+        prov.textContent = row.provider === "google" ? "🎨 Gemini" : (row.provider || "");
+        prov.classList.remove("hidden");
+        prov.style.position = "absolute";
+        prov.style.right = "8px";
+        prov.style.bottom = "8px";
+        prov.style.background = "rgba(255,255,255,.9)";
+        prov.style.border = "1px solid var(--border)";
+        prov.style.borderRadius = "8px";
+        prov.style.padding = "2px 6px";
+        prov.style.fontSize = "12px";
+      }
+
+      // om knappen fanns från tidigare fel – göm den
+      const rw = card.querySelector(".retry-wrap");
+      rw?.classList.add("hidden");
+      resolve();
+    };
+    tmp.onerror = () => {
+      skeleton?.remove();
+      const fb = document.createElement("div");
+      fb.className = "img-fallback";
+      fb.innerHTML = `
+        Kunde inte ladda bild
+        <div class="retry-wrap" style="margin-top:8px;">
+          <button class="retry-btn retry" data-page="${row.page}">🔄 Generera igen</button>
+        </div>`;
+      card.querySelector(".imgwrap").appendChild(fb);
+      resolve();
+    };
+    tmp.src = row.image_url;
+  });
+} else {
+  // ERROR-GREN: visa tydlig fallback + retry-knapp
+  skeleton?.remove();
+  const fb = document.createElement("div");
+  fb.className = "img-fallback";
+  fb.innerHTML = `
+    Kunde inte generera bild
+    <div class="retry-wrap" style="margin-top:8px;">
+      <button class="retry-btn retry" data-page="${row.page}">🔄 Generera igen</button>
+    </div>`;
+  card.querySelector(".imgwrap").appendChild(fb);
+  // visa även knappen under texten om du vill ha den där
+  const below = card.querySelector(".retry-wrap");
+  below?.classList.remove("hidden");
+}
+
 
         received += 1;
         setStatus(`🖌️ Illustrerar sida ${received} av ${prompts.length} …`);
@@ -494,16 +535,109 @@ function onDemo() {
   smoothScrollTo(els.previewSection);
 }
 
+async function regenerateOne(page) {
+  // Hitta prompten för sidan
+  const entry = (state.imagePrompts || []).find(p => p.page === page);
+  if (!entry) {
+    alert("Kunde inte hitta prompt för sidan " + page);
+    return;
+  }
+
+  // Hitta kortet i DOM
+  const card = Array.from(els.previewGrid.children).find(a => {
+    const wrap = a.querySelector(".imgwrap");
+    return wrap && Number(wrap.getAttribute("data-page")) === page;
+  });
+  if (!card) return;
+
+  const btn = card.querySelector('.retry-btn[data-page="'+page+'"]');
+  const imgEl = card.querySelector("img");
+  const wrap = card.querySelector(".imgwrap");
+  const providerTag = card.querySelector(".img-provider");
+
+  // UI: visa att vi jobbar
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "⏳ Genererar …";
+  }
+  // Rensa ev. felruta och visa skeleton
+  const prevFallback = card.querySelector(".img-fallback");
+  prevFallback?.remove();
+  const sk = document.createElement("div");
+  sk.className = "skeleton";
+  wrap.prepend(sk);
+
+  try {
+    const res = await fetch(`${BACKEND}/api/image/regenerate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: entry.prompt, page })
+    });
+    const j = await res.json().catch(()=> ({}));
+    if (!res.ok || j?.error) throw new Error(j?.error || `HTTP ${res.status}`);
+
+    await new Promise((resolve) => {
+      const tmp = new Image();
+      tmp.onload = () => {
+        imgEl.src = tmp.src;
+        imgEl.style.opacity = "1";
+        sk.remove();
+        if (providerTag) {
+          providerTag.textContent = "🎨 Gemini";
+          providerTag.classList.remove("hidden");
+        }
+        const below = card.querySelector(".retry-wrap");
+        below?.classList.add("hidden");
+        resolve();
+      };
+      tmp.onerror = () => {
+        sk.remove();
+        const fb = document.createElement("div");
+        fb.className = "img-fallback";
+        fb.innerHTML = `
+          Kunde inte generera bild
+          <div class="retry-wrap" style="margin-top:8px;">
+            <button class="retry-btn retry" data-page="${page}">🔄 Generera igen</button>
+          </div>`;
+        wrap.appendChild(fb);
+        resolve();
+      };
+      tmp.src = j.image_url;
+    });
+  } catch (e) {
+    sk.remove();
+    const fb = document.createElement("div");
+    fb.className = "img-fallback";
+    fb.innerHTML = `
+      Kunde inte generera bild
+      <div class="retry-wrap" style="margin-top:8px;">
+        <button class="retry-btn retry" data-page="${page}">🔄 Generera igen</button>
+      </div>`;
+    wrap.appendChild(fb);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "🔄 Generera igen";
+    }
+  }
+}
+
+
+/* ---- Eventbindningar ---- */
 /* ---- Eventbindningar ---- */
 function bindEvents() {
+  // Kategori
   els.catKidsBtn?.addEventListener("click", () => setCategory("kids"));
   els.catPetsBtn?.addEventListener("click", () => setCategory("pets"));
 
+  // Karaktärsreferens
   els.refDescBtn?.addEventListener("click", () => setRefMode("desc"));
   els.refPhotoBtn?.addEventListener("click", () => setRefMode("photo"));
 
+  // Foto-preview
   els.charPhoto?.addEventListener("change", onPhotoChange);
 
+  // Formfält -> spara löpande
   ["name", "age", "pages", "style", "theme", "traits"].forEach((id) => {
     const el = document.getElementById(id);
     el?.addEventListener("input", () => {
@@ -512,16 +646,30 @@ function bindEvents() {
     });
   });
 
+  // Submit + demo
   els.form?.addEventListener("submit", onSubmit);
   els.demoBtn?.addEventListener("click", onDemo);
 
+  // Mobilmeny
   els.navToggle?.addEventListener("click", () => {
     els.mobileMenu.classList.toggle("open");
     const open = els.mobileMenu.classList.contains("open");
     els.navToggle.setAttribute("aria-expanded", open ? "true" : "false");
     els.mobileMenu.setAttribute("aria-hidden", open ? "false" : "true");
   });
+
+  // 🔄 Retry-knapp (event delegation på hela previewGrid)
+  // Fångar klick på dynamiskt skapade .retry-btn inne i korten
+  els.previewGrid?.addEventListener("click", (e) => {
+    const t = e.target;
+    if (t && t.classList.contains("retry-btn")) {
+      e.preventDefault();
+      const page = Number(t.getAttribute("data-page"));
+      if (page) regenerateOne(page);
+    }
+  });
 }
+
 
 /* ---- Init ---- */
 (function init() {
