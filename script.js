@@ -46,117 +46,162 @@ const els = {
 /* =================== State =================== */
 const state = {
   form: {
-    category: "kids",      // "kids" | "pets"
+    category: "kids", // "kids" | "pets"
     name: "Nova",
     age: 6,
     pages: 16,
     style: "storybook",
     theme: "",
-    refMode: "desc",       // "desc" | "photo"
+    refMode: "desc", // "desc" | "photo"
     traits: "",
     photoDataUrl: null,
   },
   visibleCount: 4,
-  loadingImages: new Set(),
 };
 
 /* =================== Hjälpare =================== */
-function clamp(n, lo, hi){ return Math.max(lo, Math.min(hi, n)); }
-function toInt(v, fb = 0){ const n = parseInt(v, 10); return Number.isFinite(n) ? n : fb; }
-function escapeHtml(s){
-  return String(s)
-    .replaceAll("&","&amp;").replaceAll("<","&lt;")
-    .replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
+function clamp(n, lo, hi) {
+  return Math.max(lo, Math.min(hi, n));
 }
-function smoothScrollTo(el){ el?.scrollIntoView({ behavior:"smooth", block:"start" }); }
+function toInt(v, fb = 0) {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : fb;
+}
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+function smoothScrollTo(el) {
+  el?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
 
-function setStatus(msg){
-  const bar = document.getElementById("statusBar");
-  if(!bar) return;
-  if(!msg){ bar.textContent = ""; bar.classList.add("hidden"); return; }
+function setStatus(msg) {
+  let bar = document.getElementById("statusBar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "statusBar";
+    bar.className = "status-bar";
+    // lägg den ovanför previewSection om det finns
+    els.previewSection?.insertAdjacentElement("beforebegin", bar);
+  }
+  if (!msg) {
+    bar.textContent = "";
+    bar.classList.add("hidden");
+    return;
+  }
   bar.textContent = msg;
   bar.classList.remove("hidden");
 }
 
-function setLoading(is){
-  if(!els.submitBtn) return;
+function setLoading(is) {
+  if (!els.submitBtn) return;
   els.submitBtn.disabled = is;
   els.submitBtn.innerHTML = is
     ? 'Skapar berättelse… <span class="spinner"></span>'
-    : 'Skapa förhandsvisning';
+    : "Skapa förhandsvisning";
+}
+
+/* ---- Progress helper ---- */
+function updateProgress(current, total, label) {
+  let bar = document.getElementById("statusBar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "statusBar";
+    bar.className = "status-bar";
+    els.previewSection?.insertAdjacentElement("afterbegin", bar);
+  }
+  bar.classList.remove("hidden");
+
+  let prog = bar.querySelector(".progress");
+  if (!prog) {
+    prog = document.createElement("div");
+    prog.className = "progress";
+    prog.innerHTML =
+      '<div class="progress-track"><div class="progress-fill" style="width:0%"></div></div><span class="progress-label"></span>';
+    bar.appendChild(prog);
+  }
+  const pct = total ? Math.round((current / total) * 100) : 0;
+  prog.querySelector(".progress-fill").style.width = pct + "%";
+  prog.querySelector(".progress-label").textContent = label || "";
 }
 
 /* ---- LocalStorage ---- */
-function saveForm(){
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.form)); } catch {}
+function saveForm() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.form));
+  } catch {}
 }
-function loadForm(){
+function loadForm() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if(!raw) return;
+    if (!raw) return;
     const saved = JSON.parse(raw) || {};
     Object.assign(state.form, saved);
   } catch {}
 }
 
 /* ---- Kategori toggle ---- */
-function setCategory(cat, save = true){
-  const val = (cat === "pets") ? "pets" : "kids";
+function setCategory(cat, save = true) {
+  const val = cat === "pets" ? "pets" : "kids";
   state.form.category = val;
 
-  // UI
-  if(val === "kids"){
+  if (val === "kids") {
     els.catKidsBtn?.classList.add("active");
-    els.catKidsBtn?.setAttribute("aria-selected","true");
+    els.catKidsBtn?.setAttribute("aria-selected", "true");
     els.catPetsBtn?.classList.remove("active");
-    els.catPetsBtn?.setAttribute("aria-selected","false");
+    els.catPetsBtn?.setAttribute("aria-selected", "false");
   } else {
     els.catPetsBtn?.classList.add("active");
-    els.catPetsBtn?.setAttribute("aria-selected","true");
+    els.catPetsBtn?.setAttribute("aria-selected", "true");
     els.catKidsBtn?.classList.remove("active");
-    els.catKidsBtn?.setAttribute("aria-selected","false");
+    els.catKidsBtn?.setAttribute("aria-selected", "false");
   }
 
   document.body.dataset.theme = val;
-  if(save) saveForm();
+  if (save) saveForm();
 }
 
 /* ---- Karaktärsreferens toggle ---- */
-function setRefMode(mode, focus = true){
-  const m = (mode === "photo") ? "photo" : "desc";
+function setRefMode(mode, focus = true) {
+  const m = mode === "photo" ? "photo" : "desc";
   state.form.refMode = m;
 
-  if(m === "desc"){
+  if (m === "desc") {
     els.refDescBtn.classList.add("active");
-    els.refDescBtn.setAttribute("aria-selected","true");
+    els.refDescBtn.setAttribute("aria-selected", "true");
     els.refPhotoBtn.classList.remove("active");
-    els.refPhotoBtn.setAttribute("aria-selected","false");
+    els.refPhotoBtn.setAttribute("aria-selected", "false");
     els.traitsBlock.classList.remove("hidden");
     els.photoBlock.classList.add("hidden");
-    if(focus) els.traits?.focus();
+    if (focus) els.traits?.focus();
   } else {
     els.refPhotoBtn.classList.add("active");
-    els.refPhotoBtn.setAttribute("aria-selected","true");
+    els.refPhotoBtn.setAttribute("aria-selected", "true");
     els.refDescBtn.classList.remove("active");
-    els.refDescBtn.setAttribute("aria-selected","false");
+    els.refDescBtn.setAttribute("aria-selected", "false");
     els.photoBlock.classList.remove("hidden");
     els.traitsBlock.classList.add("hidden");
-    if(focus) els.charPhoto?.focus();
+    if (focus) els.charPhoto?.focus();
   }
   saveForm();
 }
 
 /* ---- Läs/skriv formulär ---- */
-function readForm(){
+function readForm() {
   const f = state.form;
   f.name = (els.name.value || "Nova").trim();
   f.age = clamp(toInt(els.age.value, 6), MIN_AGE, MAX_AGE);
-  f.pages = toInt(els.pages.value, 16); if(!VALID_PAGES.has(f.pages)) f.pages = 16;
+  f.pages = toInt(els.pages.value, 16);
+  if (!VALID_PAGES.has(f.pages)) f.pages = 16;
   f.style = els.style.value || "storybook";
   f.theme = (els.theme.value || "").trim();
   f.traits = (els.traits.value || "").trim();
 }
-function writeForm(){
+function writeForm() {
   els.name.value = state.form.name;
   els.age.value = state.form.age;
   els.pages.value = String(state.form.pages);
@@ -167,16 +212,16 @@ function writeForm(){
   setCategory(state.form.category, false);
   setRefMode(state.form.refMode, false);
 
-  if(state.form.photoDataUrl){
+  if (state.form.photoDataUrl) {
     els.photoPreview.src = state.form.photoDataUrl;
     els.photoPreview.classList.remove("hidden");
   }
 }
 
 /* ---- Foto-preview ---- */
-function onPhotoChange(){
+function onPhotoChange() {
   const file = els.charPhoto.files?.[0];
-  if(!file){
+  if (!file) {
     state.form.photoDataUrl = null;
     els.photoPreview.classList.add("hidden");
     els.photoPreview.src = "";
@@ -194,13 +239,13 @@ function onPhotoChange(){
 }
 
 /* ---- Skeletons ---- */
-function renderSkeleton(count = 4){
+function renderSkeleton(count = 4) {
   const grid = els.previewGrid;
   const sec = els.previewSection;
-  if(!grid || !sec) return;
+  if (!grid || !sec) return;
 
   grid.innerHTML = "";
-  for(let i=0;i<count;i++){
+  for (let i = 0; i < count; i++) {
     const el = document.createElement("article");
     el.className = "thumb";
     el.innerHTML = `
@@ -215,85 +260,21 @@ function renderSkeleton(count = 4){
   sec.classList.remove("hidden");
 }
 
-/* ---- Bildladdning med throttling ---- */
-async function loadImageThrottled(src, concurrency = 4){
-  while (state.loadingImages.size >= concurrency)
-    await new Promise(r => setTimeout(r, 50));
-  state.loadingImages.add(src);
-  try{
-    await new Promise((res, rej) => {
-      const i = new Image();
-      i.onload = res; i.onerror = rej; i.src = src;
-    });
-  } finally {
-    state.loadingImages.delete(src);
-  }
-}
-
-/* ---- Preview-render ---- */
-function renderPreview(pages, visibleCount = 4){
-  els.previewGrid.innerHTML = "";
-  const frag = document.createDocumentFragment();
-
-  pages.forEach((p, i) => {
-    const card = document.createElement("article");
-    card.className = "thumb";
-    if(i >= visibleCount) card.classList.add("locked");
-
-    card.innerHTML = `
-      <div class="imgwrap">
-        <div class="skeleton"></div>
-        <img alt="Sida ${p.idx}" style="opacity:0" />
-      </div>
-      <div class="txt">${escapeHtml(p.text)}</div>
-    `;
-    frag.appendChild(card);
-
-    const imgEl = card.querySelector("img");
-    loadImageThrottled(p.img).then(() => {
-      imgEl.src = p.img;
-      imgEl.onload = () => {
-        card.querySelector(".skeleton")?.remove();
-        imgEl.style.opacity = "1";
-      };
-    }).catch(() => {
-      card.querySelector(".skeleton")?.remove();
-      imgEl.replaceWith(Object.assign(document.createElement("div"), {
-        className:"img-fallback",
-        textContent:"Kunde inte ladda bild"
-      }));
-    });
-  });
-
-  els.previewGrid.appendChild(frag);
-  els.previewSection.classList.remove("hidden");
-  smoothScrollTo(els.previewSection);
-}
-
-/* ---- Demo-sidor ---- */
-function makeDemoPages(total = 12, name = "Nova", theme = "ett litet äventyr"){
-  return Array.from({length: total}, (_,i)=>({
-    idx: i+1,
-    text: `Sida ${i+1}: ${name} fortsätter ${theme}.`,
-    img: `https://picsum.photos/seed/bp_${i+1}/600/400`
-  }));
-}
-
 /* ---- Validering ---- */
-function validateForm(){
+function validateForm() {
   readForm();
   const problems = [];
-  if(!state.form.name) problems.push("Ange ett namn.");
-  if(state.form.age < MIN_AGE || state.form.age > MAX_AGE) problems.push("Åldern verkar orimlig.");
-  if(!VALID_PAGES.has(state.form.pages)) problems.push("Ogiltigt sidantal.");
-  if(state.form.theme.length > 160) problems.push("Tema/handling: håll det kort (≤ 160 tecken).");
+  if (!state.form.name) problems.push("Ange ett namn.");
+  if (state.form.age < MIN_AGE || state.form.age > MAX_AGE) problems.push("Åldern verkar orimlig.");
+  if (!VALID_PAGES.has(state.form.pages)) problems.push("Ogiltigt sidantal.");
+  if (state.form.theme.length > 160) problems.push("Tema/handling: håll det kort (≤ 160 tecken).");
 
-  if(state.form.refMode === "desc"){
-    if(!state.form.traits || state.form.traits.length < 10){
+  if (state.form.refMode === "desc") {
+    if (!state.form.traits || state.form.traits.length < 10) {
       problems.push("Beskriv gärna kännetecken (minst ~10 tecken).");
     }
-  } else if(state.form.refMode === "photo"){
-    if(!state.form.photoDataUrl){
+  } else if (state.form.refMode === "photo") {
+    if (!state.form.photoDataUrl) {
       problems.push("Ladda upp ett foto eller byt till Beskrivning.");
     }
   }
@@ -324,31 +305,6 @@ async function onSubmit(e) {
 
   renderSkeleton(4);
   setLoading(true);
-
-  // liten helper för progress-bar i statusfältet
-  function updateProgress(current, total, label) {
-    let bar = document.getElementById("statusBar");
-    if (!bar) {
-      bar = document.createElement("div");
-      bar.id = "statusBar";
-      bar.className = "status-bar";
-      els.previewSection?.insertAdjacentElement("afterbegin", bar);
-    }
-    bar.classList.remove("hidden");
-
-    // skapa progresscontainer om den inte finns
-    let prog = bar.querySelector(".progress");
-    if (!prog) {
-      prog = document.createElement("div");
-      prog.className = "progress";
-      prog.innerHTML = `<div class="progress-track"><div class="progress-fill" style="width:0%"></div></div><span class="progress-label"></span>`;
-      bar.appendChild(prog);
-    }
-    const pct = total ? Math.round((current / total) * 100) : 0;
-    prog.querySelector(".progress-fill").style.width = pct + "%";
-    prog.querySelector(".progress-label").textContent = label || "";
-  }
-
   setStatus("🪄 Skapar berättelse med AI …");
   updateProgress(0, 1, "Skapar berättelse …");
 
@@ -378,7 +334,7 @@ async function onSubmit(e) {
       return;
     }
 
-    // === Steg 2: Förbered kort – tomma bilder men rätt antal ===
+    // === Steg 2: Förbered kort – sidtexter direkt, tomma bilder ===
     setStatus("✏️ Förbereder illustrationer …");
     updateProgress(0, prompts.length, "Förbereder kort …");
 
@@ -392,84 +348,94 @@ async function onSubmit(e) {
           <div class="skeleton"></div>
           <img alt="Sida ${p.page}" style="opacity:0" />
         </div>
-        <div class="txt skeleton" style="height:14px;width:70%;margin:12px auto"></div>
+        <div class="txt">${escapeHtml(pagesJson[i]?.text || "")}</div>
       `;
       els.previewGrid.appendChild(card);
     });
     els.previewSection.classList.remove("hidden");
     smoothScrollTo(els.previewSection);
 
-    // === Steg 3: Generera bilder i backend ===
-    setStatus("🎨 AI illustrerar sidor …");
+    // Kartlägg kort per sida (om ordningen diffar i stream)
+    const byPageCard = new Map();
+    prompts.forEach((p, i) => byPageCard.set(p.page, els.previewGrid.children[i]));
+
+    // === Steg 3: Streama bilder (NDJSON) ===
+    setStatus("🎨 AI illustrerar sidor … (live)");
     updateProgress(0, prompts.length, "Illustrerar …");
 
-    const imgRes = await fetch(`${BACKEND}/api/images`, {
+    const streamRes = await fetch(`${BACKEND}/api/images/stream`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ image_prompts: prompts }),
     });
-    const imgData = await imgRes.json().catch(() => ({}));
-    if (!imgRes.ok || imgData?.error) {
-      throw new Error(imgData?.error || "Misslyckades att generera bilder");
+    if (!streamRes.ok) {
+      const t = await streamRes.text().catch(() => "");
+      throw new Error(`Images stream failed: ${streamRes.status} ${t}`);
     }
 
-    const images = imgData.images || [];
-    // Mappa efter sida om ordningen skulle diffa
-    const byPage = new Map(images.map(it => [it.page, it]));
+    const reader = streamRes.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let received = 0;
 
-    // === Steg 4: Visa sidor successivt med mjuk övergång ===
-    for (let i = 0; i < prompts.length; i++) {
-      const pageNo = prompts[i].page;
-      const imgInfo = byPage.get(pageNo);
-      const card = els.previewGrid.children[i];
-      if (!card) continue;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
 
-      const imgEl = card.querySelector("img");
-      const skeletons = card.querySelectorAll(".skeleton");
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
 
-      setStatus(`🖌️ Illustrerar sida ${i + 1} av ${prompts.length} …`);
-      updateProgress(i + 1, prompts.length, `Illustrerar sida ${i + 1}/${prompts.length} …`);
+        let row;
+        try {
+          row = JSON.parse(line);
+        } catch {
+          continue;
+        }
 
-      // Förinläs bild för fin fade-in
-      await new Promise((resolve) => {
-        if (!imgInfo?.image_url) return resolve();
-        const tmp = new Image();
-        tmp.onload = () => {
-          imgEl.src = tmp.src;
-          skeletons.forEach((s) => s.remove());
-          imgEl.style.opacity = "1";
+        const card = byPageCard.get(row.page);
+        if (!card) continue;
 
-          // Lägg till texten nu när bilden är klar
-          const txtPrev = card.querySelector(".txt");
-          if (txtPrev) txtPrev.remove();
-          const txt = document.createElement("div");
-          txt.className = "txt";
-          txt.textContent = pagesJson[i]?.text || "";
-          card.appendChild(txt);
+        const imgEl = card.querySelector("img");
+        const skeleton = card.querySelector(".skeleton");
 
-          resolve();
-        };
-        tmp.onerror = () => {
-          // fallback – skelett bort + felmeddelande
-          skeletons.forEach((s) => s.remove());
+        if (row.image_url) {
+          await new Promise((resolve) => {
+            const tmp = new Image();
+            tmp.onload = () => {
+              imgEl.src = tmp.src;
+              skeleton?.remove();
+              imgEl.style.opacity = "1";
+              resolve();
+            };
+            tmp.onerror = () => {
+              skeleton?.remove();
+              const fb = document.createElement("div");
+              fb.className = "img-fallback";
+              fb.textContent = "Kunde inte ladda bild";
+              card.querySelector(".imgwrap").appendChild(fb);
+              resolve();
+            };
+            tmp.src = row.image_url;
+          });
+        } else {
+          skeleton?.remove();
           const fb = document.createElement("div");
           fb.className = "img-fallback";
-          fb.textContent = "Kunde inte ladda bild";
+          fb.textContent = "Kunde inte generera bild";
           card.querySelector(".imgwrap").appendChild(fb);
+        }
 
-          const txtPrev = card.querySelector(".txt");
-          if (txtPrev) txtPrev.remove();
-          const txt = document.createElement("div");
-          txt.className = "txt";
-          txt.textContent = pagesJson[i]?.text || "";
-          card.appendChild(txt);
-          resolve();
-        };
-        tmp.src = imgInfo.image_url || "";
-      });
+        received += 1;
+        setStatus(`🖌️ Illustrerar sida ${received} av ${prompts.length} …`);
+        updateProgress(received, prompts.length, `Illustrerar ${received}/${prompts.length} …`);
 
-      // liten, behaglig paus mellan sidor
-      await new Promise((r) => setTimeout(r, 350));
+        // Liten pause för mjuk känsla
+        await new Promise((r) => setTimeout(r, 200));
+      }
     }
 
     setStatus("✅ Klart! Sagans förhandsvisning är redo.");
@@ -482,20 +448,62 @@ async function onSubmit(e) {
   }
 }
 
+/* ---- Demo ---- */
+function onDemo() {
+  const total = 12;
+  const pages = Array.from({ length: total }, (_, i) => ({
+    idx: i + 1,
+    text: `Sida ${i + 1}: ${state.form.name || "Nova"} fortsätter ${state.form.theme || "ett litet äventyr"}.`,
+    img: `https://picsum.photos/seed/bp_${i + 1}/600/400`,
+  }));
+  setStatus("Detta är en demo. Endast de 4 första visas skarpt.");
+  // enkel preview
+  els.previewGrid.innerHTML = "";
+  pages.forEach((p, i) => {
+    const card = document.createElement("article");
+    card.className = "thumb";
+    if (i >= state.visibleCount) card.classList.add("locked");
+    card.innerHTML = `
+      <div class="imgwrap">
+        <div class="skeleton"></div>
+        <img alt="Sida ${p.idx}" style="opacity:0" />
+      </div>
+      <div class="txt">${escapeHtml(p.text)}</div>
+    `;
+    els.previewGrid.appendChild(card);
+
+    const imgEl = card.querySelector("img");
+    const sk = card.querySelector(".skeleton");
+    const i2 = new Image();
+    i2.onload = () => {
+      imgEl.src = i2.src;
+      sk?.remove();
+      imgEl.style.opacity = "1";
+    };
+    i2.onerror = () => {
+      sk?.remove();
+      const fb = document.createElement("div");
+      fb.className = "img-fallback";
+      fb.textContent = "Kunde inte ladda bild";
+      card.querySelector(".imgwrap").appendChild(fb);
+    };
+    i2.src = p.img;
+  });
+
+  els.previewSection.classList.remove("hidden");
+  smoothScrollTo(els.previewSection);
+}
+
 /* ---- Eventbindningar ---- */
 function bindEvents() {
-  // kategori
   els.catKidsBtn?.addEventListener("click", () => setCategory("kids"));
   els.catPetsBtn?.addEventListener("click", () => setCategory("pets"));
 
-  // karaktärsreferens
   els.refDescBtn?.addEventListener("click", () => setRefMode("desc"));
   els.refPhotoBtn?.addEventListener("click", () => setRefMode("photo"));
 
-  // foto
   els.charPhoto?.addEventListener("change", onPhotoChange);
 
-  // inputs autosave
   ["name", "age", "pages", "style", "theme", "traits"].forEach((id) => {
     const el = document.getElementById(id);
     el?.addEventListener("input", () => {
@@ -504,11 +512,9 @@ function bindEvents() {
     });
   });
 
-  // submit + demo
   els.form?.addEventListener("submit", onSubmit);
   els.demoBtn?.addEventListener("click", onDemo);
 
-  // mobilmeny
   els.navToggle?.addEventListener("click", () => {
     els.mobileMenu.classList.toggle("open");
     const open = els.mobileMenu.classList.contains("open");
@@ -517,17 +523,10 @@ function bindEvents() {
   });
 }
 
-function onDemo() {
-  state.visibleCount = 4;
-  const pages = makeDemoPages(12, state.form.name || "Nova", state.form.theme || "ett litet äventyr");
-  setStatus("Detta är en demo. Endast de 4 första visas skarpt.");
-  renderPreview(pages, state.visibleCount);
-}
-
 /* ---- Init ---- */
-(function init(){
+(function init() {
   loadForm();
-  if(state.form.category !== "kids" && state.form.category !== "pets"){
+  if (state.form.category !== "kids" && state.form.category !== "pets") {
     state.form.category = "kids";
   }
   writeForm();
