@@ -1,10 +1,10 @@
 /* =================== Konfiguration =================== */
 const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
-const STORAGE_KEY = "bokpiloten_form_v4";
+const STORAGE_KEY = "bokpiloten_form_v5";
 const MAX_AGE = 120;
 const MIN_AGE = 1;
 const VALID_PAGES = new Set([12, 16, 20]);
-const MAX_REF_DIM = 1024; // nedskala ev. uppladdat foto i browsern
+const MAX_REF_DIM = 1024; // nedskala uppladdat foto i browsern
 
 /* =================== Elementrefs =================== */
 const els = {
@@ -53,18 +53,25 @@ const state = {
     pages: 16,
     style: "cartoon",        // cartoon/pixar/storybook – matchar workern
     theme: "",
-    refMode: "photo",        // ← FOTO som default enligt nya strategin
+    refMode: "photo",        // FOTO som default
     traits: "",
     photoDataUrl: null,      // dataURL (nedskalad i browsern)
   },
   visibleCount: 4,
 
-  // nya delar
+  // data från backend
   story: null,               // { book: { pages: [...] } }
   plan: null,                // { plan: [...] }
-  refB64: null,              // base64 (utan dataURL-prefix)
+  imagePrompts: [],          // [{ page, prompt, ... }]
+  refImageDataUrl: null,     // dataURL för referensbilden
+
+  // mappar för snabb åtkomst
   pageMap: new Map(),        // pageNo -> pageObj
-  planMap: new Map(),        // pageNo -> planObj
+  promptMap: new Map(),      // pageNo -> promptObj
+
+  // UI-styrning
+  tickerTimer: null,
+  phase: 0,                  // 0=idle, 1=story, 2=ref, 3=images, 4=done
 };
 
 /* =================== Hjälpare =================== */
@@ -76,46 +83,108 @@ function escapeHtml(s) {
 }
 function smoothScrollTo(el) { el?.scrollIntoView({ behavior: "smooth", block: "start" }); }
 
-/* Status/Progress */
-function setStatus(msg) {
+/* ========= “Levande” statuspanel ========= */
+const TIP_ROTATION = [
+  "✏️ Skapar scener som passar texten…",
+  "🎬 Blandar vinklar (EW/W/M/CU) för rytm…",
+  "🎨 Väljer mjuka pasteller för barnvänlig känsla…",
+  "📸 Låser utseendet mot din referensbild…",
+  "🌊 Lägger till små miljödetaljer utan brus…",
+  "🧶 Säkerställer att inga extra figurer smyger in…",
+  "✨ Håller siluetten tydlig och läsbar i miniatyr…",
+];
+
+function ensureStatusPanel() {
   let bar = document.getElementById("statusBar");
-  if (!bar) {
-    bar = document.createElement("div");
-    bar.id = "statusBar";
-    bar.className = "status-bar";
-    els.previewSection?.insertAdjacentElement("beforebegin", bar);
-  }
-  if (!msg) { bar.textContent = ""; bar.classList.add("hidden"); return; }
-  bar.textContent = msg; bar.classList.remove("hidden");
+  if (bar) return bar;
+  bar = document.createElement("div");
+  bar.id = "statusBar";
+  bar.className = "status-bar rich";
+  bar.innerHTML = `
+    <div class="phases">
+      <div class="phase" data-step="1"><span>1</span><label>Berättelse</label></div>
+      <div class="phase" data-step="2"><span>2</span><label>Referensbild</label></div>
+      <div class="phase" data-step="3"><span>3</span><label>Illustrationer</label></div>
+    </div>
+    <div class="status-main">
+      <div class="status-line">
+        <span class="status-emoji">⏳</span>
+        <span class="status-text">Förbereder…</span>
+      </div>
+      <div class="progress">
+        <div class="progress-track"><div class="progress-fill" style="width:0%"></div></div>
+        <span class="progress-label"></span>
+      </div>
+      <div class="live-log" aria-live="polite"></div>
+    </div>
+  `;
+  els.previewSection?.insertAdjacentElement("beforebegin", bar);
+  return bar;
 }
+function setPhase(step) {
+  state.phase = step;
+  const bar = ensureStatusPanel();
+  const nodes = bar.querySelectorAll(".phase");
+  nodes.forEach(n => {
+    const s = Number(n.getAttribute("data-step"));
+    n.classList.toggle("done", s < step);
+    n.classList.toggle("current", s === step);
+    n.classList.toggle("todo", s > step);
+  });
+  bar.classList.remove("hidden");
+}
+function setStatus(text, emoji = "⏳") {
+  const bar = ensureStatusPanel();
+  const line = bar.querySelector(".status-text");
+  const e = bar.querySelector(".status-emoji");
+  if (line) line.textContent = text || "";
+  if (e) e.textContent = emoji || "⏳";
+  bar.classList.toggle("hidden", !text);
+}
+function updateProgress(current, total, label) {
+  const bar = ensureStatusPanel();
+  const fill = bar.querySelector(".progress-fill");
+  const lab = bar.querySelector(".progress-label");
+  const pct = total ? Math.round((current / total) * 100) : 0;
+  if (fill) fill.style.width = pct + "%";
+  if (lab) lab.textContent = label || "";
+  bar.classList.remove("hidden");
+}
+function pushLiveLog(msg) {
+  const bar = ensureStatusPanel();
+  const log = bar.querySelector(".live-log");
+  if (!log) return;
+  const row = document.createElement("div");
+  row.className = "live-row";
+  row.textContent = msg;
+  log.appendChild(row);
+  // håll det “levande”, men inte oändligt
+  const rows = log.querySelectorAll(".live-row");
+  if (rows.length > 6) log.removeChild(rows[0]);
+}
+function startTicker() {
+  stopTicker();
+  let i = 0;
+  state.tickerTimer = setInterval(() => {
+    pushLiveLog(TIP_ROTATION[i % TIP_ROTATION.length]);
+    i++;
+  }, 1500);
+}
+function stopTicker() {
+  if (state.tickerTimer) clearInterval(state.tickerTimer);
+  state.tickerTimer = null;
+}
+
+/* ========= Loading button ========= */
 function setLoading(is) {
   if (!els.submitBtn) return;
   els.submitBtn.disabled = is;
-  els.submitBtn.innerHTML = is ? 'Skapar förhandsvisning… <span class="spinner"></span>' : "Skapa förhandsvisning";
-}
-function updateProgress(current, total, label) {
-  let bar = document.getElementById("statusBar");
-  if (!bar) {
-    bar = document.createElement("div");
-    bar.id = "statusBar";
-    bar.className = "status-bar";
-    els.previewSection?.insertAdjacentElement("afterbegin", bar);
-  }
-  bar.classList.remove("hidden");
-  let prog = bar.querySelector(".progress");
-  if (!prog) {
-    prog = document.createElement("div");
-    prog.className = "progress";
-    prog.innerHTML =
-      '<div class="progress-track"><div class="progress-fill" style="width:0%"></div></div><span class="progress-label"></span>';
-    bar.appendChild(prog);
-  }
-  const pct = total ? Math.round((current / total) * 100) : 0;
-  prog.querySelector(".progress-fill").style.width = pct + "%";
-  prog.querySelector(".progress-label").textContent = label || "";
+  els.submitBtn.innerHTML = is
+    ? 'Jobbar för fullt… <span class="spinner"></span>'
+    : "Skapa förhandsvisning";
 }
 
-/* LocalStorage */
+/* ========= LocalStorage ========= */
 function saveForm(){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.form)); }catch{} }
 function loadForm(){
   try{
@@ -163,17 +232,15 @@ function writeForm() {
   els.style.value = state.form.style;
   els.theme.value = state.form.theme;
   els.traits.value = state.form.traits;
-
   setCategory(state.form.category, false);
   setRefMode(state.form.refMode, false);
-
   if (state.form.photoDataUrl) {
     els.photoPreview.src = state.form.photoDataUrl;
     els.photoPreview.classList.remove("hidden");
   }
 }
 
-/* ========= Bildkomprimering (valfritt men bra) ========= */
+/* ========= Bildkomprimering ========= */
 async function downscaleFileToDataURL(file, maxDim = MAX_REF_DIM) {
   const img = await new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -269,7 +336,7 @@ function buildCards(pages, visibleCount) {
   smoothScrollTo(els.previewSection);
 }
 
-/* ========= Submit ========= */
+/* ========= Submit (hela flödet) ========= */
 async function onSubmit(e) {
   e.preventDefault();
   const problems = validateForm();
@@ -278,11 +345,13 @@ async function onSubmit(e) {
   readForm();
   renderSkeleton(4);
   setLoading(true);
+  setPhase(1);
+  setStatus("✏️ Skriver berättelsen …", "✏️");
+  updateProgress(0, 3, "1/3 – Berättelse");
+  startTicker();
 
   try {
     // -- 1) STORY + PLAN --
-    setStatus("✏️ Skriver berättelsen…");
-    updateProgress(0, 3, "1/3 – Berättelse");
     const storyRes = await fetch(`${BACKEND}/api/story`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -292,6 +361,7 @@ async function onSubmit(e) {
         category: state.form.category,
         style: state.form.style,
         theme: state.form.theme,
+        refMode: state.form.refMode,
         traits: state.form.traits
       }),
     });
@@ -300,38 +370,46 @@ async function onSubmit(e) {
 
     state.story = storyData.story;
     state.plan = storyData.plan || { plan: [] };
-    state.planMap = new Map((state.plan.plan || []).map(p => [p.page, p]));
+    state.imagePrompts = storyData.image_prompts || [];
+
+    // mappa prompts per sida
+    state.promptMap.clear();
+    state.imagePrompts.forEach(p => state.promptMap.set(p.page, p));
 
     const pages = state.story?.book?.pages || [];
     if (!pages.length) throw new Error("Berättelsen saknar sidor.");
     buildCards(pages, state.visibleCount);
 
     // -- 2) REF IMAGE --
-    setStatus("🖼️ Förbereder referensbild…");
+    setPhase(2);
+    setStatus("🖼️ Förbereder referensbild …", "🖼️");
     updateProgress(1, 3, "2/3 – Referensbild");
-    const refRes = await fetch(`${BACKEND}/api/ref-image`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        style: state.form.style,
-        photo_b64: state.form.refMode === "photo" ? (state.form.photoDataUrl || null) : null,
-        bible: state.story?.book?.bible || null
-      }),
-    });
-    const refData = await refRes.json().catch(()=> ({}));
-    if (!refRes.ok || refData?.error) throw new Error(refData?.error || `HTTP ${refRes.status}`);
-    state.refB64 = refData.ref_image_b64 || null;
-    if (!state.refB64) throw new Error("Ingen referensbild kunde hämtas/skapas.");
+
+    let refImageDataUrl = null;
+    if (state.form.refMode === "photo" && state.form.photoDataUrl) {
+      // skicka data_url enligt nya workern
+      const refRes = await fetch(`${BACKEND}/api/ref-image`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          data_url: state.form.photoDataUrl
+        }),
+      });
+      const refData = await refRes.json().catch(()=> ({}));
+      if (!refRes.ok || refData?.error) throw new Error(refData?.error || `HTTP ${refRes.status}`);
+      refImageDataUrl = refData.ref_image_data_url || null;
+    }
+    state.refImageDataUrl = refImageDataUrl || null;
 
     // -- 3) IMAGES --
-    setStatus("🎨 Illustrerar sidor …");
+    setPhase(3);
+    setStatus("🎨 Illustrerar sidor …", "🎨");
     updateProgress(2, 3, "3/3 – Bilder");
+
     const imgRes = await fetch(`${BACKEND}/api/images`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        style: state.form.style,
-        ref_image_b64: state.refB64,
-        story: state.story,
-        plan: state.plan,
+        image_prompts: state.imagePrompts,
+        ref_image_data_url: state.refImageDataUrl || null,
         concurrency: 4
       })
     });
@@ -340,6 +418,7 @@ async function onSubmit(e) {
 
     const results = imgData.images || [];
     let received = 0;
+
     const byPageCard = new Map();
     Array.from(els.previewGrid.children).forEach(card => {
       const p = Number(card.querySelector(".imgwrap")?.getAttribute("data-page"));
@@ -381,14 +460,17 @@ async function onSubmit(e) {
       }
 
       received++;
-      setStatus(`🖌️ Illustrerar sida ${received} av ${results.length} …`);
+      setStatus(`🖌️ Illustrerar sida ${received} av ${results.length} …`, "🖌️");
       updateProgress(received, results.length, `Illustrerar ${received}/${results.length} …`);
       await new Promise(r => setTimeout(r, 120));
     }
 
-    setStatus("✅ Klart! Sagans förhandsvisning är redo.");
+    setPhase(4);
+    stopTicker();
+    setStatus("✅ Klart! Sagans förhandsvisning är redo.", "✅");
   } catch (err) {
     console.error(err);
+    stopTicker();
     setStatus(null);
     alert("Ett fel uppstod: " + (err?.message || err));
   } finally {
@@ -398,9 +480,8 @@ async function onSubmit(e) {
 
 /* ========= Regenerera en sida ========= */
 async function regenerateOne(page) {
-  const pageObj = state.pageMap.get(page);
-  const planObj = state.planMap.get(page) || null;
-  if (!pageObj || !state.refB64) return;
+  const promptObj = state.promptMap.get(page);
+  if (!promptObj) return;
 
   const card = Array.from(els.previewGrid.children).find(a =>
     a.querySelector(`.imgwrap[data-page="${page}"]`)
@@ -418,11 +499,9 @@ async function regenerateOne(page) {
     const res = await fetch(`${BACKEND}/api/image/regenerate`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        style: state.form.style,
-        ref_image_b64: state.refB64,
-        page_text: pageObj.text,
-        scene_text: pageObj.scene,
-        frame: planObj
+        prompt: promptObj.prompt,
+        page,
+        ref_image_data_url: state.refImageDataUrl || null
       })
     });
     const j = await res.json().catch(()=> ({}));
@@ -523,5 +602,7 @@ function bindEvents() {
   if (state.form.refMode !== "photo" && state.form.refMode !== "desc") state.form.refMode = "photo";
   writeForm();
   bindEvents();
-  setStatus(null);
+  // initialt dolt
+  const bar = document.getElementById("statusBar");
+  if (bar) bar.classList.add("hidden");
 })();
