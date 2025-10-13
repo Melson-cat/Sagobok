@@ -209,3 +209,23 @@ input:focus, select:focus, textarea:focus{
   .thumb-grid{ grid-template-columns:repeat(2,1fr); }
 }
 @media (max-width:480px){ .thumb-grid{ grid-template-columns:1fr; } }
+
+
+
+/* ==== TESTLÄGE: Ingen blur, inga lås-överlägg ==== */
+:root { --lock-blur: 0px; }
+
+.thumb.locked,
+.thumb.locked .imgwrap,
+.thumb.locked img,
+.thumb.locked .txt {
+  filter: none !important;
+  opacity: 1 !important;
+}
+
+.thumb.locked::after {
+  display: none !important;
+}
+
+/* (valfritt) tona ner “låst”-känslan helt under test */
+.thumb.locked { position: static !important; }
