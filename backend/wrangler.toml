@@ -1,0 +1,3 @@
+name = "bokpilot-backend"     # exakt samma namn som din befintliga worker
+main = "worker.js"            # entrypoint relativt den här 'backend/'-mappen
+compatibility_date = "2025-10-14"
