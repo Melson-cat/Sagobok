@@ -518,6 +518,43 @@ function bindEvents(){
   });
 }
 
+const pdfBtn = document.getElementById("pdfBtn");
+if (pdfBtn) {
+  pdfBtn.addEventListener("click", async () => {
+    if (!state.story) { alert("Skapa berättelsen först."); return; }
+    // Mappa ihop images (redan visade/dl:ade)
+    const results = [];
+    Array.from(els.previewGrid.children).forEach(card=>{
+      const wrap = card.querySelector(".imgwrap");
+      const page = Number(wrap?.getAttribute("data-page"));
+      const img = wrap?.querySelector("img")?.src;
+      if (page && img) results.push({ page, image_url: img });
+    });
+
+    try {
+      const res = await fetch(`${BACKEND}/api/pdf`, {
+        method: "POST",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify({
+          story: state.story,
+          images: results,
+          mode: "preview",
+          trim: "square210",
+          watermark_text: "FÖRHANDSVISNING – BokPiloten"
+        })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      // Öppna i ny flik (eller bädda in i viewer)
+      window.open(url, "_blank");
+    } catch (e) {
+      alert("Kunde inte skapa PDF: " + (e?.message || e));
+    }
+  });
+}
+
+
 /* ========= Init ========= */
 (function init(){
   loadForm();
