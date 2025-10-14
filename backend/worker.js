@@ -4,7 +4,8 @@
 // - /api/story, /api/ref-image, /api/images, /api/image/regenerate, /api/pdf
 // ============================================================================
 
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
+
 
 
 // ---------------------------- CONSTS / HELPERS ------------------------------
@@ -224,14 +225,51 @@ function pickLayoutForText(text=""){
   if (len <= 280) return "text_top";
   return "full_bleed_panel";
 }
-function drawWatermark(page, text="FÖRHANDSVISNING", color=rgb(0.2,0.2,0.2)){
+function drawWatermark(page, text = "FÖRHANDSVISNING", color = rgb(0.2, 0.2, 0.2)) {
   const { width, height } = page.getSize();
   const fontSize = Math.min(width, height) * 0.08;
-  const angle = Math.atan2(height, width);
-  page.save(); page.rotate(angle);
-  page.drawText(text, { x: width*0.05, y: -height*0.55, size: fontSize, color, opacity: 0.12 });
-  page.restore();
+  const angleRad = Math.atan2(height, width);              // diagonalt
+  const angleDeg = (angleRad * 180) / Math.PI;
+
+  page.drawText(text, {
+    x: width * 0.1,
+    y: height * 0.3,
+    size: fontSize,
+    color,
+    opacity: 0.12,
+    rotate: degrees(angleDeg)                               // <- RÄTT sättet
+  });
 }
+async function handlePdfRequest(req) {
+  try {
+    const body = await req.json();
+    const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
+    if (!story?.book) return err("Missing story", 400);
+    if (!Array.isArray(images)) return err("Missing images[]", 400);
+
+    const pdfBytes = await buildPdf({
+      story, images,
+      mode: mode === "print" ? "print" : "preview",
+      trim: trim || "square210",
+      bleed_mm,
+      watermark_text: watermark_text || (mode === "preview" ? "FÖRHANDSVISNING" : null),
+    });
+
+    return new Response(pdfBytes, {
+      status: 200,
+      headers: {
+        "content-type": "application/pdf",
+        "cache-control": mode === "preview" ? "no-store" : "public, max-age=31536000, immutable",
+        "content-disposition": `inline; filename="bokpiloten-${Date.now()}.pdf"`,
+        "access-control-allow-origin": "*"    // CORS för direktvisning i webbläsaren
+      }
+    });
+  } catch (e) {
+    console.error("PDF ERROR:", e?.stack || e);
+    return err(e?.message || "PDF failed", 500);
+  }
+}
+
 async function embedImage(pdfDoc, imageUrlOrDataUrl){
   if (!imageUrlOrDataUrl) return null;
   try{
