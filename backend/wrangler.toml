@@ -1,3 +1,9 @@
 name = "bokpilot-backend"     # exakt samma namn som din befintliga worker
 main = "worker.js"            # entrypoint relativt den här 'backend/'-mappen
 compatibility_date = "2025-10-14"
+[observability]
+[observability.logs]
+enabled = false
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
