@@ -30,14 +30,19 @@ const els = {
   demoBtn: document.getElementById("demoBtn"),
   navToggle: document.getElementById("navToggle"),
   mobileMenu: document.getElementById("mobileMenu"),
+  readingAgeNumber: document.getElementById("readingAge"),
 };
+
+/* Läsålder segmented knappar */
+const readingAgeSeg = Array.from(document.querySelectorAll('[data-readage]'));
 
 /* =================== State =================== */
 const state = {
   form: {
     category: "kids",
     name: "Nova",
-    age: 6,
+    age: 6,              // hjälte
+    reading_age: 6,      // ny!
     pages: 16,
     style: "cartoon",
     theme: "",
@@ -114,8 +119,11 @@ function updateProgress(current, total, label){
 /* LocalStorage */
 function saveForm(){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.form)); }catch{} }
 function loadForm(){
-  try{ const raw = localStorage.getItem(STORAGE_KEY); if (!raw) return;
-    const saved = JSON.parse(raw)||{}; Object.assign(state.form, saved);
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw)||{};
+    Object.assign(state.form, saved);
   }catch{}
 }
 
@@ -139,6 +147,19 @@ function setRefMode(mode, focus=true){
   saveForm();
 }
 
+/* ========= Läsålder segmented ========= */
+function setReadingAgeByChip(range){
+  // Maps: chip → default number
+  const map = { "4-5": 5, "6-8": 7, "9-12": 10, "familj": 8 };
+  const val = map[range] || 6;
+  state.form.reading_age = val;
+  if (els.readingAgeNumber) els.readingAgeNumber.value = val;
+  readingAgeSeg.forEach(btn=>{
+    btn.classList.toggle("active", btn.getAttribute("data-readage")===range);
+  });
+  saveForm();
+}
+
 /* ========= Form read/write ========= */
 function readForm(){
   const f = state.form;
@@ -148,6 +169,7 @@ function readForm(){
   f.style = els.style.value || "cartoon";
   f.theme = (els.theme.value || "").trim();
   f.traits = (els.traits.value || "").trim();
+  f.reading_age = clamp(toInt(els.readingAgeNumber?.value ?? f.reading_age, f.reading_age), 3, 12);
 }
 function writeForm(){
   els.name.value = state.form.name;
@@ -156,6 +178,10 @@ function writeForm(){
   els.style.value = state.form.style;
   els.theme.value = state.form.theme;
   els.traits.value = state.form.traits;
+  if (els.readingAgeNumber) els.readingAgeNumber.value = state.form.reading_age;
+  // Markera rätt chip
+  const target = state.form.reading_age<=5 ? "4-5" : state.form.reading_age<=8 ? "6-8" : state.form.reading_age<=12 ? "9-12" : "familj";
+  setReadingAgeByChip(target);
   setCategory(state.form.category, false);
   setRefMode(state.form.refMode, false);
   if (state.form.photoDataUrl) {
@@ -218,11 +244,11 @@ function validateForm(){
   readForm();
   const problems = [];
   if (!state.form.name) problems.push("Ange ett namn.");
-  if (state.form.age < MIN_AGE || state.form.age > MAX_AGE) problems.push("Åldern verkar orimlig.");
+  if (state.form.age < MIN_AGE || state.form.age > MAX_AGE) problems.push("Hjältens ålder verkar orimlig.");
   if (!VALID_PAGES.has(state.form.pages)) problems.push("Ogiltigt sidantal.");
-  if (state.form.theme.length > 160) problems.push("Tema/handling: håll det kort (≤160 tecken).");
+  if (state.form.reading_age < 3 || state.form.reading_age > 12) problems.push("Läsålder bör vara 3–12 (eller välj Familj).");
   if (state.form.refMode === "desc") {
-    if (!state.form.traits || state.form.traits.length < 10) problems.push("Beskriv gärna kännetecken – eller ladda upp foto för bäst resultat.");
+    if (!state.form.traits || state.form.traits.length < 6) problems.push("Beskriv gärna kännetecken – eller ladda upp foto för bäst resultat.");
   } else if (state.form.refMode === "photo") {
     if (!state.form.photoDataUrl) problems.push("Ladda upp ett foto – eller byt till Beskrivning.");
   }
@@ -271,9 +297,14 @@ async function onSubmit(e){
     const storyRes = await fetch(`${BACKEND}/api/story`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        name: state.form.name, age: state.form.age, pages: state.form.pages,
-        category: state.form.category, style: state.form.style,
-        theme: state.form.theme, traits: state.form.traits
+        name: state.form.name,
+        age: state.form.age,
+        reading_age: state.form.reading_age, // NY!
+        pages: state.form.pages,
+        category: state.form.category,
+        style: state.form.style,
+        theme: state.form.theme,
+        traits: state.form.traits
       }),
     });
     const storyData = await storyRes.json().catch(()=> ({}));
@@ -294,7 +325,8 @@ async function onSubmit(e){
       body: JSON.stringify({
         style: state.form.style,
         photo_b64: state.form.refMode === "photo" ? (state.form.photoDataUrl || null) : null,
-        bible: state.story?.book?.bible || null
+        bible: state.story?.book?.bible || null,
+        traits: state.form.traits || ""
       })
     });
     const refData = await refRes.json().catch(()=> ({}));
@@ -396,7 +428,8 @@ async function regenerateOne(page){
         ref_image_b64: state.refB64,
         page_text: pageObj.text,
         scene_text: (pageObj.scene || "").replace(/“.+?”|".+?"/g,"").trim(),
-        frame: planObj
+        frame: planObj,
+        story: state.story
       })
     });
     const j = await res.json().catch(()=> ({}));
@@ -451,7 +484,16 @@ function bindEvents(){
   els.refPhotoBtn?.addEventListener("click", ()=> setRefMode("photo"));
   els.charPhoto?.addEventListener("change", onPhotoChange);
 
-  ["name","age","pages","style","theme","traits"].forEach(id=>{
+  // Läsålder chips
+  readingAgeSeg.forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      readingAgeSeg.forEach(b=> b.classList.remove("active"));
+      btn.classList.add("active");
+      setReadingAgeByChip(btn.getAttribute("data-readage"));
+    });
+  });
+
+  ["name","age","pages","style","theme","traits","readingAge"].forEach(id=>{
     const el = document.getElementById(id);
     el?.addEventListener("input", ()=> { readForm(); saveForm(); });
   });

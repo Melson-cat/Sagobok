@@ -39,91 +39,107 @@
 
     <!-- FORMULÄR -->
     <section id="bookForm" class="panel">
-      <form id="storyForm" novalidate>
+     <form id="storyForm" novalidate>
 
-        <!-- Rad 0: Kategori (segmented toggle högst upp) -->
-        <div class="form-row">
-          <div class="field col-span-3">
-            <label>Kategori</label>
-            <div class="seg" role="tablist" aria-label="Kategori">
-              <button type="button" class="seg-btn active" id="catKidsBtn" role="tab" aria-selected="true">Barn</button>
-              <button type="button" class="seg-btn" id="catPetsBtn" role="tab" aria-selected="false">Husdjur</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Rad 1 -->
-        <div class="form-row">
-          <div class="field">
-            <label for="name">Namn</label>
-            <input id="name" placeholder="Ex: Nova" />
-          </div>
-          <div class="field">
-            <label for="age">Ålder</label>
-            <input id="age" type="number" min="1" value="6" />
-          </div>
-          <div class="field">
-            <label for="pages">Antal sidor</label>
-            <select id="pages">
-              <option value="12">Kort (12)</option>
-              <option value="16" selected>Medium (16)</option>
-              <option value="20">Lång (20)</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Rad 2 -->
-<div class="form-row">
-  <div class="field">
-    <label for="style">Illustrationsstil</label>
-    <select id="style">
-      <option value="cartoon" selected>Cartoon (tecknad, uttrycksfull)</option>
-      <option value="pixar">3D animerad (Pixar-känsla)</option>
-      <option value="storybook">Barnbok / Akvarell</option>
-      <option value="comic">Serietidning</option>
-      <option value="painting">Målad (mjuk/painterly)</option>
-    </select>
+  <!-- Rad 0: Kategori -->
+  <div class="form-row">
+    <div class="field col-span-3">
+      <label>Kategori</label>
+      <div class="seg" role="tablist" aria-label="Kategori">
+        <button type="button" class="seg-btn active" id="catKidsBtn" role="tab" aria-selected="true">Barn</button>
+        <button type="button" class="seg-btn" id="catPetsBtn" role="tab" aria-selected="false">Husdjur</button>
+      </div>
+    </div>
   </div>
 
-          <div class="field col-span-2">
-            <label for="theme">Tema / kort handling</label>
-            <input id="theme" placeholder="Ex: Skogsäventyr vid bäcken" />
-          </div>
-        </div>
+  <!-- Rad 1: Namn, Ålder (barnets/djurets), Läsålder -->
+  <div class="form-row">
+    <div class="field">
+      <label for="name">Namn</label>
+      <input id="name" placeholder="Ex: Nova" />
+    </div>
 
-        <!-- Rad 3: Karaktärsreferens toggle -->
-        <div class="form-row">
-          <div class="field col-span-3">
-            <label>Karaktärsreferens</label>
-            <div class="seg" role="tablist" aria-label="Karaktärsreferens">
-              <button type="button" class="seg-btn active" id="refDescBtn" role="tab" aria-selected="true">Beskrivning</button>
-              <button type="button" class="seg-btn" id="refPhotoBtn" role="tab" aria-selected="false">Foto</button>
-            </div>
-          </div>
+    <div class="field">
+      <label for="age">Ålder (hjälte)</label>
+      <input id="age" type="number" min="1" value="6" />
+      <p class="hint">Barnets/djurets ålder för bibeln (frivilligt för husdjur).</p>
+    </div>
 
-          <!-- Beskrivning -->
-          <div class="field col-span-2" id="traitsBlock">
-            <label for="traits">Kännetecken (beskrivning)</label>
-            <textarea id="traits" rows="3" placeholder="Ex: lockigt hår, blå jacka, gula stövlar, ryggsäck med stjärna"></textarea>
-            <p class="hint">Kort och konkret – hjälper AI:n hålla karaktären konsekvent.</p>
-          </div>
+    <div class="field">
+      <label for="readingAge">Läsålder</label>
+      <div class="seg" role="tablist" aria-label="Läsålder">
+        <button type="button" class="seg-btn active" data-readage="4-5">4–5</button>
+        <button type="button" class="seg-btn" data-readage="6-8">6–8</button>
+        <button type="button" class="seg-btn" data-readage="9-12">9–12</button>
+        <button type="button" class="seg-btn" data-readage="familj">Familj</button>
+      </div>
+      <input id="readingAge" type="number" min="3" max="12" value="6" class="hidden" />
+      <p class="hint">Välj nivå – eller ställ in exakt siffra via avancerat.</p>
+      <label class="sr-only" for="readingAge">Anpassad läsålder</label>
+    </div>
+  </div>
 
-          <!-- Foto -->
-          <div class="field col-span-2 hidden" id="photoBlock">
-            <label for="charPhoto">Ladda upp foto (valfritt)</label>
-            <input id="charPhoto" type="file" accept="image/*" />
-            <div class="upload-preview">
-              <img id="photoPreview" class="hidden" alt="Förhandsvisning" />
-            </div>
-            <p class="hint">Används om bild-till-bild stöds. Annars faller vi tillbaka på beskrivning.</p>
-          </div>
-        </div>
+  <!-- Rad 1b: Antal sidor -->
+  <div class="form-row">
+    <div class="field">
+      <label for="pages">Antal sidor</label>
+      <select id="pages">
+        <option value="12">Kort (12)</option>
+        <option value="16" selected>Medium (16)</option>
+        <option value="20">Lång (20)</option>
+      </select>
+    </div>
 
-        <div class="actions">
-          <button type="submit" class="btn btn-primary">Skapa förhandsvisning</button>
-          <button id="demoBtn" type="button" class="btn btn-ghost">Visa demo</button>
-        </div>
-      </form>
+    <div class="field">
+      <label for="style">Illustrationsstil</label>
+      <select id="style">
+        <option value="cartoon" selected>Cartoon (tecknad, uttrycksfull)</option>
+        <option value="pixar">3D animerad (Pixar-känsla)</option>
+        <option value="storybook">Barnbok / Akvarell</option>
+        <option value="comic">Serietidning</option>
+        <option value="painting">Målad (mjuk/painterly)</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="theme">Tema / kort handling</label>
+      <input id="theme" placeholder="Ex: Skogsäventyr vid bäcken" />
+    </div>
+  </div>
+
+  <!-- Rad 3: Karaktärsreferens toggle -->
+  <div class="form-row">
+    <div class="field col-span-3">
+      <label>Karaktärsreferens</label>
+      <div class="seg" role="tablist" aria-label="Karaktärsreferens">
+        <button type="button" class="seg-btn active" id="refDescBtn" role="tab" aria-selected="true">Beskrivning</button>
+        <button type="button" class="seg-btn" id="refPhotoBtn" role="tab" aria-selected="false">Foto</button>
+      </div>
+    </div>
+
+    <!-- Beskrivning -->
+    <div class="field col-span-2" id="traitsBlock">
+      <label for="traits">Kännetecken (beskrivning)</label>
+      <textarea id="traits" rows="3" placeholder="Ex: lockigt hår, blå jacka, gula stövlar, ryggsäck med stjärna"></textarea>
+      <p class="hint">Kort och konkret – hjälper AI:n hålla karaktären konsekvent.</p>
+    </div>
+
+    <!-- Foto -->
+    <div class="field col-span-2 hidden" id="photoBlock">
+      <label for="charPhoto">Ladda upp foto (valfritt)</label>
+      <input id="charPhoto" type="file" accept="image/*" />
+      <div class="upload-preview">
+        <img id="photoPreview" class="hidden" alt="Förhandsvisning" />
+      </div>
+      <p class="hint">Används om bild-till-bild stöds. Annars faller vi tillbaka på beskrivning.</p>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button type="submit" class="btn btn-primary">Skapa förhandsvisning</button>
+    <button id="demoBtn" type="button" class="btn btn-ghost">Visa demo</button>
+  </div>
+</form>
     </section>
 
     <!-- FÖRHANDSVISNING -->
