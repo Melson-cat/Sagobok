@@ -275,8 +275,10 @@ async function embedImage(pdfDoc, imageUrlOrDataUrl){
   try{
     let bytes;
     if (imageUrlOrDataUrl.startsWith("data:image/")) {
-      const b64 = imageUrlOrDataUrl.split(",")[1];
-      bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const b64 = imageUrlOrDataUrl.split(",")[1] || "";
+const binary = atob(b64);
+bytes = new Uint8Array(binary.length);
+for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     } else {
       const r = await fetch(imageUrlOrDataUrl);
       bytes = new Uint8Array(await r.arrayBuffer());
@@ -302,14 +304,14 @@ function drawWrappedText(page, text, x, yTop, maxWidth, font, fontSize, lineHeig
   }
   return cursorY;
 }
-async function buildPdf({ story, images, mode="preview", trim="square210", bleed_mm, watermark_text }){
+async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }) {
   const trimSpec = TRIMS[trim] || TRIMS.square210;
-  const bleed = mode==="print" ? (Number.isFinite(bleed_mm)? bleed_mm : trimSpec.default_bleed_mm) : 0;
+  const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
 
   const trimWpt = mmToPt(trimSpec.w_mm);
   const trimHpt = mmToPt(trimSpec.h_mm);
-  const pageW = trimWpt + mmToPt(bleed*2);
-  const pageH = trimHpt + mmToPt(bleed*2);
+  const pageW = trimWpt + mmToPt(bleed * 2);
+  const pageH = trimHpt + mmToPt(bleed * 2);
   const contentX = mmToPt(bleed);
   const contentY = mmToPt(bleed);
 
@@ -326,145 +328,173 @@ async function buildPdf({ story, images, mode="preview", trim="square210", bleed
   const heroName = story?.book?.bible?.main_character?.name || "";
   const theme = story?.book?.theme || "";
 
+  // Map images by page
   const imgByPage = new Map();
-  (images||[]).forEach(row => { if (row?.page && row?.image_url) imgByPage.set(row.page, row.image_url); });
+  (images || []).forEach(row => {
+    if (row?.page && row?.image_url) imgByPage.set(row.page, row.image_url);
+  });
 
-  // COVER
-  {
+  // ---------------- Cover ----------------
+  try {
     const page = pdfDoc.addPage([pageW, pageH]);
     const margin = mmToPt(18);
     const titleSize = Math.min(trimWpt, trimHpt) * 0.07;
-    const subSize   = titleSize * 0.45;
+    const subSize = titleSize * 0.45;
 
+    // Cover image = page 1 image if available
     const coverImgUrl = imgByPage.get(1);
     const coverImg = await embedImage(pdfDoc, coverImgUrl);
     if (coverImg) {
       const iw = coverImg.width, ih = coverImg.height;
-      const panelSize = Math.min(trimWpt - margin*2, trimHpt - margin*3);
-      const scale = Math.min(panelSize/iw, panelSize/ih);
-      const w = iw*scale, h = ih*scale;
-      const cx = contentX + (trimWpt - w)/2;
-      const cy = contentY + (trimHpt - h)/2 - mmToPt(8);
+      const panelSize = Math.min(trimWpt - margin * 2, trimHpt - margin * 3);
+      const scale = Math.min(panelSize / iw, panelSize / ih);
+      const w = iw * scale, h = ih * scale;
+      const cx = contentX + (trimWpt - w) / 2;
+      const cy = contentY + (trimHpt - h) / 2 - mmToPt(8);
       page.drawImage(coverImg, { x: cx, y: cy, width: w, height: h });
     }
 
     const tWidth = fontTitle.widthOfTextAtSize(title, titleSize);
-    page.drawText(title, { x: contentX+(trimWpt - tWidth)/2, y: contentY+trimHpt - margin - titleSize, size: titleSize, font: fontTitle, color: rgb(0.1,0.1,0.1) });
+    page.drawText(title, {
+      x: contentX + (trimWpt - tWidth) / 2,
+      y: contentY + trimHpt - margin - titleSize,
+      size: titleSize, font: fontTitle, color: rgb(0.1, 0.1, 0.1)
+    });
 
     const sub = theme ? `${theme}` : (heroName ? `Med ${heroName}` : "");
     if (sub) {
       const sWidth = fontBody.widthOfTextAtSize(sub, subSize);
-      page.drawText(sub, { x: contentX+(trimWpt - sWidth)/2, y: contentY+trimHpt - margin - titleSize - subSize - mmToPt(3), size: subSize, font: fontBody, color: rgb(0.25,0.25,0.25) });
+      page.drawText(sub, {
+        x: contentX + (trimWpt - sWidth) / 2,
+        y: contentY + trimHpt - margin - titleSize - subSize - mmToPt(3),
+        size: subSize, font: fontBody, color: rgb(0.25, 0.25, 0.25)
+      });
     }
 
-    if (mode==="preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
+    if (mode === "preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
+  } catch (e) {
+    console.error("PDF COVER ERROR:", e?.stack || e);
+    const page = pdfDoc.addPage([pageW, pageH]);
+    page.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1) });
   }
 
-  // PAGES
+  // ---------------- Inside pages ----------------
   for (const p of pages) {
-    const page = pdfDoc.addPage([pageW, pageH]);
-    const imgUrl = imgByPage.get(p.page);
-    const layout = pickLayoutForText(p.text || "");
-    const innerMargin = mmToPt(15);
-    const imgObj = await embedImage(pdfDoc, imgUrl);
+    try {
+      const page = pdfDoc.addPage([pageW, pageH]);
+      const imgUrl = imgByPage.get(p.page);
+      const layout = pickLayoutForText(p.text || "");
+      const innerMargin = mmToPt(15);
 
-    if (layout === "image_top") {
-      const imgAreaH = trimHpt * 0.66;
-      if (imgObj) {
-        const iw = imgObj.width, ih = imgObj.height;
-        const maxW = trimWpt - innerMargin*2;
-        const maxH = imgAreaH - innerMargin*1.2;
-        const scale = Math.min(maxW/iw, maxH/ih);
-        const w = iw*scale, h = ih*scale;
-        const x = contentX + innerMargin + (maxW - w)/2;
-        const y = contentY + trimHpt - innerMargin - h;
-        page.drawImage(imgObj, { x, y, width: w, height: h });
-      }
-      const textMaxW = trimWpt - innerMargin*2;
-      const textX = contentX + innerMargin;
-      const textTopY = contentY + (trimHpt * 0.33);
-      drawWrappedText(page, p.text || "", textX, textTopY, textMaxW, fontBody, bodySize, lineHeight);
+      const imgObj = await embedImage(pdfDoc, imgUrl);
 
-    } else if (layout === "text_top") {
-      const textMaxW = trimWpt - innerMargin*2;
-      const textX = contentX + innerMargin;
-      const textTopY = contentY + trimHpt - innerMargin - bodySize;
-      const afterY = drawWrappedText(page, p.text || "", textX, textTopY, textMaxW, fontBody, bodySize, lineHeight);
-      if (imgObj) {
-        const iw = imgObj.width, ih = imgObj.height;
-        const maxW = textMaxW;
-        const maxH = (afterY - (contentY + innerMargin)) - mmToPt(6);
-        if (maxH > mmToPt(20)) {
-          const scale = Math.min(maxW/iw, maxH/ih);
-          const w = iw*scale, h = ih*scale;
-          const x = textX + (maxW - w)/2;
-          const y = contentY + innerMargin;
+      if (layout === "image_top") {
+        const imgAreaH = trimHpt * 0.66;
+        if (imgObj) {
+          const iw = imgObj.width, ih = imgObj.height;
+          const maxW = trimWpt - innerMargin * 2;
+          const maxH = imgAreaH - innerMargin * 1.2;
+          const scale = Math.min(maxW / iw, maxH / ih);
+          const w = iw * scale, h = ih * scale;
+          const x = contentX + innerMargin + (maxW - w) / 2;
+          const y = contentY + trimHpt - innerMargin - h;
           page.drawImage(imgObj, { x, y, width: w, height: h });
         }
+        const textMaxW = trimWpt - innerMargin * 2;
+        const textX = contentX + innerMargin;
+        const textTopY = contentY + (trimHpt * 0.33);
+        drawWrappedText(page, p.text || "", textX, textTopY, textMaxW, fontBody, bodySize, lineHeight);
+
+      } else if (layout === "text_top") {
+        const textMaxW = trimWpt - innerMargin * 2;
+        const textX = contentX + innerMargin;
+        const textTopY = contentY + trimHpt - innerMargin - bodySize;
+        const afterY = drawWrappedText(page, p.text || "", textX, textTopY, textMaxW, fontBody, bodySize, lineHeight);
+
+        if (imgObj) {
+          const iw = imgObj.width, ih = imgObj.height;
+          const maxW = textMaxW;
+          const maxH = (afterY - (contentY + innerMargin)) - mmToPt(6);
+          if (maxH > mmToPt(20)) {
+            const scale = Math.min(maxW / iw, maxH / ih);
+            const w = iw * scale, h = ih * scale;
+            const x = textX + (maxW - w) / 2;
+            const y = contentY + innerMargin;
+            page.drawImage(imgObj, { x, y, width: w, height: h });
+          }
+        }
+
+      } else {
+        // full_bleed_panel
+        if (imgObj) {
+          const iw = imgObj.width, ih = imgObj.height;
+          const maxW = trimWpt, maxH = trimHpt;
+          const scale = Math.max(maxW / iw, maxH / ih); // cover
+          const w = iw * scale, h = ih * scale;
+          const x = contentX + (trimWpt - w) / 2;
+          const y = contentY + (trimHpt - h) / 2;
+          page.drawImage(imgObj, { x, y, width: w, height: h });
+        }
+        // text panel (utan opacity för stabilitet)
+        const panelH = Math.max(mmToPt(24), bodySize * 1.3 * 2.2);
+        const pad = mmToPt(8);
+        const panelX = contentX;
+        const panelY = contentY + mmToPt(10);
+        const panelW = trimWpt;
+
+        page.drawRectangle({ x: panelX, y: panelY, width: panelW, height: panelH, color: rgb(1, 1, 1) });
+        const textMaxW = panelW - pad * 2;
+        const textX = panelX + pad;
+        const textTopY = panelY + panelH - pad - bodySize;
+        drawWrappedText(page, p.text || "", textX, textTopY, textMaxW, fontBody, bodySize, bodySize * 1.3);
       }
 
-    } else {
-      if (imgObj) {
-        const iw = imgObj.width, ih = imgObj.height;
-        const maxW = trimWpt, maxH = trimHpt;
-        const scale = Math.max(maxW/iw, maxH/ih);
-        const w = iw*scale, h = ih*scale;
-        const x = contentX + (trimWpt - w)/2;
-        const y = contentY + (trimHpt - h)/2;
-        page.drawImage(imgObj, { x, y, width: w, height: h });
-      }
-      const panelH = Math.max(mmToPt(24), bodySize*1.3*2.2);
-      const pad = mmToPt(8);
-      const panelX = contentX;
-      const panelY = contentY + mmToPt(10);
-      const panelW = trimWpt;
-      page.drawRectangle({ x: panelX, y: panelY, width: panelW, height: panelH, color: rgb(1,1,1), opacity: 0.85 });
-      const textMaxW = panelW - pad*2;
-      const textX = panelX + pad;
-      const textTopY = panelY + panelH - pad - bodySize;
-      drawWrappedText(page, p.text || "", textX, textTopY, textMaxW, fontBody, bodySize, bodySize*1.3);
+      if (mode === "preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
+    } catch (e) {
+      console.error("PDF PAGE ERROR p=", p?.page, e?.stack || e);
+      const fallback = pdfDoc.addPage([pageW, pageH]);
+      fallback.drawText(`Sida ${p?.page || "?"}: kunde inte rendera.`, {
+        x: mmToPt(15), y: mmToPt(15),
+        size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1)
+      });
+      if (mode === "preview") drawWatermark(fallback, watermark_text || "FÖRHANDSVISNING");
     }
-
-    if (mode==="preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
   }
 
-  // BACK COVER
-  {
+  // ---------------- Back cover ----------------
+  try {
     const page = pdfDoc.addPage([pageW, pageH]);
     const margin = mmToPt(18);
-    const blurb = story?.book?.lesson ? `Lärdom: ${story.book.lesson}` : `En berättelse skapad med BokPiloten.`;
-    page.drawText("Baksida", { x: contentX+margin, y: contentY+trimHpt - margin - 18, size: 18, font: fontTitle, color: rgb(0.1,0.1,0.1) });
+    const blurb = story?.book?.lesson
+      ? `Lärdom: ${story.book.lesson}`
+      : `En berättelse skapad med BokPiloten.`;
+
+    page.drawText("Baksida", {
+      x: contentX + margin, y: contentY + trimHpt - margin - 18,
+      size: 18, font: fontTitle, color: rgb(0.1, 0.1, 0.1)
+    });
+
     const fontBodySize = 12;
     const lineH = fontBodySize * 1.4;
-    drawWrappedText(page, blurb, contentX+margin, contentY+trimHpt - margin - 18 - lineH, trimWpt - margin*2, fontBody, fontBodySize, lineH);
-    if (mode==="preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
+    drawWrappedText(
+      page,
+      blurb,
+      contentX + margin,
+      contentY + trimHpt - margin - 18 - lineH,
+      trimWpt - margin * 2,
+      fontBody,
+      fontBodySize,
+      lineH
+    );
+
+    if (mode === "preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
+  } catch (e) {
+    console.error("PDF BACK COVER ERROR:", e?.stack || e);
+    const page = pdfDoc.addPage([pageW, pageH]);
+    page.drawText("Baksidan kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1) });
   }
 
   return await pdfDoc.save();
-}
-async function handlePdfRequest(req){
-  const body = await req.json().catch(()=> ({}));
-  const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
-  if (!story || !story?.book) return err("Missing story", 400);
-  if (!Array.isArray(images)) return err("Missing images[]", 400);
-
-  const pdfBytes = await buildPdf({
-    story, images,
-    mode: (mode==="print" ? "print" : "preview"),
-    trim: trim || "square210",
-    bleed_mm: bleed_mm,
-    watermark_text: watermark_text || (mode==="preview" ? "FÖRHANDSVISNING" : null)
-  });
-
-  return new Response(pdfBytes, {
-    status: 200,
-    headers: {
-      "content-type": "application/pdf",
-      "cache-control": mode==="preview" ? "no-store" : "public, max-age=31536000, immutable",
-      "content-disposition": `inline; filename="bokpiloten-${Date.now()}.pdf"`,
-      ...CORS_HEADERS,
-    }
-  });
 }
 
 // =============================== API ========================================
