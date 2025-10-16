@@ -1,7 +1,7 @@
 // ============================================================================
-// BokPiloten – Worker v19 (Cloudflare bundle-ready)
-// - Gratis & robust PDF-flöde med Cache API (per-sida)
-// - Global CORS via withCors() + yttre try/catch (fixar "No A-C-A-O"-fel)
+// BokPiloten – Worker v20 (Cloudflare bundle-ready)
+// - Robust gratis PDF-flöde med Cache API (per sida)
+// - Eko-preflight för CORS + global withCors(resp, req)
 // - Endpoints: /api/story, /api/ref-image, /api/images, /api/image/regenerate, /api/pdf
 // - Cache endpoints: PUT/GET /cache/:sid/:page.png
 // ============================================================================
@@ -27,10 +27,18 @@ const ok  = (data, init={}) => new Response(JSON.stringify(data), { status: init
 const err = (msg, code=400, extra={}) => ok({ error: msg, ...extra }, { status: code });
 const log = (...a) => { try { console.log(...a); } catch {} };
 
-// Lägg CORS på alla svar (även fel från oväntade throws)
-function withCors(response) {
+// Lägg (eller komplettera) CORS på alla svar. Om ingen ACAO finns, sätt till begärande Origin, annars lämna.
+function withCors(response, req) {
   const h = new Headers(response?.headers || {});
-  Object.entries(CORS_HEADERS).forEach(([k, v]) => h.set(k, v));
+  if (!h.has("access-control-allow-origin")) {
+    const origin = req?.headers?.get?.("Origin") || "*";
+    h.set("access-control-allow-origin", origin);
+  }
+  if (!h.has("access-control-allow-methods")) h.set("access-control-allow-methods", "GET, POST, PUT, OPTIONS");
+  if (!h.has("access-control-allow-headers")) h.set("access-control-allow-headers", "*");
+  if (!h.has("access-control-max-age")) h.set("access-control-max-age", "600");
+  if (!h.has("access-control-expose-headers")) h.set("access-control-expose-headers", "Content-Disposition");
+  if (!h.has("vary")) h.set("vary", "Origin");
   return new Response(response?.body || null, { status: response?.status || 200, headers: h });
 }
 
@@ -207,7 +215,7 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName 
 function characterCardPrompt({ style, bible, traits, category }){
   const mc=bible?.main_character||{};
   const name=mc.name||"Nova";
-  const phys=mc.physique||traits||(category==="kids") ? "child with casual outfit" : "fluffy gray cat with curious eyes";
+  const phys=mc.physique||traits||(category==="kids" ? "child with casual outfit" : "fluffy gray cat with curious eyes");
   const who = (category==="kids") ? "one child only" : "one pet only";
   return [
     `Character reference in ${styleHint(style)}.`,
@@ -237,7 +245,7 @@ function pickLayoutForText(text=""){
 function drawWatermark(page, text = "FÖRHANDSVISNING", color = rgb(0.2, 0.2, 0.2)) {
   const { width, height } = page.getSize();
   const fontSize = Math.min(width, height) * 0.08;
-  const angleRad = Math.atan2(height, width);  // diagonalt
+  const angleRad = Math.atan2(height, width);
   const angleDeg = (angleRad * 180) / Math.PI;
 
   page.drawText(text, {
@@ -530,7 +538,6 @@ async function handlePdfRequest(req) {
   const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
   if (!story?.book) return err("Missing story", 400);
   if (!Array.isArray(images)) return err("Missing images[]", 400);
-
   for (const row of images) {
     if (!(row && Number.isFinite(row.page) && typeof row.url === "string")) {
       return err("images[] must be [{page:number, url:string}]", 400);
@@ -562,22 +569,35 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
 
-    // Preflight svar med CORS
+    // --- EKO-PREFLIGHT (mycket viktig för Chrome) ---
     if (req.method === "OPTIONS") {
-      return withCors(new Response(null, { status: 204, headers: CORS_HEADERS }));
+      const reqMethod  = req.headers.get("Access-Control-Request-Method")  || "POST";
+      const reqHeaders = req.headers.get("Access-Control-Request-Headers") || "content-type";
+      const origin     = req.headers.get("Origin") || "*";
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "access-control-allow-origin": origin,
+          "access-control-allow-methods": reqMethod,
+          "access-control-allow-headers": reqHeaders,
+          "access-control-max-age": "600",
+          "access-control-expose-headers": "Content-Disposition",
+          "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+        }
+      });
     }
 
     try {
       if (req.method === "GET" && url.pathname === "/") {
-        return withCors(ok({ ok: true, ts: Date.now() }));
+        return withCors(ok({ ok: true, ts: Date.now() }), req);
       }
 
       // CACHE PUT/GET (måste komma före /api/pdf)
       if (url.pathname.startsWith("/cache/") && req.method === "PUT") {
-        return withCors(await handleCachePut(req, url));
+        return withCors(await handleCachePut(req, url), req);
       }
       if (url.pathname.startsWith("/cache/") && req.method === "GET") {
-        return withCors(await handleCacheGet(req, url));
+        return withCors(await handleCacheGet(req, url), req);
       }
 
       // STORY
@@ -604,10 +624,10 @@ Svara ENBART med json.
 `.trim();
           const story = await openaiJSON(env, STORY_SYS, storyUser);
           const plan  = normalizePlan(story?.book?.pages || []);
-          return withCors(ok({ story, plan, previewVisible: 4 }));
+          return withCors(ok({ story, plan, previewVisible: 4 }), req);
         } catch (e) {
           log("story error", e?.message);
-          return withCors(err(e.message||"Story failed", 500));
+          return withCors(err(e.message||"Story failed", 500), req);
         }
       }
 
@@ -617,15 +637,15 @@ Svara ENBART med json.
           const { style="cartoon", photo_b64, bible, traits="", category="pets" } = await req.json();
           if (photo_b64) {
             const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
-            return withCors(ok({ ref_image_b64: b64 }));
+            return withCors(ok({ ref_image_b64: b64 }), req);
           }
           const prompt = characterCardPrompt({ style, bible, traits, category });
           const g = await geminiImage(env, { prompt }, 70000, 2);
-          if (!g?.b64) return withCors(ok({ ref_image_b64: null }));
-          return withCors(ok({ ref_image_b64: g.b64 }));
+          if (!g?.b64) return withCors(ok({ ref_image_b64: null }), req);
+          return withCors(ok({ ref_image_b64: g.b64 }), req);
         }catch(e){
           log("ref-image error", e?.message);
-          return withCors(err("Ref generation failed", 500));
+          return withCors(err("Ref generation failed", 500), req);
         }
       }
 
@@ -634,8 +654,8 @@ Svara ENBART med json.
         try{
           const { style="cartoon", ref_image_b64, story, plan, concurrency=4 } = await req.json();
           const pages = story?.book?.pages || [];
-          if (!pages.length) return withCors(err("No pages", 400));
-          if (!ref_image_b64) return withCors(err("Missing reference image", 400));
+          if (!pages.length) return withCors(err("No pages", 400), req);
+          if (!ref_image_b64) return withCors(err("Missing reference image", 400), req);
           const frames = (plan?.plan || []);
           const pageCount = pages.length;
           const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
@@ -660,10 +680,10 @@ Svara ENBART med json.
           }
           await Promise.all(Array.from({length: CONC}, worker));
           out.sort((a,b)=> (a.page||0)-(b.page||0));
-          return withCors(ok({ images: out }));
+          return withCors(ok({ images: out }), req);
         }catch(e){
           log("images error", e?.message);
-          return withCors(err(e.message||"Images failed", 500));
+          return withCors(err(e.message||"Images failed", 500), req);
         }
       }
 
@@ -671,7 +691,7 @@ Svara ENBART med json.
       if (req.method === "POST" && url.pathname === "/api/image/regenerate") {
         try{
           const { style="cartoon", ref_image_b64, page_text, scene_text, frame, story } = await req.json();
-          if (!ref_image_b64) return withCors(err("Missing reference image", 400));
+          if (!ref_image_b64) return withCors(err("Missing reference image", 400), req);
 
           const fakeStory = story || { book:{ pages:[{page:1,scene:scene_text,text:page_text}] } };
           const pg = { page: 1, scene: scene_text, text: page_text, time_of_day: frame?.time_of_day, weather: frame?.weather };
@@ -683,10 +703,10 @@ Svara ENBART med json.
           });
 
           const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
-          return withCors(ok({ image_url: g.image_url, provider: g.provider || "google" }));
+          return withCors(ok({ image_url: g.image_url, provider: g.provider || "google" }), req);
         }catch(e){
           log("regen error", e?.message);
-          return withCors(err(e.message||"Regenerate failed", 500));
+          return withCors(err(e.message||"Regenerate failed", 500), req);
         }
       }
 
@@ -694,9 +714,9 @@ Svara ENBART med json.
       if (req.method === "POST" && url.pathname === "/api/pdf") {
         try {
           const resp = await handlePdfRequest(req);
-          return withCors(resp);
+          return withCors(resp, req);
         } catch (e) {
-          return withCors(err(e?.message || "PDF failed", 500));
+          return withCors(err(e?.message || "PDF failed", 500), req);
         }
       }
 
@@ -704,14 +724,14 @@ Svara ENBART med json.
       return withCors(new Response(JSON.stringify({ error: "Not found" }), {
         status: 404,
         headers: { "content-type": "application/json; charset=utf-8" }
-      }));
+      }), req);
     } catch (e) {
       // Fångar ALLT oväntat (t.ex. throw utanför våra try/catch)
       console.error("UNCAUGHT:", e?.stack || e);
       return withCors(new Response(JSON.stringify({ error: "Server error" }), {
         status: 500,
         headers: { "content-type": "application/json; charset=utf-8" }
-      }));
+      }), req);
     }
   }
 };
