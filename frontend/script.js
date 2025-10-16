@@ -33,7 +33,6 @@ const els = {
   readingAgeNumber: document.getElementById("readingAge"),
 };
 
-/* Läsålder segmented knappar */
 const readingAgeSeg = Array.from(document.querySelectorAll('[data-readage]'));
 
 /* =================== State =================== */
@@ -149,7 +148,6 @@ function setRefMode(mode, focus=true){
 
 /* ========= Läsålder segmented ========= */
 function setReadingAgeByChip(range){
-  // Maps: chip → default number
   const map = { "4-5": 5, "6-8": 7, "9-12": 10, "familj": 8 };
   const val = map[range] || 6;
   state.form.reading_age = val;
@@ -179,7 +177,6 @@ function writeForm(){
   els.theme.value = state.form.theme;
   els.traits.value = state.form.traits;
   if (els.readingAgeNumber) els.readingAgeNumber.value = state.form.reading_age;
-  // Markera rätt chip
   const target = state.form.reading_age<=5 ? "4-5" : state.form.reading_age<=8 ? "6-8" : state.form.reading_age<=12 ? "9-12" : "familj";
   setReadingAgeByChip(target);
   setCategory(state.form.category, false);
@@ -299,7 +296,7 @@ async function onSubmit(e){
       body: JSON.stringify({
         name: state.form.name,
         age: state.form.age,
-        reading_age: state.form.reading_age, // NY!
+        reading_age: state.form.reading_age,
         pages: state.form.pages,
         category: state.form.category,
         style: state.form.style,
@@ -484,7 +481,6 @@ function bindEvents(){
   els.refPhotoBtn?.addEventListener("click", ()=> setRefMode("photo"));
   els.charPhoto?.addEventListener("change", onPhotoChange);
 
-  // Läsålder chips
   readingAgeSeg.forEach(btn=>{
     btn.addEventListener("click", ()=>{
       readingAgeSeg.forEach(b=> b.classList.remove("active"));
@@ -518,26 +514,56 @@ function bindEvents(){
   });
 }
 
+/* ========= PDF-knapp – nytt 2-stegsflöde (cache + liten /api/pdf) ========= */
 const pdfBtn = document.getElementById("pdfBtn");
 if (pdfBtn) {
   pdfBtn.addEventListener("click", async () => {
     if (!state.story) { alert("Skapa berättelsen först."); return; }
-    // Mappa ihop images (redan visade/dl:ade)
-    const results = [];
+
+    // 1) Samla bilder från gridden
+    const raw = [];
     Array.from(els.previewGrid.children).forEach(card=>{
       const wrap = card.querySelector(".imgwrap");
       const page = Number(wrap?.getAttribute("data-page"));
-      const img = wrap?.querySelector("img")?.src;
-      if (page && img) results.push({ page, image_url: img });
+      const img  = wrap?.querySelector("img")?.src;
+      if (page && img) raw.push({ page, data_url: img });
     });
+    if (!raw.length) { alert("Inga bilder att rendera."); return; }
 
+    // 2) Ladda upp per sida till Worker-cache → få stabil URL
+    const sid = String(Date.now());
+    const cached = [];
     try {
+      setStatus("📦 Förbereder PDF… (cachar bilder)");
+      let done = 0;
+      for (const row of raw) {
+        const putRes = await fetch(`${BACKEND}/cache/${sid}/${row.page}.png`, {
+          method: "PUT",
+          headers: { "content-type":"application/json" },
+          body: JSON.stringify({ data_url: row.data_url })
+        });
+        const putJson = await putRes.json().catch(()=> ({}));
+        if (!putRes.ok || putJson?.error || !putJson?.url) {
+          throw new Error(putJson?.error || `Cache PUT misslyckades för sida ${row.page}`);
+        }
+        cached.push({ page: row.page, url: putJson.url });
+        done++; updateProgress(done, raw.length, `Cachar ${done}/${raw.length}…`);
+      }
+    } catch (e) {
+      setStatus(null);
+      alert("Kunde inte cacha bilder: " + (e?.message || e));
+      return;
+    }
+
+    // 3) Liten payload till /api/pdf
+    try {
+      setStatus("🧾 Skapar PDF…");
       const res = await fetch(`${BACKEND}/api/pdf`, {
         method: "POST",
         headers: { "content-type":"application/json" },
         body: JSON.stringify({
           story: state.story,
-          images: results,
+          images: cached,            // [{page, url}]
           mode: "preview",
           trim: "square210",
           watermark_text: "FÖRHANDSVISNING – BokPiloten"
@@ -546,14 +572,14 @@ if (pdfBtn) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      // Öppna i ny flik (eller bädda in i viewer)
       window.open(url, "_blank");
+      setStatus("✅ PDF klar!");
     } catch (e) {
+      setStatus(null);
       alert("Kunde inte skapa PDF: " + (e?.message || e));
     }
   });
 }
-
 
 /* ========= Init ========= */
 (function init(){

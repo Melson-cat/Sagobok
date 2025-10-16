@@ -1,17 +1,16 @@
 // ============================================================================
-// BokPiloten – Worker v17 (Cloudflare bundle-ready)
-// - Importera pdf-lib från npm (bundlas av Wrangler)
+// BokPiloten – Worker v18 (Cloudflare bundle-ready)
+// - Robust gratisflöde för PDF: cachea bilder per sida i Cache API
+// - /cache PUT/GET för per-sida-uppladdning → små URL:er till /api/pdf
 // - /api/story, /api/ref-image, /api/images, /api/image/regenerate, /api/pdf
 // ============================================================================
 
 import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
 
-
-
 // ---------------------------- CONSTS / HELPERS ------------------------------
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
   "access-control-allow-headers": "*",
   "access-control-max-age": "600",
 };
@@ -228,7 +227,7 @@ function pickLayoutForText(text=""){
 function drawWatermark(page, text = "FÖRHANDSVISNING", color = rgb(0.2, 0.2, 0.2)) {
   const { width, height } = page.getSize();
   const fontSize = Math.min(width, height) * 0.08;
-  const angleRad = Math.atan2(height, width);              // diagonalt
+  const angleRad = Math.atan2(height, width);  // diagonalt
   const angleDeg = (angleRad * 180) / Math.PI;
 
   page.drawText(text, {
@@ -237,52 +236,61 @@ function drawWatermark(page, text = "FÖRHANDSVISNING", color = rgb(0.2, 0.2, 0.
     size: fontSize,
     color,
     opacity: 0.12,
-    rotate: degrees(angleDeg)                               // <- RÄTT sättet
+    rotate: degrees(angleDeg)
   });
 }
-async function handlePdfRequest(req) {
-  try {
-    const body = await req.json();
-    const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
-    if (!story?.book) return err("Missing story", 400);
-    if (!Array.isArray(images)) return err("Missing images[]", 400);
 
-    const pdfBytes = await buildPdf({
-      story, images,
-      mode: mode === "print" ? "print" : "preview",
-      trim: trim || "square210",
-      bleed_mm,
-      watermark_text: watermark_text || (mode === "preview" ? "FÖRHANDSVISNING" : null),
-    });
+// === Cache helpers (gratis) ===
+function dataUrlToBytes(dataUrl) {
+  if (!dataUrl?.startsWith("data:")) return null;
+  const [, meta, b64] = dataUrl.match(/^data:([^;]+);base64,(.+)$/) || [];
+  if (!b64) return null;
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return { bytes, mime: meta || "application/octet-stream" };
+}
+async function handleCachePut(req, url) {
+  // PUT /cache/:sid/:page.png  body: { data_url }
+  const parts = url.pathname.split("/").filter(Boolean);
+  const sid   = parts[1];
+  const file  = parts[2] || "";
+  const page  = (file.split(".")[0] || "1");
+  if (!sid || !page) return err("Bad cache path", 400);
 
-    return new Response(pdfBytes, {
-      status: 200,
-      headers: {
-        "content-type": "application/pdf",
-        "cache-control": mode === "preview" ? "no-store" : "public, max-age=31536000, immutable",
-        "content-disposition": `inline; filename="bokpiloten-${Date.now()}.pdf"`,
-        "access-control-allow-origin": "*"    // CORS för direktvisning i webbläsaren
-      }
-    });
-  } catch (e) {
-    console.error("PDF ERROR:", e?.stack || e);
-    return err(e?.message || "PDF failed", 500);
+  const j = await req.json().catch(()=> ({}));
+  const d = dataUrlToBytes(j.data_url);
+  if (!d) return err("Missing/invalid data_url", 400);
+
+  const cacheKey = new Request(url.toString(), { method: "GET" });
+  const res = new Response(d.bytes, {
+    headers: {
+      "content-type": d.mime || "image/png",
+      "cache-control": "public, max-age=31536000, immutable",
+      ...CORS_HEADERS
+    }
+  });
+  await caches.default.put(cacheKey, res.clone());
+  return ok({ ok:true, url: url.toString(), sid, page: Number(page) });
+}
+async function handleCacheGet(_req, url) {
+  const cacheKey = new Request(url.toString(), { method: "GET" });
+  let res = await caches.default.match(cacheKey);
+  if (res) {
+    const h = new Headers(res.headers);
+    Object.entries(CORS_HEADERS).forEach(([k,v]) => h.set(k,v));
+    return new Response(res.body, { status: 200, headers: h });
   }
+  return new Response("Not found", { status: 404, headers: CORS_HEADERS });
 }
 
-async function embedImage(pdfDoc, imageUrlOrDataUrl){
-  if (!imageUrlOrDataUrl) return null;
+// === PDF-core: hämta alltid bytes via URL (ej data-URL för minne/stabilitet) ===
+async function embedImage(pdfDoc, imageUrl){
+  if (!imageUrl) return null;
   try{
-    let bytes;
-    if (imageUrlOrDataUrl.startsWith("data:image/")) {
-      const b64 = imageUrlOrDataUrl.split(",")[1] || "";
-const binary = atob(b64);
-bytes = new Uint8Array(binary.length);
-for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    } else {
-      const r = await fetch(imageUrlOrDataUrl);
-      bytes = new Uint8Array(await r.arrayBuffer());
-    }
+    const r = await fetch(imageUrl);
+    if (!r.ok) return null;
+    const bytes = new Uint8Array(await r.arrayBuffer());
     try { return await pdfDoc.embedPng(bytes); } catch {}
     try { return await pdfDoc.embedJpg(bytes); } catch {}
     return null;
@@ -295,7 +303,7 @@ function drawWrappedText(page, text, x, yTop, maxWidth, font, fontSize, lineHeig
     const test = line ? (line+" "+w) : w;
     const testWidth = font.widthOfTextAtSize(test, fontSize);
     if (testWidth <= maxWidth) line = test;
-    else { lines.push(line); line = w; }
+    else { if (line) lines.push(line); line = w; }
   }
   if (line) lines.push(line);
   for (const ln of lines) {
@@ -328,10 +336,10 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   const heroName = story?.book?.bible?.main_character?.name || "";
   const theme = story?.book?.theme || "";
 
-  // Map images by page
+  // page -> url
   const imgByPage = new Map();
   (images || []).forEach(row => {
-    if (row?.page && row?.image_url) imgByPage.set(row.page, row.image_url);
+    if (row?.page && row?.url) imgByPage.set(row.page, row.url);
   });
 
   // ---------------- Cover ----------------
@@ -341,7 +349,6 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     const titleSize = Math.min(trimWpt, trimHpt) * 0.07;
     const subSize = titleSize * 0.45;
 
-    // Cover image = page 1 image if available
     const coverImgUrl = imgByPage.get(1);
     const coverImg = await embedImage(pdfDoc, coverImgUrl);
     if (coverImg) {
@@ -435,7 +442,6 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
           const y = contentY + (trimHpt - h) / 2;
           page.drawImage(imgObj, { x, y, width: w, height: h });
         }
-        // text panel (utan opacity för stabilitet)
         const panelH = Math.max(mmToPt(24), bodySize * 1.3 * 2.2);
         const pad = mmToPt(8);
         const panelX = contentX;
@@ -497,12 +503,57 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   return await pdfDoc.save();
 }
 
+async function handlePdfRequest(req) {
+  try {
+    const body = await req.json();
+    const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
+    if (!story?.book) return err("Missing story", 400);
+    if (!Array.isArray(images)) return err("Missing images[]", 400);
+
+    for (const row of images) {
+      if (!(row && Number.isFinite(row.page) && typeof row.url === "string")) {
+        return err("images[] must be [{page:number, url:string}]", 400);
+      }
+    }
+
+    const pdfBytes = await buildPdf({
+      story,
+      images,
+      mode: mode === "print" ? "print" : "preview",
+      trim: trim || "square210",
+      bleed_mm,
+      watermark_text: watermark_text || (mode === "preview" ? "FÖRHANDSVISNING" : null),
+    });
+
+    return new Response(pdfBytes, {
+      status: 200,
+      headers: {
+        "content-type": "application/pdf",
+        "cache-control": mode === "preview" ? "no-store" : "public, max-age=31536000, immutable",
+        "content-disposition": `inline; filename="bokpiloten-${Date.now()}.pdf"`,
+        "access-control-allow-origin": "*"
+      }
+    });
+  } catch (e) {
+    console.error("PDF ERROR:", e?.stack || e);
+    return err(e?.message || "PDF failed", 500);
+  }
+}
+
 // =============================== API ========================================
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
     if (req.method === "GET" && url.pathname === "/") return ok({ ok: true, ts: Date.now() });
+
+    // CACHE PUT/GET (måste komma före /api/pdf)
+    if (url.pathname.startsWith("/cache/") && req.method === "PUT") {
+      return handleCachePut(req, url);
+    }
+    if (url.pathname.startsWith("/cache/") && req.method === "GET") {
+      return handleCacheGet(req, url);
+    }
 
     // STORY
     if (req.method === "POST" && url.pathname === "/api/story") {
