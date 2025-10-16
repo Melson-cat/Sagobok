@@ -282,6 +282,102 @@ function buildCards(pages, visibleCount){
   smoothScrollTo(els.previewSection);
 }
 
+/* ========= Streaming-IMAGES ========= */
+async function generateAllImagesStreaming() {
+  setStatus("🎥 Genererar alla sidor…"); startQuips();
+
+  const res = await fetch(`${BACKEND}/api/images`, {
+    method: "POST",
+    mode: "cors",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      style: state.form.style,
+      ref_image_b64: state.refB64,
+      story: state.story,
+      plan: state.plan,
+      concurrency: 3
+    })
+  });
+
+  if (!res.ok || !res.body) {
+    stopQuips(); setStatus(null);
+    const j = await res.json().catch(()=> ({}));
+    throw new Error(j?.error || `HTTP ${res.status}`);
+  }
+
+  // NDJSON stream: en rad per färdig bild
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+
+  const byPageCard = new Map();
+  Array.from(els.previewGrid.children).forEach(card=>{
+    const p = Number(card.querySelector(".imgwrap")?.getAttribute("data-page"));
+    if (p) byPageCard.set(p, card);
+  });
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if (!line) continue;
+      let msg;
+      try { msg = JSON.parse(line); } catch { continue; }
+
+      if (msg.status === "started") {
+        updateProgress(0, msg.total || 0, "Startar bildgenerering…");
+        continue;
+      }
+      if (msg.status === "done") {
+        stopQuips(); setStatus("✅ Bilderna är klara.");
+        continue;
+      }
+      if (msg.status === "error") {
+        stopQuips(); setStatus(null);
+        alert("Fel i bildgenerering: " + (msg.message || "okänt fel"));
+        continue;
+      }
+      if (typeof msg.page === "number") {
+        const card = byPageCard.get(msg.page);
+        if (card) {
+          const imgEl = card.querySelector("img");
+          const sk = card.querySelector(".skeleton");
+          if (msg.image_url) {
+            await new Promise(resolve=>{
+              const tmp = new Image();
+              tmp.onload = ()=>{
+                imgEl.src = tmp.src; imgEl.style.opacity = "1"; sk?.remove();
+                const prov = card.querySelector(".img-provider");
+                if (prov){ prov.textContent = "🎨 Gemini"; prov.classList.remove("hidden"); }
+                card.querySelector(".retry-wrap")?.classList.add("hidden");
+                resolve();
+              };
+              tmp.onerror = ()=>{ sk?.remove(); resolve(); };
+              tmp.src = msg.image_url;
+            });
+          } else {
+            sk?.remove();
+            const fb = document.createElement("div");
+            fb.className = "img-fallback";
+            fb.innerHTML = `Kunde inte generera bild
+              <div class="retry-wrap" style="margin-top:8px;">
+                <button class="retry-btn retry" data-page="${msg.page}">🔄 Generera igen</button>
+              </div>`;
+            card.querySelector(".imgwrap").appendChild(fb);
+            card.querySelector(".retry-wrap")?.classList.remove("hidden");
+          }
+        }
+        const prog = msg?.progress || {};
+        if (prog.total) updateProgress(prog.completed||0, prog.total, `Illustrerar ${prog.completed||0}/${prog.total} …`);
+      }
+    }
+  }
+}
+
 /* ========= Submit ========= */
 async function onSubmit(e){
   e.preventDefault();
@@ -337,65 +433,9 @@ async function onSubmit(e){
     state.refB64 = refData.ref_image_b64 || null;
     if (!state.refB64) throw new Error("Ingen referensbild kunde hämtas/skapas.");
 
-    // 3) IMAGES
-    setStatus("🎥 Lägger kameror & ljus…"); updateProgress(2,3,"3/3 – Bildplan");
-    const imgRes = await fetch(`${BACKEND}/api/images`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        style: state.form.style,
-        ref_image_b64: state.refB64,
-        story: state.story,
-        plan: state.plan,
-        concurrency: 4
-      })
-    });
-    const imgData = await imgRes.json().catch(()=> ({}));
-    if (!imgRes.ok || imgData?.error) throw new Error(imgData?.error || "Bildgenerering misslyckades");
-
-    const results = imgData.images || [];
-    let received = 0;
-    const byPageCard = new Map();
-    Array.from(els.previewGrid.children).forEach(card=>{
-      const p = Number(card.querySelector(".imgwrap")?.getAttribute("data-page"));
-      if (p) byPageCard.set(p, card);
-    });
-
-    for (const row of results) {
-      const card = byPageCard.get(row.page);
-      if (!card) continue;
-      const imgEl = card.querySelector("img");
-      const sk = card.querySelector(".skeleton");
-
-      if (row.image_url) {
-        await new Promise(resolve=>{
-          const tmp = new Image();
-          tmp.onload = ()=>{
-            imgEl.src = tmp.src; sk?.remove(); imgEl.style.opacity = "1";
-            const prov = card.querySelector(".img-provider");
-            if (prov){ prov.textContent = "🎨 Gemini"; prov.classList.remove("hidden"); }
-            card.querySelector(".retry-wrap")?.classList.add("hidden");
-            resolve();
-          };
-          tmp.onerror = ()=>{ sk?.remove(); resolve(); };
-          tmp.src = row.image_url;
-        });
-      } else {
-        sk?.remove();
-        const fb = document.createElement("div");
-        fb.className = "img-fallback";
-        fb.innerHTML = `Kunde inte generera bild
-          <div class="retry-wrap" style="margin-top:8px;">
-            <button class="retry-btn retry" data-page="${row.page}">🔄 Generera igen</button>
-          </div>`;
-        card.querySelector(".imgwrap").appendChild(fb);
-        card.querySelector(".retry-wrap")?.classList.remove("hidden");
-      }
-
-      received++;
-      setStatus(`🎨 Målar sida ${received} av ${results.length} …`);
-      updateProgress(received, results.length, `Illustrerar ${received}/${results.length} …`);
-      await new Promise(r=> setTimeout(r, 120));
-    }
+    // 3) IMAGES (STREAM)
+    updateProgress(2,3,"3/3 – Bildplan");
+    await generateAllImagesStreaming();
 
     stopQuips();
     setStatus("✅ Klart! Sagans förhandsvisning är redo.");
@@ -408,7 +448,7 @@ async function onSubmit(e){
   }
 }
 
-/* ========= Regenerera ========= */
+/* ========= Regenerera (singel) ========= */
 async function regenerateOne(page){
   const pageObj = state.pageMap.get(page);
   const planObj = state.planMap.get(page) || null;
@@ -473,11 +513,7 @@ async function uploadImagesToCacheAndBuildList() {
     const img = wrap?.querySelector("img")?.src || "";
     if (!page || !img) continue;
 
-    // Om redan URL (http/https) – använd direkt. Om data: – ladda upp.
-    if (/^https?:\/\//i.test(img)) {
-      results.push({ page, url: img });
-      continue;
-    }
+    if (/^https?:\/\//i.test(img)) { results.push({ page, url: img }); continue; }
     if (img.startsWith("data:image/")) {
       const putUrl = `${BACKEND}/cache/${sid}/${page}.png`;
       const res = await fetch(putUrl, {
@@ -501,17 +537,14 @@ if (pdfBtn) {
 
     try {
       setStatus("📄 Förbereder PDF… (optimerar bilder)"); startQuips();
-      // 1) Ladda upp data: bilder till backend-cache → få små URL:er
       const imagesSmall = await uploadImagesToCacheAndBuildList();
-
-      // 2) Skicka liten payload till /api/pdf
       const res = await fetch(`${BACKEND}/api/pdf`, {
         method: "POST",
         mode: "cors",
         headers: { "content-type":"application/json" },
         body: JSON.stringify({
           story: state.story,
-          images: imagesSmall,           // [{page, url}]
+          images: imagesSmall,   // [{page, url}]
           mode: "preview",
           trim: "square210",
           watermark_text: "FÖRHANDSVISNING – BokPiloten"

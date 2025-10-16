@@ -1,631 +1,553 @@
-/* =================== Konfiguration =================== */
-const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
-const STORAGE_KEY = "bokpiloten_form_v5";
-const MAX_AGE = 120;
-const MIN_AGE = 1;
-const VALID_PAGES = new Set([12, 16, 20]);
-const MAX_REF_DIM = 1024;
+// ============================================================================
+// BokPiloten – Worker v22 (streaming images + gratis cache för PDF)
+// - /api/images: streamar NDJSON (en rad per färdig bild) → inga QUIC idle timeouts
+// - /cache/:sid/:page.png: PUT data:URL → GET liten URL (för PDF-bygget)
+// - /api/pdf: tar [{page, url}] (små requestar), bäddar in med cache-first
+// - Alltid CORS, även vid fel
+// ============================================================================
 
-/* =================== Elementrefs =================== */
-const els = {
-  body: document.body,
-  form: document.getElementById("storyForm"),
-  catKidsBtn: document.getElementById("catKidsBtn"),
-  catPetsBtn: document.getElementById("catPetsBtn"),
-  name: document.getElementById("name"),
-  age: document.getElementById("age"),
-  pages: document.getElementById("pages"),
-  style: document.getElementById("style"),
-  theme: document.getElementById("theme"),
-  traits: document.getElementById("traits"),
-  charPhoto: document.getElementById("charPhoto"),
-  photoPreview: document.getElementById("photoPreview"),
-  refDescBtn: document.getElementById("refDescBtn"),
-  refPhotoBtn: document.getElementById("refPhotoBtn"),
-  traitsBlock: document.getElementById("traitsBlock"),
-  photoBlock: document.getElementById("photoBlock"),
-  previewSection: document.getElementById("preview"),
-  previewGrid: document.getElementById("bookPreview"),
-  submitBtn: document.querySelector("#storyForm .btn-primary"),
-  demoBtn: document.getElementById("demoBtn"),
-  navToggle: document.getElementById("navToggle"),
-  mobileMenu: document.getElementById("mobileMenu"),
-  readingAgeNumber: document.getElementById("readingAge"),
+import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
+
+// ---------------------------- CORS utils ------------------------------------
+const BASE_CORS = {
+  "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
+  "access-control-allow-headers": "*",
+  "access-control-max-age": "600",
+  "access-control-expose-headers": "Content-Disposition",
 };
+function withCors(resp, req) {
+  const h = new Headers(resp?.headers || {});
+  const origin = req?.headers?.get?.("Origin") || "*";
+  if (!h.has("access-control-allow-origin")) h.set("access-control-allow-origin", origin);
+  for (const [k,v] of Object.entries(BASE_CORS)) if (!h.has(k)) h.set(k,v);
+  if (!h.has("vary")) h.set("vary","Origin");
+  return new Response(resp.body, { status: resp.status, headers: h });
+}
+const ok  = (data, code=200) => new Response(JSON.stringify(data), {
+  status: code, headers: { "content-type":"application/json; charset=utf-8", "cache-control":"no-store", ...BASE_CORS, "access-control-allow-origin":"*" }
+});
+const err = (msg, code=400, extra={}) => ok({ error: msg, ...extra }, code);
 
-const readingAgeSeg = Array.from(document.querySelectorAll('[data-readage]'));
+// --------------------------- Models & prompts --------------------------------
+const OPENAI_MODEL = "gpt-4o-mini";
 
-/* =================== State =================== */
-const state = {
-  form: {
-    category: "kids",
-    name: "Nova",
-    age: 6,
-    reading_age: 6,
-    pages: 16,
-    style: "cartoon",
-    theme: "",
-    refMode: "photo",
-    traits: "",
-    photoDataUrl: null,
-  },
-  visibleCount: 4,
-  story: null,
-  plan: null,
-  refB64: null,
-  pageMap: new Map(),
-  planMap: new Map(),
-};
-
-/* =================== Helpers =================== */
-function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
-function toInt(v, fb=0){ const n = parseInt(v,10); return Number.isFinite(n) ? n : fb; }
-function escapeHtml(s){ return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;"); }
-function smoothScrollTo(el){ el?.scrollIntoView({ behavior: "smooth", block: "start" }); }
-function uuid(){
-  const a = new Uint8Array(8);
-  crypto.getRandomValues(a);
-  return [...a].map(x=>x.toString(16).padStart(2,"0")).join("");
-}
-
-/* ===== Levande status ===== */
-const STATUS_QUIPS = [
-  "puffar kuddar…","polerar morrhår…","tänder nattlampan…",
-  "drar undan tunga skuggor…","räknar stjärnor…","lägger mjukare bokeh…",
-  "sorterar leksaker…","justerar rim light…"
-];
-let quipTimer = null;
-function ensureStatusBar(){
-  let bar = document.getElementById("statusBar");
-  if (!bar) {
-    bar = document.createElement("div");
-    bar.id = "statusBar";
-    bar.className = "status-bar";
-    els.previewSection?.insertAdjacentElement("beforebegin", bar);
-  }
-  bar.classList.remove("hidden");
-  return bar;
-}
-function setStatus(msg){
-  const bar = ensureStatusBar();
-  bar.textContent = msg || "";
-  if (!msg) bar.classList.add("hidden");
-}
-function startQuips(){
-  stopQuips();
-  const bar = ensureStatusBar();
-  const aside = document.createElement("span");
-  aside.className = "status-quips";
-  aside.style.marginLeft = "8px";
-  bar.appendChild(aside);
-  let i = 0;
-  quipTimer = setInterval(()=>{ aside.textContent = STATUS_QUIPS[i % STATUS_QUIPS.length]; i++; }, 1800);
-}
-function stopQuips(){
-  if (quipTimer) clearInterval(quipTimer);
-  quipTimer = null;
-  const q = document.querySelector(".status-quips"); if (q) q.remove();
-}
-function updateProgress(current, total, label){
-  const bar = ensureStatusBar();
-  let prog = bar.querySelector(".progress");
-  if (!prog) {
-    prog = document.createElement("div");
-    prog.className = "progress";
-    prog.innerHTML = '<div class="progress-track"><div class="progress-fill" style="width:0%"></div></div><span class="progress-label"></span>';
-    bar.appendChild(prog);
-  }
-  const pct = total ? Math.round((current/total)*100) : 0;
-  prog.querySelector(".progress-fill").style.width = pct + "%";
-  prog.querySelector(".progress-label").textContent = label || "";
-}
-
-/* LocalStorage */
-function saveForm(){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.form)); }catch{} }
-function loadForm(){
-  try{
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    const saved = JSON.parse(raw)||{};
-    Object.assign(state.form, saved);
-  }catch{}
-}
-
-/* ========= UI toggles ========= */
-function setCategory(cat, save=true){
-  const val = cat === "pets" ? "pets" : "kids";
-  state.form.category = val;
-  document.body.dataset.theme = val;
-  els.catKidsBtn?.classList.toggle("active", val==="kids");
-  els.catPetsBtn?.classList.toggle("active", val==="pets");
-  if (save) saveForm();
-}
-function setRefMode(mode, focus=true){
-  const m = mode === "photo" ? "photo" : "desc";
-  state.form.refMode = m;
-  els.refDescBtn.classList.toggle("active", m==="desc");
-  els.refPhotoBtn.classList.toggle("active", m==="photo");
-  els.traitsBlock.classList.toggle("hidden", m!=="desc");
-  els.photoBlock.classList.toggle("hidden", m!=="photo");
-  if (focus) (m==="desc" ? els.traits : els.charPhoto)?.focus();
-  saveForm();
-}
-
-/* ========= Läsålder segmented ========= */
-function setReadingAgeByChip(range){
-  const map = { "4-5": 5, "6-8": 7, "9-12": 10, "familj": 8 };
-  const val = map[range] || 6;
-  state.form.reading_age = val;
-  if (els.readingAgeNumber) els.readingAgeNumber.value = val;
-  readingAgeSeg.forEach(btn=>{
-    btn.classList.toggle("active", btn.getAttribute("data-readage")===range);
-  });
-  saveForm();
-}
-
-/* ========= Form read/write ========= */
-function readForm(){
-  const f = state.form;
-  f.name = (els.name.value || "Nova").trim();
-  f.age = clamp(toInt(els.age.value,6), MIN_AGE, MAX_AGE);
-  f.pages = VALID_PAGES.has(toInt(els.pages.value)) ? toInt(els.pages.value) : 16;
-  f.style = els.style.value || "cartoon";
-  f.theme = (els.theme.value || "").trim();
-  f.traits = (els.traits.value || "").trim();
-  f.reading_age = clamp(toInt(els.readingAgeNumber?.value ?? f.reading_age, f.reading_age), 3, 12);
-}
-function writeForm(){
-  els.name.value = state.form.name;
-  els.age.value = state.form.age;
-  els.pages.value = state.form.pages;
-  els.style.value = state.form.style;
-  els.theme.value = state.form.theme;
-  els.traits.value = state.form.traits;
-  if (els.readingAgeNumber) els.readingAgeNumber.value = state.form.reading_age;
-  const target = state.form.reading_age<=5 ? "4-5" : state.form.reading_age<=8 ? "6-8" : state.form.reading_age<=12 ? "9-12" : "familj";
-  setReadingAgeByChip(target);
-  setCategory(state.form.category, false);
-  setRefMode(state.form.refMode, false);
-  if (state.form.photoDataUrl) {
-    els.photoPreview.src = state.form.photoDataUrl;
-    els.photoPreview.classList.remove("hidden");
-  }
-}
-
-/* ========= Downscale ========= */
-async function downscaleFileToDataURL(file, maxDim = MAX_REF_DIM) {
-  const img = await new Promise((resolve,reject)=>{
-    const r = new FileReader();
-    r.onload = ()=> { const im = new Image(); im.onload = ()=> resolve(im); im.onerror = reject; im.src = r.result; };
-    r.onerror = reject; r.readAsDataURL(file);
-  });
-  const w = img.naturalWidth, h = img.naturalHeight;
-  const scale = Math.min(1, maxDim / Math.max(w,h));
-  if (scale >= 1) return img.src;
-  const c = document.createElement("canvas");
-  c.width = Math.round(w*scale); c.height = Math.round(h*scale);
-  const ctx = c.getContext("2d"); ctx.drawImage(img,0,0,c.width,c.height);
-  return c.toDataURL("image/png", 0.92);
-}
-
-/* ========= Foto-preview ========= */
-async function onPhotoChange(){
-  const f = els.charPhoto.files?.[0];
-  if (!f) {
-    state.form.photoDataUrl = null;
-    els.photoPreview.classList.add("hidden");
-    els.photoPreview.src = "";
-    saveForm(); return;
-  }
-  const dataUrl = await downscaleFileToDataURL(f, MAX_REF_DIM);
-  state.form.photoDataUrl = dataUrl;
-  els.photoPreview.src = dataUrl;
-  els.photoPreview.classList.remove("hidden");
-  saveForm();
-}
-
-/* ========= Skeleton ========= */
-function renderSkeleton(count=4){
-  els.previewGrid.innerHTML = "";
-  for (let i=0;i<count;i++){
-    const el = document.createElement("article");
-    el.className = "thumb";
-    el.innerHTML = `
-      <div class="imgwrap"><div class="skeleton"></div></div>
-      <div class="txt">
-        <span class="skeleton" style="display:block;height:12px;margin-bottom:8px"></span>
-        <span class="skeleton" style="display:block;height:12px;width:60%"></span>
-      </div>`;
-    els.previewGrid.appendChild(el);
-  }
-  els.previewSection.classList.remove("hidden");
-}
-
-/* ========= Validering ========= */
-function validateForm(){
-  readForm();
-  const problems = [];
-  if (!state.form.name) problems.push("Ange ett namn.");
-  if (state.form.age < MIN_AGE || state.form.age > MAX_AGE) problems.push("Hjältens ålder verkar orimlig.");
-  if (!VALID_PAGES.has(state.form.pages)) problems.push("Ogiltigt sidantal.");
-  if (state.form.reading_age < 3 || state.form.reading_age > 12) problems.push("Läsålder bör vara 3–12 (eller välj Familj).");
-  if (state.form.refMode === "desc") {
-    if (!state.form.traits || state.form.traits.length < 6) problems.push("Beskriv gärna kännetecken – eller ladda upp foto för bäst resultat.");
-  } else if (state.form.refMode === "photo") {
-    if (!state.form.photoDataUrl) problems.push("Ladda upp ett foto – eller byt till Beskrivning.");
-  }
-  return problems;
-}
-
-/* ========= Kort ========= */
-function buildCards(pages, visibleCount){
-  els.previewGrid.innerHTML = "";
-  state.pageMap.clear();
-  pages.forEach((pg,i)=>{
-    state.pageMap.set(pg.page, pg);
-    const card = document.createElement("article");
-    card.className = "thumb";
-    if (i >= visibleCount) card.classList.add("locked");
-    card.innerHTML = `
-      <div class="imgwrap" data-page="${pg.page}">
-        <div class="skeleton"></div>
-        <img alt="Sida ${pg.page}" style="opacity:0" />
-        <span class="img-provider hidden"></span>
-      </div>
-      <div class="txt">${escapeHtml(pg.text || "")}</div>
-      <div class="retry-wrap hidden" style="padding:10px 12px;">
-        <button class="retry-btn retry" data-page="${pg.page}">🔄 Generera igen</button>
-      </div>`;
-    els.previewGrid.appendChild(card);
-  });
-  els.previewSection.classList.remove("hidden");
-  smoothScrollTo(els.previewSection);
-}
-
-/* ========= Streaming-IMAGES ========= */
-async function generateAllImagesStreaming() {
-  setStatus("🎥 Genererar alla sidor…"); startQuips();
-
-  const res = await fetch(`${BACKEND}/api/images`, {
+async function openaiJSON(env, system, user) {
+  const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
-    mode: "cors",
-    headers: { "content-type": "application/json" },
+    headers: { "authorization": `Bearer ${env.API_KEY}`, "content-type": "application/json" },
     body: JSON.stringify({
-      style: state.form.style,
-      ref_image_b64: state.refB64,
-      story: state.story,
-      plan: state.plan,
-      concurrency: 3
-    })
+      model: OPENAI_MODEL,
+      response_format: { type: "json_object" },
+      temperature: 0.6,
+      messages: [{ role: "system", content: system }, { role: "user", content: user }],
+    }),
   });
+  if (!r.ok) throw new Error(`OpenAI ${r.status} ${await r.text().catch(()=> "")}`);
+  const j = await r.json();
+  return JSON.parse(j?.choices?.[0]?.message?.content || "{}");
+}
 
-  if (!res.ok || !res.body) {
-    stopQuips(); setStatus(null);
-    const j = await res.json().catch(()=> ({}));
-    throw new Error(j?.error || `HTTP ${res.status}`);
+function findGeminiImagePart(json) {
+  const cand = json?.candidates?.[0];
+  const parts = cand?.content?.parts || cand?.content?.[0]?.parts || [];
+  let p = parts.find(x => x?.inlineData?.mimeType?.startsWith("image/") && x?.inlineData?.data);
+  if (p) return { mime: p.inlineData.mimeType, b64: p.inlineData.data };
+  p = parts.find(x => typeof x?.text === "string" && x.text.startsWith("data:image/"));
+  if (p) { const m = p.text.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i); if (m) return { mime: m[1], b64: m[2] }; }
+  p = parts.find(x => typeof x?.text === "string" && /^https?:\/\//.test(x.text));
+  if (p) return { url: p.text };
+  return null;
+}
+
+// Kortare timeout + få försök för att hålla total väggtid nere
+async function geminiImage(env, item, timeoutMs=45000, attempts=2) {
+  const key = env.GEMINI_API_KEY; if (!key) throw new Error("GEMINI_API_KEY missing");
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(key)}`;
+
+  const parts = [];
+  if (item.character_ref_b64) parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
+  if (item.prev_frame_b64)    parts.push({ inlineData: { mimeType: "image/png", data: item.prev_frame_b64 } });
+  (item.refs_b64 || []).forEach(r => { if (r?.b64) parts.push({ inlineData: { mimeType: r.mime || "image/png", data: r.b64 } }); });
+  parts.push({ text: item.prompt });
+
+  const body = { contents: [{ role: "user", parts }], generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.9 } };
+
+  let last;
+  for (let i=1;i<=attempts;i++){
+    const ctl = new AbortController(); const t = setTimeout(()=> ctl.abort("timeout"), timeoutMs);
+    try{
+      const r = await fetch(url, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify(body), signal: ctl.signal });
+      clearTimeout(t);
+      if (!r.ok) throw new Error(`Gemini ${r.status} ${await r.text().catch(()=> "")}`);
+      const j = await r.json(); const got = findGeminiImagePart(j);
+      if (got?.b64 && got?.mime) return { image_url:`data:${got.mime};base64,${got.b64}`, provider:"google", b64:got.b64 };
+      if (got?.url) return { image_url:got.url, provider:"google" };
+      throw new Error("No image in response");
+    }catch(e){ clearTimeout(t); last=e; await new Promise(r=>setTimeout(r, 160*i)); }
+  }
+  throw last || new Error("Gemini failed");
+}
+
+function styleHint(style="cartoon"){
+  const s=(style||"cartoon").toLowerCase();
+  if (s==="storybook") return "storybook watercolor, soft edges, paper texture, warm and cozy";
+  if (s==="pixar")     return "stylized 3D animated film still (not photographic): enlarged eyes, simplified forms, clean gradients, soft subsurface scattering, gentle rim light, shallow depth of field, expressive face rigs";
+  if (s==="comic")     return "bold comic style, inked lines, flat colors, dynamic action framing, no speech balloons";
+  if (s==="painting")  return "soft painterly illustration, visible brushwork, warm lighting, gentle textures";
+  return "expressive 2D cartoon: thick-and-thin outlines, cel shading, squash-and-stretch poses, vibrant cheerful palette";
+}
+
+const OUTLINE_SYS = `
+Du ska skriva en svensk dispositions-json ("json") för en bilderbok om en HJÄLTE (typ anges av användaren).
+Returnera exakt:{
+ "outline": {
+   "logline": string,
+   "theme": string,
+   "reading_age": number,
+   "tone": string,
+   "motif": string,
+   "beats": [
+     {"id":"setup","summary":string},
+     {"id":"inciting","summary":string},
+     {"id":"progress","summary":string},
+     {"id":"midpoint","summary":string},
+     {"id":"setback","summary":string},
+     {"id":"plan","summary":string},
+     {"id":"climax","summary":string},
+     {"id":"resolution","summary":string}
+   ]
+ }
+}
+Regler:
+- Hjälten är den typ användaren anger (barn/husdjur).
+- Tydligt mål, riktiga hinder, vändpunkt, lösning och varm payoff kopplad till "motif".
+- Håll dig NOGA till användarens tema; undvik sidospår.
+- Anpassa språk till reading_age. Svara ENBART med json.
+`;
+
+const STORY_SYS = `
+Du får en outline för en svensk bilderbok. Skriv nu boken som "json" enligt:
+{ "book":{
+  "title": string,
+  "reading_age": number,
+  "style": "cartoon"|"pixar"|"storybook"|"comic"|"painting",
+  "category": "kids"|"pets",
+  "bible":{ "main_character": { "name": string, "age": number, "physique": string, "identity_keys": string[] }, "wardrobe": string[], "palette": string[], "world": string, "tone": string },
+  "theme": string,
+  "lesson": string,
+  "pages":[ { "page": number, "text": string, "scene": string, "time_of_day": "day"|"golden_hour"|"evening"|"night", "weather":"clear"|"cloudy"|"rain"|"snow" } ]
+}}
+Regler:
+- 12–20 sidor; 2–4 meningar/sida. Svenska.
+- Tydlig drivkraft → hinder → vändpunkt → lösning → payoff kopplad till lesson.
+- "scene" konkret och stödjer temat. Svara ENBART med json.
+`;
+
+function heroDescriptor({ category, name, age, traits }){
+  if (category === "kids") return `HJÄLTE: ett barn som heter ${name||"Nova"} (${parseInt(age||6,10)} år), kännetecken: ${traits||"nyfiken, modig"}.`;
+  return `HJÄLTE: ett husdjur som heter ${name||"Nova"} (${parseInt(age||6,10)} år), kännetecken: ${traits||"lekfull, snäll"}.`;
+}
+function normalizePlan(pages){
+  const out=[]; pages.forEach((p,i)=>{ const order=["EW","M","CU","W"]; const t=order[i%order.length];
+    const lens={EW:28,W:35,M:50,CU:85}[t]||35; const size={EW:30,W:45,M:60,CU:80}[t]||60;
+    out.push({ page:p.page, shot_type:t, lens_mm:lens, subject_size_percent:size }); });
+  return { plan: out };
+}
+function shotLine(f={}){ const map={EW:"extra wide",W:"wide",M:"medium",CU:"close-up"}; return `${map[f.shot_type||"M"]} shot, ~${f.subject_size_percent||60}% subject, ≈${f.lens_mm||35}mm`; }
+function buildSeriesContext(story){
+  const pages = story?.book?.pages || [];
+  const beats = pages.slice(0,12).map(p=>`p${p.page}: ${(p.scene||p.text||"").replace(/\s+/g," ").trim()}`);
+  return [`SERIES CONTEXT — title: ${story?.book?.title || "Sagobok"}`, `beats: ${beats.join(" | ")}`].join("\n");
+}
+function buildFramePrompt({ style, story, page, pageCount, frame, characterName }){
+  const series = buildSeriesContext(story);
+  const styleLine = styleHint(style);
+  const actingHint = (String(style).toLowerCase()==="pixar" || String(style).toLowerCase()==="cartoon")
+    ? "Expressive acting: tydlig mimik, kroppsspråk, dynamiska poser." : "";
+  return [
+    series,
+    `This is page ${page.page} of ${pageCount}.`,
+    `Render in ${styleLine}. No on-screen text or speech bubbles.`,
+    `Keep the same hero (${characterName}) from the reference; adapt pose, camera and lighting.`,
+    actingHint,
+    page.time_of_day ? `Time of day: ${page.time_of_day}.` : "",
+    page.weather ? `Weather: ${page.weather}.` : "",
+    `SCENE: ${page.scene || page.text || ""}`,
+    `FRAMING: ${shotLine(frame)}.`,
+    `VARIETY: make this page visually distinct yet coherent.`
+  ].filter(Boolean).join("\n");
+}
+
+// ============================== PDF helpers =================================
+const PT_PER_MM = 72/25.4;
+const TRIMS = { square210: { w_mm: 210, h_mm: 210, default_bleed_mm: 3 } };
+const mmToPt = (mm)=> mm * PT_PER_MM;
+
+function fontSpecForReadingAge(ra=6){
+  if (ra <= 5)  return { size: 22, leading: 1.35 };
+  if (ra <= 8)  return { size: 18, leading: 1.35 };
+  return { size: 16, leading: 1.30 };
+}
+
+function drawWatermark(page, text = "FÖRHANDSVISNING", color = rgb(0.2, 0.2, 0.2)) {
+  const { width, height } = page.getSize();
+  const fontSize = Math.min(width, height) * 0.08;
+  const angleRad = Math.atan2(height, width);
+  const angleDeg = (angleRad * 180) / Math.PI;
+  page.drawText(text, { x: width*0.1, y: height*0.3, size: fontSize, color, opacity: 0.12, rotate: degrees(angleDeg) });
+}
+
+// --- Cache API: lagra bilder (bytes) via PUT data:URL -> GET liten URL ---
+function dataUrlToBytes(dataUrl) {
+  if (!dataUrl?.startsWith("data:")) return null;
+  const [, meta, b64] = dataUrl.match(/^data:([^;]+);base64,(.+)$/) || [];
+  if (!b64) return null;
+  const bin = atob(b64); const bytes = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+  return { bytes, mime: meta || "application/octet-stream" };
+}
+async function handleCachePut(req, url) {
+  const parts = url.pathname.split("/").filter(Boolean);
+  const sid   = parts[1]; const file = parts[2] || ""; const page = (file.split(".")[0] || "1");
+  if (!sid || !page) return err("Bad cache path", 400);
+  const j = await req.json().catch(()=> ({}));
+  const d = dataUrlToBytes(j.data_url);
+  if (!d) return err("Missing/invalid data_url", 400);
+  const key = new Request(url.toString(), { method: "GET" });
+  const res = new Response(d.bytes, { headers: { "content-type": d.mime || "image/png", "cache-control": "public, max-age=31536000, immutable", ...BASE_CORS, "access-control-allow-origin":"*" } });
+  await caches.default.put(key, res.clone());
+  return ok({ ok:true, url: url.toString(), sid, page: Number(page) });
+}
+async function handleCacheGet(_req, url) {
+  const key = new Request(url.toString(), { method: "GET" });
+  const hit = await caches.default.match(key);
+  if (hit) return new Response(hit.body, { status: 200, headers: hit.headers });
+  return new Response("Not found", { status: 404, headers: { ...BASE_CORS, "access-control-allow-origin":"*" } });
+}
+
+async function fetchImageBytesCacheFirst(urlStr) {
+  try {
+    const req = new Request(urlStr, { method: "GET" });
+    const cached = await caches.default.match(req);
+    if (cached) return new Uint8Array(await cached.arrayBuffer());
+  } catch {}
+  try {
+    const r = await fetch(urlStr);
+    if (!r.ok) return null;
+    return new Uint8Array(await r.arrayBuffer());
+  } catch { return null; }
+}
+async function embedImage(pdfDoc, imageUrlOrDataUrl) {
+  if (!imageUrlOrDataUrl) return null;
+  if (imageUrlOrDataUrl.startsWith("data:image/")) {
+    const d = dataUrlToBytes(imageUrlOrDataUrl);
+    if (!d) return null;
+    try { return await pdfDoc.embedPng(d.bytes); } catch {}
+    try { return await pdfDoc.embedJpg(d.bytes); } catch {}
+    return null;
+  }
+  const bytes = await fetchImageBytesCacheFirst(imageUrlOrDataUrl);
+  if (!bytes) return null;
+  try { return await pdfDoc.embedPng(bytes); } catch {}
+  try { return await pdfDoc.embedJpg(bytes); } catch {}
+  return null;
+}
+function drawWrappedText(page, text, x, yTop, maxW, font, fontSize, lineHeight){
+  const words = String(text||"").split(/\s+/); let line="", y=yTop; const lines=[];
+  for (const w of words){ const test=line?line+" "+w:w; const wpx=font.widthOfTextAtSize(test,fontSize);
+    if (wpx<=maxW) line=test; else { if (line) lines.push(line); line=w; } }
+  if (line) lines.push(line);
+  for (const ln of lines){ page.drawText(ln,{x,y,size:fontSize,font,color:rgb(0.1,0.1,0.1)}); y-=lineHeight; }
+  return y;
+}
+async function buildPdf({ story, images, mode="preview", trim="square210", bleed_mm, watermark_text }) {
+  const trimSpec = TRIMS[trim] || TRIMS.square210;
+  const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
+  const trimW = mmToPt(trimSpec.w_mm), trimH = mmToPt(trimSpec.h_mm);
+  const pageW = trimW + mmToPt(bleed*2), pageH = trimH + mmToPt(bleed*2);
+  const contentX = mmToPt(bleed), contentY = mmToPt(bleed);
+
+  const pdf = await PDFDocument.create();
+  const fontBody = await pdf.embedFont(StandardFonts.Helvetica);
+  const fontTitle = await pdf.embedFont(StandardFonts.HelveticaBold);
+
+  const pages = story?.book?.pages || [];
+  const readingAge = story?.book?.reading_age || 6;
+  const { size: bodySize, leading } = fontSpecForReadingAge(readingAge);
+  const lineH = bodySize * leading;
+
+  const title = story?.book?.title || "Min bok";
+  const heroName = story?.book?.bible?.main_character?.name || "";
+  const theme = story?.book?.theme || "";
+
+  const imgByPage = new Map();
+  (images||[]).forEach(r => { const u = r?.url || r?.image_url; if (r?.page && typeof u==="string") imgByPage.set(r.page, u); });
+
+  // Cover
+  try {
+    const page = pdf.addPage([pageW,pageH]);
+    const margin = mmToPt(18);
+    const titleSize = Math.min(trimW, trimH) * 0.07;
+    const subSize = titleSize * 0.45;
+
+    const coverUrl = imgByPage.get(1);
+    const coverImg = await embedImage(pdf, coverUrl);
+    if (coverImg) {
+      const iw=coverImg.width, ih=coverImg.height;
+      const panel = Math.min(trimW - margin*2, trimH - margin*3);
+      const s = Math.min(panel/iw, panel/ih);
+      const w=iw*s, h=ih*s, x=contentX+(trimW-w)/2, y=contentY+(trimH-h)/2 - mmToPt(8);
+      page.drawImage(coverImg, { x, y, width:w, height:h });
+    }
+    const tWidth = fontTitle.widthOfTextAtSize(title, titleSize);
+    page.drawText(title, { x: contentX+(trimW-tWidth)/2, y: contentY+trimH - margin - titleSize, size:titleSize, font:fontTitle, color:rgb(0.1,0.1,0.1) });
+    const sub = theme ? `${theme}` : (heroName ? `Med ${heroName}` : "");
+    if (sub) {
+      const sWidth = fontBody.widthOfTextAtSize(sub, subSize);
+      page.drawText(sub, { x: contentX+(trimW-sWidth)/2, y: contentY+trimH - margin - titleSize - subSize - mmToPt(3), size:subSize, font:fontBody, color:rgb(0.25,0.25,0.25) });
+    }
+    if (mode==="preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
+  } catch (e) {
+    const page = pdf.addPage([pageW,pageH]);
+    page.drawText("Omslag kunde inte renderas.", { x:mmToPt(15), y:mmToPt(15), size:12, font:fontBody, color:rgb(0.8,0.1,0.1) });
   }
 
-  // NDJSON stream: en rad per färdig bild
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-
-  const byPageCard = new Map();
-  Array.from(els.previewGrid.children).forEach(card=>{
-    const p = Number(card.querySelector(".imgwrap")?.getAttribute("data-page"));
-    if (p) byPageCard.set(p, card);
-  });
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let idx;
-    while ((idx = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, idx).trim();
-      buf = buf.slice(idx + 1);
-      if (!line) continue;
-      let msg;
-      try { msg = JSON.parse(line); } catch { continue; }
-
-      if (msg.status === "started") {
-        updateProgress(0, msg.total || 0, "Startar bildgenerering…");
-        continue;
-      }
-      if (msg.status === "done") {
-        stopQuips(); setStatus("✅ Bilderna är klara.");
-        continue;
-      }
-      if (msg.status === "error") {
-        stopQuips(); setStatus(null);
-        alert("Fel i bildgenerering: " + (msg.message || "okänt fel"));
-        continue;
-      }
-      if (typeof msg.page === "number") {
-        const card = byPageCard.get(msg.page);
-        if (card) {
-          const imgEl = card.querySelector("img");
-          const sk = card.querySelector(".skeleton");
-          if (msg.image_url) {
-            await new Promise(resolve=>{
-              const tmp = new Image();
-              tmp.onload = ()=>{
-                imgEl.src = tmp.src; imgEl.style.opacity = "1"; sk?.remove();
-                const prov = card.querySelector(".img-provider");
-                if (prov){ prov.textContent = "🎨 Gemini"; prov.classList.remove("hidden"); }
-                card.querySelector(".retry-wrap")?.classList.add("hidden");
-                resolve();
-              };
-              tmp.onerror = ()=>{ sk?.remove(); resolve(); };
-              tmp.src = msg.image_url;
-            });
-          } else {
-            sk?.remove();
-            const fb = document.createElement("div");
-            fb.className = "img-fallback";
-            fb.innerHTML = `Kunde inte generera bild
-              <div class="retry-wrap" style="margin-top:8px;">
-                <button class="retry-btn retry" data-page="${msg.page}">🔄 Generera igen</button>
-              </div>`;
-            card.querySelector(".imgwrap").appendChild(fb);
-            card.querySelector(".retry-wrap")?.classList.remove("hidden");
+  // Inre sidor
+  for (const p of pages) {
+    const page = pdf.addPage([pageW,pageH]);
+    const imgUrl = imgByPage.get(p.page);
+    const innerMargin = mmToPt(15);
+    const text = p.text || "";
+    const len = text.length;
+    const layout = len<=180 ? "image_top" : len<=280 ? "text_top" : "full_bleed_panel";
+    try {
+      const img = await embedImage(pdf, imgUrl);
+      if (layout==="image_top") {
+        const imgAreaH = trimH*0.66;
+        if (img) {
+          const iw=img.width, ih=img.height;
+          const maxW=trimW-innerMargin*2, maxH=imgAreaH-innerMargin*1.2;
+          const s=Math.min(maxW/iw, maxH/ih);
+          const w=iw*s, h=ih*s, x=contentX+innerMargin+(maxW-w)/2, y=contentY+trimH-innerMargin-h;
+          page.drawImage(img, { x, y, width:w, height:h });
+        }
+        const textMaxW = trimW - innerMargin*2;
+        const textX = contentX + innerMargin;
+        const textTopY = contentY + (trimH * 0.33);
+        drawWrappedText(page, text, textX, textTopY, textMaxW, fontBody, bodySize, lineH);
+      } else if (layout==="text_top") {
+        const textMaxW = trimW - innerMargin*2;
+        const textX = contentX + innerMargin;
+        const textTopY = contentY + trimH - innerMargin - bodySize;
+        const afterY = drawWrappedText(page, text, textX, textTopY, textMaxW, fontBody, bodySize, lineH);
+        if (img) {
+          const iw=img.width, ih=img.height;
+          const maxW=textMaxW; const maxH = (afterY - (contentY+innerMargin)) - mmToPt(6);
+          if (maxH > mmToPt(20)) {
+            const s=Math.min(maxW/iw, maxH/ih); const w=iw*s, h=ih*s;
+            const x=textX + (maxW-w)/2, y=contentY+innerMargin;
+            page.drawImage(img, { x, y, width:w, height:h });
           }
         }
-        const prog = msg?.progress || {};
-        if (prog.total) updateProgress(prog.completed||0, prog.total, `Illustrerar ${prog.completed||0}/${prog.total} …`);
+      } else {
+        if (img) {
+          const iw=img.width, ih=img.height;
+          const s=Math.max(trimW/iw, trimH/ih);
+          const w=iw*s, h=ih*s, x=contentX+(trimW-w)/2, y=contentY+(trimH-h)/2;
+          page.drawImage(img, { x, y, width:w, height:h });
+        }
+        const panelH = Math.max(mmToPt(24), bodySize*1.3*2.2);
+        const pad = mmToPt(8);
+        const panelX = contentX, panelY = contentY + mmToPt(10), panelW = trimW;
+        page.drawRectangle({ x:panelX, y:panelY, width:panelW, height:panelH, color:rgb(1,1,1) });
+        const textMaxW = panelW - pad*2, textX = panelX + pad, textTopY = panelY + panelH - pad - bodySize;
+        drawWrappedText(page, text, textX, textTopY, textMaxW, fontBody, bodySize, bodySize*1.3);
       }
+      if (mode==="preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
+    } catch {
+      page.drawText(`Sida ${p?.page||"?"}: kunde inte rendera.`, { x:mmToPt(15), y:mmToPt(15), size:12, font:fontBody, color:rgb(0.8,0.1,0.1) });
+      if (mode==="preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
     }
   }
+
+  // Baksida
+  const back = pdf.addPage([pageW,pageH]);
+  const margin = mmToPt(18);
+  const blurb = story?.book?.lesson ? `Lärdom: ${story.book.lesson}` : `En berättelse skapad med BokPiloten.`;
+  back.drawText("Baksida", { x: contentX+margin, y: contentY+trimH - margin - 18, size:18, font:fontTitle, color:rgb(0.1,0.1,0.1) });
+  drawWrappedText(back, blurb, contentX+margin, contentY+trimH - margin - 18 - line2, trimW - margin*2, await pdf.embedFont(StandardFonts.Helvetica), bodySize, line2);
+  if (mode==="preview") drawWatermark(back, "FÖRHANDSVISNING");
+
+  return await pdf.save();
 }
 
-/* ========= Submit ========= */
-async function onSubmit(e){
-  e.preventDefault();
-  const problems = validateForm();
-  if (problems.length) { alert("Korrigera:\n\n• " + problems.join("\n• ")); return; }
+// =============================== API ========================================
+export default {
+  async fetch(req, env) {
+    const url = new URL(req.url);
 
-  readForm();
-  renderSkeleton(4);
-  setStatus("✏️ Skriver berättelsen…"); updateProgress(0,3,"1/3 – Berättelsen");
-  startQuips();
-  if (els.submitBtn){ els.submitBtn.disabled = true; els.submitBtn.innerHTML = 'Skapar förhandsvisning… <span class="spinner"></span>'; }
-
-  try{
-    // 1) STORY + PLAN
-    const storyRes = await fetch(`${BACKEND}/api/story`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        name: state.form.name,
-        age: state.form.age,
-        reading_age: state.form.reading_age,
-        pages: state.form.pages,
-        category: state.form.category,
-        style: state.form.style,
-        theme: state.form.theme,
-        traits: state.form.traits
-      }),
-    });
-    const storyData = await storyRes.json().catch(()=> ({}));
-    if (!storyRes.ok || storyData?.error) throw new Error(storyData?.error || `HTTP ${storyRes.status}`);
-
-    state.story = storyData.story;
-    state.plan = storyData.plan || { plan: [] };
-    state.planMap = new Map((state.plan.plan || []).map(p => [p.page, p]));
-
-    const pages = state.story?.book?.pages || [];
-    if (!pages.length) throw new Error("Berättelsen saknar sidor.");
-    buildCards(pages, state.visibleCount);
-
-    // 2) REF IMAGE
-    setStatus("🖼️ Låser hjälten (referens)…"); updateProgress(1,3,"2/3 – Referens");
-    const refRes = await fetch(`${BACKEND}/api/ref-image`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        style: state.form.style,
-        photo_b64: state.form.refMode === "photo" ? (state.form.photoDataUrl || null) : null,
-        bible: state.story?.book?.bible || null,
-        traits: state.form.traits || "",
-        category: state.form.category
-      })
-    });
-    const refData = await refRes.json().catch(()=> ({}));
-    if (!refRes.ok || refData?.error) throw new Error(refData?.error || `HTTP ${refRes.status}`);
-    state.refB64 = refData.ref_image_b64 || null;
-    if (!state.refB64) throw new Error("Ingen referensbild kunde hämtas/skapas.");
-
-    // 3) IMAGES (STREAM)
-    updateProgress(2,3,"3/3 – Bildplan");
-    await generateAllImagesStreaming();
-
-    stopQuips();
-    setStatus("✅ Klart! Sagans förhandsvisning är redo.");
-  } catch (e) {
-    console.error(e);
-    stopQuips(); setStatus(null);
-    alert("Ett fel uppstod: " + (e?.message || e));
-  } finally {
-    if (els.submitBtn){ els.submitBtn.disabled = false; els.submitBtn.textContent = "Skapa förhandsvisning"; }
-  }
-}
-
-/* ========= Regenerera (singel) ========= */
-async function regenerateOne(page){
-  const pageObj = state.pageMap.get(page);
-  const planObj = state.planMap.get(page) || null;
-  if (!pageObj || !state.refB64) return;
-
-  const card = Array.from(els.previewGrid.children).find(a =>
-    a.querySelector(`.imgwrap[data-page="${page}"]`));
-  if (!card) return;
-
-  const wrap = card.querySelector(".imgwrap");
-  const imgEl = card.querySelector("img");
-  wrap.querySelector(".img-fallback")?.remove();
-  const sk = document.createElement("div"); sk.className = "skeleton"; wrap.prepend(sk);
-
-  try{
-    const res = await fetch(`${BACKEND}/api/image/regenerate`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        style: state.form.style,
-        ref_image_b64: state.refB64,
-        page_text: pageObj.text,
-        scene_text: (pageObj.scene || "").replace(/“.+?”|".+?"/g,"").trim(),
-        frame: planObj,
-        story: state.story
-      })
-    });
-    const j = await res.json().catch(()=> ({}));
-    if (!res.ok || j?.error) throw new Error(j?.error || `HTTP ${res.status}`);
-
-    await new Promise(resolve=>{
-      const tmp = new Image();
-      tmp.onload = ()=>{
-        imgEl.src = tmp.src; imgEl.style.opacity = "1"; sk.remove();
-        const prov = card.querySelector(".img-provider");
-        if (prov){ prov.textContent = "🎨 Gemini"; prov.classList.remove("hidden"); }
-        card.querySelector(".retry-wrap")?.classList.add("hidden");
-        resolve();
-      };
-      tmp.onerror = ()=>{ sk.remove(); resolve(); };
-      tmp.src = j.image_url;
-    });
-  } catch {
-    sk.remove();
-    const fb = document.createElement("div");
-    fb.className = "img-fallback";
-    fb.innerHTML = `Kunde inte generera bild
-      <div class="retry-wrap" style="margin-top:8px;">
-        <button class="retry-btn retry" data-page="${page}">🔄 Generera igen</button>
-      </div>`;
-    wrap.appendChild(fb);
-  }
-}
-
-/* ========= PDF: cachea bilder → skicka URL:er ========= */
-async function uploadImagesToCacheAndBuildList() {
-  const sid = uuid();
-  const results = [];
-  const cards = Array.from(els.previewGrid.children);
-  for (const card of cards) {
-    const wrap = card.querySelector(".imgwrap");
-    const page = Number(wrap?.getAttribute("data-page"));
-    const img = wrap?.querySelector("img")?.src || "";
-    if (!page || !img) continue;
-
-    if (/^https?:\/\//i.test(img)) { results.push({ page, url: img }); continue; }
-    if (img.startsWith("data:image/")) {
-      const putUrl = `${BACKEND}/cache/${sid}/${page}.png`;
-      const res = await fetch(putUrl, {
-        method: "PUT",
-        mode: "cors",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ data_url: img })
-      });
-      const j = await res.json().catch(()=> ({}));
-      if (!res.ok || j?.error || !j?.url) throw new Error(j?.error || `Cache PUT misslyckades för sida ${page}`);
-      results.push({ page, url: j.url });
+    // Preflight
+    if (req.method === "OPTIONS") {
+      const origin = req.headers.get("Origin") || "*";
+      return new Response(null, { status: 204, headers: { "access-control-allow-origin": origin, ...BASE_CORS, "vary":"Origin, Access-Control-Request-Method, Access-Control-Request-Headers" } });
     }
-  }
-  return results;
-}
-
-const pdfBtn = document.getElementById("pdfBtn");
-if (pdfBtn) {
-  pdfBtn.addEventListener("click", async () => {
-    if (!state.story) { alert("Skapa berättelsen först."); return; }
 
     try {
-      setStatus("📄 Förbereder PDF… (optimerar bilder)"); startQuips();
-      const imagesSmall = await uploadImagesToCacheAndBuildList();
-      const res = await fetch(`${BACKEND}/api/pdf`, {
-        method: "POST",
-        mode: "cors",
-        headers: { "content-type":"application/json" },
-        body: JSON.stringify({
-          story: state.story,
-          images: imagesSmall,   // [{page, url}]
-          mode: "preview",
-          trim: "square210",
-          watermark_text: "FÖRHANDSVISNING – BokPiloten"
-        })
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-      setStatus("✅ PDF skapad.");
+      // Health
+      if (req.method === "GET" && url.pathname === "/") {
+        return withCors(ok({ ok:true, ts: Date.now() }), req);
+      }
+
+      // Cache endpoints
+      if (url.pathname.startsWith("/cache/") && req.method === "PUT") return withCors(await handleCachePut(req, url), req);
+      if (url.pathname.startsWith("/cache/") && req.method === "GET")  return withCors(await handleCacheGet(req, url), req);
+
+      // STORY
+      if (req.method === "POST" && url.pathname === "/api/story") {
+        try {
+          const body = await req.json();
+          const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
+          const targetAge = Number.isFinite(parseInt(reading_age,10)) ? parseInt(reading_age,10) : parseInt(age||6,10);
+
+          const outlineUser = `${heroDescriptor({ category, name, age: targetAge, traits })}\nTema: "${theme || ""}".\nLäsålder: ${targetAge}. Svara ENBART med json.`;
+          const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
+
+          const storyUser = `OUTLINE:\n${JSON.stringify(outline)}\n${heroDescriptor({ category, name, age: targetAge, traits })}\nLäsålder: ${targetAge}. Sidor: ${pages||12}. Stil: ${style||"cartoon"}. Kategori: ${category||"kids"}.\nBoken ska ha tydlig lärdom (lesson) kopplad till temat. Svara ENBART med json.`;
+          const story = await openaiJSON(env, STORY_SYS, storyUser);
+          const plan  = normalizePlan(story?.book?.pages || []);
+          return withCors(ok({ story, plan, previewVisible: 4 }), req);
+        } catch (e) {
+          return withCors(err(e?.message||"Story failed", 500), req);
+        }
+      }
+
+      // REF-IMAGE
+      if (req.method === "POST" && url.pathname === "/api/ref-image") {
+        try{
+          const { style="cartoon", photo_b64, bible, traits="", category="pets" } = await req.json();
+          if (photo_b64) {
+            const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
+            return withCors(ok({ ref_image_b64: b64 }), req);
+          }
+          const prompt = characterCardPrompt({ style, bible, traits, category });
+          const g = await geminiImage(env, { prompt }, 45000, 2);
+          if (!g?.b64) return withCors(ok({ ref_image_b64: null }), req);
+          return withCors(ok({ ref_image_b64: g.b64 }), req);
+        }catch(e){
+          return withCors(err("Ref generation failed", 500), req);
+        }
+      }
+
+      // IMAGES (STREAMING NDJSON)
+      if (req.method === "POST" && url.pathname === "/api/images") {
+        // Streama tillbaka en rad JSON per färdig bild
+        const { style="cartoon", ref_image_b64, story, plan, concurrency=3 } = await req.json();
+        if (!story?.book?.pages?.length) return withCors(err("No pages", 400), req);
+        if (!ref_image_b64) return withCors(err("Missing reference image", 400), req);
+
+        const { readable, writable } = new TransformStream();
+        const writer = writable.getWriter();
+        const enc = new TextEncoder();
+
+        // Hjälpfunktion att skriva en NDJSON-rad + flush
+        const writeLine = async (obj) => writer.write(enc.encode(JSON.stringify(obj) + "\n"));
+
+        // Svara omedelbart med en stream så kopplingen hålls levande
+        const resp = new Response(readable, {
+          status: 200,
+          headers: {
+            "content-type": "application/x-ndjson; charset=utf-8",
+            "cache-control": "no-store",
+            ...BASE_CORS,
+            "access-control-allow-origin":"*"
+          }
+        });
+
+        // Kör genereringen parallellt i samma request, men skicka resultat löpande
+        const allPages = story.book.pages;
+        const frames = (plan?.plan || []);
+        const pageCount = allPages.length;
+        const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
+
+        (async () => {
+          try {
+            await writeLine({ status:"started", total: pageCount });
+
+            // Enkel pool
+            const jobs = allPages.map(pg => {
+              const f = frames.find(x => x.page === pg.page) || {};
+              const prompt = buildFramePrompt({ style, story, page: pg, pageCount, frame: f, characterName: heroName });
+              return { page: pg.page, prompt };
+            });
+
+            let idx = 0;
+            let completed = 0;
+            const CONC = Math.min(Math.max(parseInt(concurrency||3,10),1),6);
+
+            async function worker(){
+              while (idx < jobs.length) {
+                const i = idx++; const item = jobs[i];
+                try{
+                  const g = await geminiImage(env, { prompt: item.prompt, character_ref_b64: ref_image_b64 }, 45000, 2);
+                  completed++;
+                  await writeLine({ page: item.page, image_url: g.image_url, provider: g.provider || "google", progress: { completed, total: pageCount } });
+                }catch(e){
+                  completed++;
+                  await writeLine({ page: item.page, error: String(e?.message||e), progress: { completed, total: pageCount } });
+                }
+              }
+            }
+            await Promise.all(Array.from({length: CONC}, worker));
+
+            await writeLine({ status:"done", total: pageCount });
+          } catch (e) {
+            await writeLine({ status:"error", message: String(e?.message||e) });
+          } finally {
+            await writer.close();
+          }
+        })();
+
+        return withCors(resp, req);
+      }
+
+      // PDF
+      if (req.method === "POST" && url.pathname === "/api/pdf") {
+        try {
+          const body = await req.json();
+          const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
+          if (!story?.book) return withCors(err("Missing story", 400), req);
+          if (!Array.isArray(images)) return withCors(err("Missing images[]", 400), req);
+          const fixed = images.map(r => ({ page: r.page, url: r.url || r.image_url }));
+          const pdfBytes = await buildPdf({
+            story,
+            images: fixed,
+            mode: mode==="print" ? "print" : "preview",
+            trim: trim || "square210",
+            bleed_mm,
+            watermark_text: watermark_text || (mode==="preview" ? "FÖRHANDSVISNING" : null),
+          });
+          return withCors(new Response(pdfBytes, {
+            status: 200,
+            headers: {
+              "content-type": "application/pdf",
+              "content-disposition": `inline; filename="bokpiloten-${Date.now()}.pdf"`,
+              "cache-control": mode==="preview" ? "no-store" : "public, max-age=31536000, immutable",
+              ...BASE_CORS,
+              "access-control-allow-origin":"*"
+            }
+          }), req);
+        } catch (e) {
+          return withCors(err(e?.message || "PDF failed", 500), req);
+        }
+      }
+
+      // 404
+      return withCors(new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404, headers: { "content-type":"application/json; charset=utf-8" }
+      }), req);
+
     } catch (e) {
-      console.error(e);
-      setStatus(null);
-      alert("Kunde inte skapa PDF: " + (e?.message || e));
-    } finally {
-      stopQuips();
+      return withCors(err("Server error", 500), req);
     }
-  });
-}
-
-/* ========= Demo ========= */
-function onDemo(){
-  const total = 12;
-  els.previewGrid.innerHTML = "";
-  for (let i=0;i<total;i++){
-    const card = document.createElement("article");
-    card.className = "thumb";
-    if (i >= state.visibleCount) card.classList.add("locked");
-    card.innerHTML = `
-      <div class="imgwrap" data-page="${i+1}"><img src="https://picsum.photos/seed/demo_${i}/600/400" /></div>
-      <div class="txt">Sida ${i+1}: ${escapeHtml(state.form.name)}s lilla äventyr.</div>`;
-    els.previewGrid.appendChild(card);
   }
-  els.previewSection.classList.remove("hidden");
-  smoothScrollTo(els.previewSection);
-}
-
-/* ========= Events ========= */
-function bindEvents(){
-  els.catKidsBtn?.addEventListener("click", ()=> setCategory("kids"));
-  els.catPetsBtn?.addEventListener("click", ()=> setCategory("pets"));
-  els.refDescBtn?.addEventListener("click", ()=> setRefMode("desc"));
-  els.refPhotoBtn?.addEventListener("click", ()=> setRefMode("photo"));
-  els.charPhoto?.addEventListener("change", onPhotoChange);
-
-  readingAgeSeg.forEach(btn=>{
-    btn.addEventListener("click", ()=>{
-      readingAgeSeg.forEach(b=> b.classList.remove("active"));
-      btn.classList.add("active");
-      setReadingAgeByChip(btn.getAttribute("data-readage"));
-    });
-  });
-
-  ["name","age","pages","style","theme","traits","readingAge"].forEach(id=>{
-    const el = document.getElementById(id);
-    el?.addEventListener("input", ()=> { readForm(); saveForm(); });
-  });
-
-  els.form?.addEventListener("submit", onSubmit);
-  els.demoBtn?.addEventListener("click", onDemo);
-
-  els.previewGrid?.addEventListener("click", (e)=>{
-    const t = e.target;
-    if (t && t.classList.contains("retry-btn")) {
-      e.preventDefault();
-      const page = Number(t.getAttribute("data-page"));
-      if (page) regenerateOne(page);
-    }
-  });
-
-  els.navToggle?.addEventListener("click", ()=>{
-    els.mobileMenu.classList.toggle("open");
-    const open = els.mobileMenu.classList.contains("open");
-    els.navToggle.setAttribute("aria-expanded", open ? "true":"false");
-    els.mobileMenu.setAttribute("aria-hidden", open ? "false":"true");
-  });
-}
-
-/* ========= Init ========= */
-(function init(){
-  loadForm();
-  if (state.form.refMode !== "photo" && state.form.refMode !== "desc") state.form.refMode = "photo";
-  writeForm(); bindEvents(); setStatus(null);
-})();
+};
