@@ -40,8 +40,8 @@ const state = {
   form: {
     category: "kids",
     name: "Nova",
-    age: 6,              // hjälte
-    reading_age: 6,      // ny!
+    age: 6,
+    reading_age: 6,
     pages: 16,
     style: "cartoon",
     theme: "",
@@ -62,6 +62,11 @@ function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
 function toInt(v, fb=0){ const n = parseInt(v,10); return Number.isFinite(n) ? n : fb; }
 function escapeHtml(s){ return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;"); }
 function smoothScrollTo(el){ el?.scrollIntoView({ behavior: "smooth", block: "start" }); }
+function uuid(){
+  const a = new Uint8Array(8);
+  crypto.getRandomValues(a);
+  return [...a].map(x=>x.toString(16).padStart(2,"0")).join("");
+}
 
 /* ===== Levande status ===== */
 const STATUS_QUIPS = [
@@ -323,7 +328,8 @@ async function onSubmit(e){
         style: state.form.style,
         photo_b64: state.form.refMode === "photo" ? (state.form.photoDataUrl || null) : null,
         bible: state.story?.book?.bible || null,
-        traits: state.form.traits || ""
+        traits: state.form.traits || "",
+        category: state.form.category
       })
     });
     const refData = await refRes.json().catch(()=> ({}));
@@ -456,6 +462,76 @@ async function regenerateOne(page){
   }
 }
 
+/* ========= PDF: cachea bilder → skicka URL:er ========= */
+async function uploadImagesToCacheAndBuildList() {
+  const sid = uuid();
+  const results = [];
+  const cards = Array.from(els.previewGrid.children);
+  for (const card of cards) {
+    const wrap = card.querySelector(".imgwrap");
+    const page = Number(wrap?.getAttribute("data-page"));
+    const img = wrap?.querySelector("img")?.src || "";
+    if (!page || !img) continue;
+
+    // Om redan URL (http/https) – använd direkt. Om data: – ladda upp.
+    if (/^https?:\/\//i.test(img)) {
+      results.push({ page, url: img });
+      continue;
+    }
+    if (img.startsWith("data:image/")) {
+      const putUrl = `${BACKEND}/cache/${sid}/${page}.png`;
+      const res = await fetch(putUrl, {
+        method: "PUT",
+        mode: "cors",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ data_url: img })
+      });
+      const j = await res.json().catch(()=> ({}));
+      if (!res.ok || j?.error || !j?.url) throw new Error(j?.error || `Cache PUT misslyckades för sida ${page}`);
+      results.push({ page, url: j.url });
+    }
+  }
+  return results;
+}
+
+const pdfBtn = document.getElementById("pdfBtn");
+if (pdfBtn) {
+  pdfBtn.addEventListener("click", async () => {
+    if (!state.story) { alert("Skapa berättelsen först."); return; }
+
+    try {
+      setStatus("📄 Förbereder PDF… (optimerar bilder)"); startQuips();
+      // 1) Ladda upp data: bilder till backend-cache → få små URL:er
+      const imagesSmall = await uploadImagesToCacheAndBuildList();
+
+      // 2) Skicka liten payload till /api/pdf
+      const res = await fetch(`${BACKEND}/api/pdf`, {
+        method: "POST",
+        mode: "cors",
+        headers: { "content-type":"application/json" },
+        body: JSON.stringify({
+          story: state.story,
+          images: imagesSmall,           // [{page, url}]
+          mode: "preview",
+          trim: "square210",
+          watermark_text: "FÖRHANDSVISNING – BokPiloten"
+        })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setStatus("✅ PDF skapad.");
+    } catch (e) {
+      console.error(e);
+      setStatus(null);
+      alert("Kunde inte skapa PDF: " + (e?.message || e));
+    } finally {
+      stopQuips();
+    }
+  });
+}
+
 /* ========= Demo ========= */
 function onDemo(){
   const total = 12;
@@ -465,7 +541,7 @@ function onDemo(){
     card.className = "thumb";
     if (i >= state.visibleCount) card.classList.add("locked");
     card.innerHTML = `
-      <div class="imgwrap"><img src="https://picsum.photos/seed/demo_${i}/600/400" /></div>
+      <div class="imgwrap" data-page="${i+1}"><img src="https://picsum.photos/seed/demo_${i}/600/400" /></div>
       <div class="txt">Sida ${i+1}: ${escapeHtml(state.form.name)}s lilla äventyr.</div>`;
     els.previewGrid.appendChild(card);
   }
@@ -511,74 +587,6 @@ function bindEvents(){
     const open = els.mobileMenu.classList.contains("open");
     els.navToggle.setAttribute("aria-expanded", open ? "true":"false");
     els.mobileMenu.setAttribute("aria-hidden", open ? "false":"true");
-  });
-}
-
-/* ========= PDF-knapp – nytt 2-stegsflöde (cache + liten /api/pdf) ========= */
-const pdfBtn = document.getElementById("pdfBtn");
-if (pdfBtn) {
-  pdfBtn.addEventListener("click", async () => {
-    if (!state.story) { alert("Skapa berättelsen först."); return; }
-
-    // 1) Samla bilder från gridden
-    const raw = [];
-    Array.from(els.previewGrid.children).forEach(card=>{
-      const wrap = card.querySelector(".imgwrap");
-      const page = Number(wrap?.getAttribute("data-page"));
-      const img  = wrap?.querySelector("img")?.src;
-      if (page && img) raw.push({ page, data_url: img });
-    });
-    if (!raw.length) { alert("Inga bilder att rendera."); return; }
-
-    // 2) Ladda upp per sida till Worker-cache → få stabil URL
-    const sid = String(Date.now());
-    const cached = [];
-    try {
-      setStatus("📦 Förbereder PDF… (cachar bilder)");
-      let done = 0;
-      for (const row of raw) {
-        const putRes = await fetch(`${BACKEND}/cache/${sid}/${row.page}.png`, {
-          method: "PUT",
-          headers: { "content-type":"application/json" },
-          body: JSON.stringify({ data_url: row.data_url })
-        });
-        const putJson = await putRes.json().catch(()=> ({}));
-        if (!putRes.ok || putJson?.error || !putJson?.url) {
-          throw new Error(putJson?.error || `Cache PUT misslyckades för sida ${row.page}`);
-        }
-        cached.push({ page: row.page, url: putJson.url });
-        done++; updateProgress(done, raw.length, `Cachar ${done}/${raw.length}…`);
-      }
-    } catch (e) {
-      setStatus(null);
-      alert("Kunde inte cacha bilder: " + (e?.message || e));
-      return;
-    }
-
-    // 3) Liten payload till /api/pdf
-    try {
-      setStatus("🧾 Skapar PDF…");
-      const res = await fetch(`${BACKEND}/api/pdf`, {
-        method: "POST",
-         mode: "cors",
-        headers: { "content-type":"application/json" },
-        body: JSON.stringify({
-          story: state.story,
-          images: cached,            // [{page, url}]
-          mode: "preview",
-          trim: "square210",
-          watermark_text: "FÖRHANDSVISNING – BokPiloten"
-        })
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-      setStatus("✅ PDF klar!");
-    } catch (e) {
-      setStatus(null);
-      alert("Kunde inte skapa PDF: " + (e?.message || e));
-    }
   });
 }
 
