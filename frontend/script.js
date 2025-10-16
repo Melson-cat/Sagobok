@@ -560,6 +560,7 @@ if (pdfBtn) {
       setStatus("🧾 Skapar PDF…");
       const res = await fetch(`${BACKEND}/api/pdf`, {
         method: "POST",
+         mode: "cors",
         headers: { "content-type":"application/json" },
         body: JSON.stringify({
           story: state.story,
