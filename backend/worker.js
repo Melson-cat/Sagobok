@@ -13,7 +13,9 @@ const CORS_HEADERS = {
   "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
   "access-control-allow-headers": "*",
   "access-control-max-age": "600",
+  "access-control-expose-headers": "Content-Disposition"
 };
+
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
@@ -547,7 +549,7 @@ async function handlePdfRequest(req) {
         "content-type": "application/pdf",
         "cache-control": mode === "preview" ? "no-store" : "public, max-age=31536000, immutable",
         "content-disposition": `inline; filename="bokpiloten-${Date.now()}.pdf"`,
-        "access-control-allow-origin": "*"
+         ...CORS_HEADERS
       }
     });
   } catch (e) {
