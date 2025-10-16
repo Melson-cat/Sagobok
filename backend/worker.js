@@ -1,8 +1,9 @@
 // ============================================================================
-// BokPiloten – Worker v18 (Cloudflare bundle-ready)
-// - Robust gratisflöde för PDF: cachea bilder per sida i Cache API
-// - /cache PUT/GET för per-sida-uppladdning → små URL:er till /api/pdf
-// - /api/story, /api/ref-image, /api/images, /api/image/regenerate, /api/pdf
+// BokPiloten – Worker v19 (Cloudflare bundle-ready)
+// - Gratis & robust PDF-flöde med Cache API (per-sida)
+// - Global CORS via withCors() + yttre try/catch (fixar "No A-C-A-O"-fel)
+// - Endpoints: /api/story, /api/ref-image, /api/images, /api/image/regenerate, /api/pdf
+// - Cache endpoints: PUT/GET /cache/:sid/:page.png
 // ============================================================================
 
 import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
@@ -25,6 +26,13 @@ const JSON_HEADERS = {
 const ok  = (data, init={}) => new Response(JSON.stringify(data), { status: init.status || 200, headers: JSON_HEADERS });
 const err = (msg, code=400, extra={}) => ok({ error: msg, ...extra }, { status: code });
 const log = (...a) => { try { console.log(...a); } catch {} };
+
+// Lägg CORS på alla svar (även fel från oväntade throws)
+function withCors(response) {
+  const h = new Headers(response?.headers || {});
+  Object.entries(CORS_HEADERS).forEach(([k, v]) => h.set(k, v));
+  return new Response(response?.body || null, { status: response?.status || 200, headers: h });
+}
 
 // --------------------------- MODEL CHOICES ----------------------------------
 const OPENAI_MODEL = "gpt-4o-mini";
@@ -199,7 +207,7 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName 
 function characterCardPrompt({ style, bible, traits, category }){
   const mc=bible?.main_character||{};
   const name=mc.name||"Nova";
-  const phys=mc.physique||traits||(category==="kids" ? "child with casual outfit" : "fluffy gray cat with curious eyes");
+  const phys=mc.physique||traits||(category==="kids") ? "child with casual outfit" : "fluffy gray cat with curious eyes";
   const who = (category==="kids") ? "one child only" : "one pet only";
   return [
     `Character reference in ${styleHint(style)}.`,
@@ -286,15 +294,13 @@ async function handleCacheGet(_req, url) {
   return new Response("Not found", { status: 404, headers: CORS_HEADERS });
 }
 
-// === PDF-core: hämta alltid bytes via URL (ej data-URL för minne/stabilitet) ===
-// Hämta bytes för en cache-URL (cache först, nät sen)
+// === PDF-core: cache-first inbäddning ===
 async function fetchImageBytesCacheFirst(urlStr) {
   try {
     const req = new Request(urlStr, { method: "GET" });
     const cached = await caches.default.match(req);
     if (cached) return new Uint8Array(await cached.arrayBuffer());
-  } catch {} // fortsätt till nät-fallback
-
+  } catch {}
   try {
     const r = await fetch(urlStr);
     if (!r.ok) return null;
@@ -303,8 +309,6 @@ async function fetchImageBytesCacheFirst(urlStr) {
     return null;
   }
 }
-
-// Bädda in PNG/JPG i PDF från URL, med cache-first
 async function embedImage(pdfDoc, imageUrl) {
   if (!imageUrl) return null;
   const bytes = await fetchImageBytesCacheFirst(imageUrl);
@@ -522,72 +526,75 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
 }
 
 async function handlePdfRequest(req) {
-  try {
-    const body = await req.json();
-    const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
-    if (!story?.book) return err("Missing story", 400);
-    if (!Array.isArray(images)) return err("Missing images[]", 400);
+  const body = await req.json();
+  const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
+  if (!story?.book) return err("Missing story", 400);
+  if (!Array.isArray(images)) return err("Missing images[]", 400);
 
-    for (const row of images) {
-      if (!(row && Number.isFinite(row.page) && typeof row.url === "string")) {
-        return err("images[] must be [{page:number, url:string}]", 400);
-      }
+  for (const row of images) {
+    if (!(row && Number.isFinite(row.page) && typeof row.url === "string")) {
+      return err("images[] must be [{page:number, url:string}]", 400);
     }
-
-    const pdfBytes = await buildPdf({
-      story,
-      images,
-      mode: mode === "print" ? "print" : "preview",
-      trim: trim || "square210",
-      bleed_mm,
-      watermark_text: watermark_text || (mode === "preview" ? "FÖRHANDSVISNING" : null),
-    });
-
-    return new Response(pdfBytes, {
-      status: 200,
-      headers: {
-        "content-type": "application/pdf",
-        "cache-control": mode === "preview" ? "no-store" : "public, max-age=31536000, immutable",
-        "content-disposition": `inline; filename="bokpiloten-${Date.now()}.pdf"`,
-         ...CORS_HEADERS
-      }
-    });
-  } catch (e) {
-    console.error("PDF ERROR:", e?.stack || e);
-    return err(e?.message || "PDF failed", 500);
   }
+
+  const pdfBytes = await buildPdf({
+    story,
+    images,
+    mode: mode === "print" ? "print" : "preview",
+    trim: trim || "square210",
+    bleed_mm,
+    watermark_text: watermark_text || (mode === "preview" ? "FÖRHANDSVISNING" : null),
+  });
+
+  return new Response(pdfBytes, {
+    status: 200,
+    headers: {
+      "content-type": "application/pdf",
+      "cache-control": mode === "preview" ? "no-store" : "public, max-age=31536000, immutable",
+      "content-disposition": `inline; filename="bokpiloten-${Date.now()}.pdf"`,
+      ...CORS_HEADERS
+    }
+  });
 }
 
 // =============================== API ========================================
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
-    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
-    if (req.method === "GET" && url.pathname === "/") return ok({ ok: true, ts: Date.now() });
 
-    // CACHE PUT/GET (måste komma före /api/pdf)
-    if (url.pathname.startsWith("/cache/") && req.method === "PUT") {
-      return handleCachePut(req, url);
-    }
-    if (url.pathname.startsWith("/cache/") && req.method === "GET") {
-      return handleCacheGet(req, url);
+    // Preflight svar med CORS
+    if (req.method === "OPTIONS") {
+      return withCors(new Response(null, { status: 204, headers: CORS_HEADERS }));
     }
 
-    // STORY
-    if (req.method === "POST" && url.pathname === "/api/story") {
-      try {
-        const body = await req.json();
-        const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
-        const targetAge = Number.isFinite(parseInt(reading_age,10)) ? parseInt(reading_age,10) : parseInt(age||6,10);
+    try {
+      if (req.method === "GET" && url.pathname === "/") {
+        return withCors(ok({ ok: true, ts: Date.now() }));
+      }
 
-        const outlineUser = `
+      // CACHE PUT/GET (måste komma före /api/pdf)
+      if (url.pathname.startsWith("/cache/") && req.method === "PUT") {
+        return withCors(await handleCachePut(req, url));
+      }
+      if (url.pathname.startsWith("/cache/") && req.method === "GET") {
+        return withCors(await handleCacheGet(req, url));
+      }
+
+      // STORY
+      if (req.method === "POST" && url.pathname === "/api/story") {
+        try {
+          const body = await req.json();
+          const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
+          const targetAge = Number.isFinite(parseInt(reading_age,10)) ? parseInt(reading_age,10) : parseInt(age||6,10);
+
+          const outlineUser = `
 ${heroDescriptor({ category, name, age: targetAge, traits })}
 Tema: "${theme || ""}".
 Läsålder: ${targetAge}. Svara ENBART med json.
 `.trim();
-        const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
+          const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
 
-        const storyUser = `
+          const storyUser = `
 OUTLINE:
 ${JSON.stringify(outline)}
 ${heroDescriptor({ category, name, age: targetAge, traits })}
@@ -595,91 +602,116 @@ Läsålder: ${targetAge}. Sidor: ${pages||12}. Stil: ${style||"cartoon"}. Katego
 Boken ska ha tydlig lärdom (lesson) kopplad till temat. Följ temat noga.
 Svara ENBART med json.
 `.trim();
-        const story = await openaiJSON(env, STORY_SYS, storyUser);
-        const plan  = normalizePlan(story?.book?.pages || []);
-        return ok({ story, plan, previewVisible: 4 });
-      } catch (e) { log("story error", e?.message); return err(e.message||"Story failed", 500); }
-    }
-
-    // REF-IMAGE
-    if (req.method === "POST" && url.pathname === "/api/ref-image") {
-      try{
-        const { style="cartoon", photo_b64, bible, traits="", category="pets" } = await req.json();
-        if (photo_b64) {
-          const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
-          return ok({ ref_image_b64: b64 });
+          const story = await openaiJSON(env, STORY_SYS, storyUser);
+          const plan  = normalizePlan(story?.book?.pages || []);
+          return withCors(ok({ story, plan, previewVisible: 4 }));
+        } catch (e) {
+          log("story error", e?.message);
+          return withCors(err(e.message||"Story failed", 500));
         }
-        const prompt = characterCardPrompt({ style, bible, traits, category });
-        const g = await geminiImage(env, { prompt }, 70000, 2);
-        if (!g?.b64) return ok({ ref_image_b64: null });
-        return ok({ ref_image_b64: g.b64 });
-      }catch(e){ log("ref-image error", e?.message); return err("Ref generation failed", 500); }
-    }
+      }
 
-    // IMAGES
-    if (req.method === "POST" && url.pathname === "/api/images") {
-      try{
-        const { style="cartoon", ref_image_b64, story, plan, concurrency=4 } = await req.json();
-        const pages = story?.book?.pages || [];
-        if (!pages.length) return err("No pages", 400);
-        if (!ref_image_b64) return err("Missing reference image", 400);
-        const frames = (plan?.plan || []);
-        const pageCount = pages.length;
-        const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
-
-        const jobs = pages.map(pg => {
-          const f = frames.find(x => x.page === pg.page) || {};
-          const prompt = buildFramePrompt({ style, story, page: pg, pageCount, frame: f, characterName: heroName });
-          return { page: pg.page, prompt };
-        });
-
-        const out = [];
-        const CONC = Math.min(Math.max(parseInt(concurrency||3,10),1),8);
-        let idx = 0;
-        async function worker(){
-          while (idx < jobs.length) {
-            const i = idx++; const item = jobs[i];
-            try{
-              const g = await geminiImage(env, { prompt: item.prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
-              out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
-            }catch(e){ out.push({ page: item.page, error: String(e?.message||e) }); }
+      // REF-IMAGE
+      if (req.method === "POST" && url.pathname === "/api/ref-image") {
+        try{
+          const { style="cartoon", photo_b64, bible, traits="", category="pets" } = await req.json();
+          if (photo_b64) {
+            const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
+            return withCors(ok({ ref_image_b64: b64 }));
           }
+          const prompt = characterCardPrompt({ style, bible, traits, category });
+          const g = await geminiImage(env, { prompt }, 70000, 2);
+          if (!g?.b64) return withCors(ok({ ref_image_b64: null }));
+          return withCors(ok({ ref_image_b64: g.b64 }));
+        }catch(e){
+          log("ref-image error", e?.message);
+          return withCors(err("Ref generation failed", 500));
         }
-        await Promise.all(Array.from({length: CONC}, worker));
-        out.sort((a,b)=> (a.page||0)-(b.page||0));
-        return ok({ images: out });
-      }catch(e){ log("images error", e?.message); return err(e.message||"Images failed", 500); }
+      }
+
+      // IMAGES
+      if (req.method === "POST" && url.pathname === "/api/images") {
+        try{
+          const { style="cartoon", ref_image_b64, story, plan, concurrency=4 } = await req.json();
+          const pages = story?.book?.pages || [];
+          if (!pages.length) return withCors(err("No pages", 400));
+          if (!ref_image_b64) return withCors(err("Missing reference image", 400));
+          const frames = (plan?.plan || []);
+          const pageCount = pages.length;
+          const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
+
+          const jobs = pages.map(pg => {
+            const f = frames.find(x => x.page === pg.page) || {};
+            const prompt = buildFramePrompt({ style, story, page: pg, pageCount, frame: f, characterName: heroName });
+            return { page: pg.page, prompt };
+          });
+
+          const out = [];
+          const CONC = Math.min(Math.max(parseInt(concurrency||3,10),1),8);
+          let idx = 0;
+          async function worker(){
+            while (idx < jobs.length) {
+              const i = idx++; const item = jobs[i];
+              try{
+                const g = await geminiImage(env, { prompt: item.prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
+                out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
+              }catch(e){ out.push({ page: item.page, error: String(e?.message||e) }); }
+            }
+          }
+          await Promise.all(Array.from({length: CONC}, worker));
+          out.sort((a,b)=> (a.page||0)-(b.page||0));
+          return withCors(ok({ images: out }));
+        }catch(e){
+          log("images error", e?.message);
+          return withCors(err(e.message||"Images failed", 500));
+        }
+      }
+
+      // REGENERATE
+      if (req.method === "POST" && url.pathname === "/api/image/regenerate") {
+        try{
+          const { style="cartoon", ref_image_b64, page_text, scene_text, frame, story } = await req.json();
+          if (!ref_image_b64) return withCors(err("Missing reference image", 400));
+
+          const fakeStory = story || { book:{ pages:[{page:1,scene:scene_text,text:page_text}] } };
+          const pg = { page: 1, scene: scene_text, text: page_text, time_of_day: frame?.time_of_day, weather: frame?.weather };
+          const f  = { shot_type: frame?.shot_type || "M", lens_mm: frame?.lens_mm || 50, subject_size_percent: frame?.subject_size_percent || 60 };
+
+          const prompt = buildFramePrompt({
+            style, story: fakeStory, page: pg, pageCount: 1, frame: f,
+            characterName: (fakeStory.book?.bible?.main_character?.name || "Hjälten")
+          });
+
+          const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
+          return withCors(ok({ image_url: g.image_url, provider: g.provider || "google" }));
+        }catch(e){
+          log("regen error", e?.message);
+          return withCors(err(e.message||"Regenerate failed", 500));
+        }
+      }
+
+      // PDF
+      if (req.method === "POST" && url.pathname === "/api/pdf") {
+        try {
+          const resp = await handlePdfRequest(req);
+          return withCors(resp);
+        } catch (e) {
+          return withCors(err(e?.message || "PDF failed", 500));
+        }
+      }
+
+      // 404
+      return withCors(new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404,
+        headers: { "content-type": "application/json; charset=utf-8" }
+      }));
+    } catch (e) {
+      // Fångar ALLT oväntat (t.ex. throw utanför våra try/catch)
+      console.error("UNCAUGHT:", e?.stack || e);
+      return withCors(new Response(JSON.stringify({ error: "Server error" }), {
+        status: 500,
+        headers: { "content-type": "application/json; charset=utf-8" }
+      }));
     }
-
-    // REGENERATE
-    if (req.method === "POST" && url.pathname === "/api/image/regenerate") {
-      try{
-        const { style="cartoon", ref_image_b64, page_text, scene_text, frame, story } = await req.json();
-        if (!ref_image_b64) return err("Missing reference image", 400);
-
-        const fakeStory = story || { book:{ pages:[{page:1,scene:scene_text,text:page_text}] } };
-        const pg = { page: 1, scene: scene_text, text: page_text, time_of_day: frame?.time_of_day, weather: frame?.weather };
-        const f  = { shot_type: frame?.shot_type || "M", lens_mm: frame?.lens_mm || 50, subject_size_percent: frame?.subject_size_percent || 60 };
-
-        const prompt = buildFramePrompt({
-          style, story: fakeStory, page: pg, pageCount: 1, frame: f,
-          characterName: (fakeStory.book?.bible?.main_character?.name || "Hjälten")
-        });
-
-        const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
-        return ok({ image_url: g.image_url, provider: g.provider || "google" });
-      }catch(e){ log("regen error", e?.message); return err(e.message||"Regenerate failed", 500); }
-    }
-
-    // PDF
-    if (req.method === "POST" && url.pathname === "/api/pdf") {
-      try { return await handlePdfRequest(req); }
-      catch (e) { return err(e?.message || "PDF failed", 500); }
-    }
-
-    return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: {
-      "content-type": "application/json; charset=utf-8",
-      ...CORS_HEADERS,
-    }});
   }
 };
