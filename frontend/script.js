@@ -62,11 +62,6 @@ function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
 function toInt(v, fb=0){ const n = parseInt(v,10); return Number.isFinite(n) ? n : fb; }
 function escapeHtml(s){ return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;"); }
 function smoothScrollTo(el){ el?.scrollIntoView({ behavior: "smooth", block: "start" }); }
-function uuid(){
-  const a = new Uint8Array(8);
-  crypto.getRandomValues(a);
-  return [...a].map(x=>x.toString(16).padStart(2,"0")).join("");
-}
 
 /* ===== Levande status ===== */
 const STATUS_QUIPS = [
@@ -282,7 +277,7 @@ function buildCards(pages, visibleCount){
   smoothScrollTo(els.previewSection);
 }
 
-/* ========= Streaming-IMAGES ========= */
+/* ========= Streaming-IMAGES (alla sidor i ett svep, NDJSON) ========= */
 async function generateAllImagesStreaming() {
   setStatus("🎥 Genererar alla sidor…"); startQuips();
 
@@ -305,7 +300,6 @@ async function generateAllImagesStreaming() {
     throw new Error(j?.error || `HTTP ${res.status}`);
   }
 
-  // NDJSON stream: en rad per färdig bild
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
@@ -502,30 +496,55 @@ async function regenerateOne(page){
   }
 }
 
-/* ========= PDF: cachea bilder → skicka URL:er ========= */
-async function uploadImagesToCacheAndBuildList() {
-  const sid = uuid();
+/* ========= PDF: bygg inline JPEGs och skicka direkt ========= */
+
+// Konvertera valfri bildkälla (data: eller https:) till komprimerad JPEG-dataURL
+async function downscaleDataUrl(dataUrlOrHttpUrl, maxDim = 1600, jpegQuality = 0.82) {
+  let dataUrl = dataUrlOrHttpUrl;
+
+  // Om http(s), hämta som blob → dataURL
+  if (/^https?:\/\//i.test(dataUrl)) {
+    const blob = await fetch(dataUrl, { mode: "cors" }).then(r => r.blob());
+    dataUrl = await new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.onerror = rej;
+      fr.readAsDataURL(blob);
+    });
+  }
+
+  // Ladda till <img>
+  const img = await new Promise((resolve,reject)=>{
+    const im = new Image();
+    im.onload = ()=> resolve(im);
+    im.onerror = reject;
+    im.src = dataUrl;
+  });
+
+  const w = img.naturalWidth, h = img.naturalHeight;
+  const scale = Math.min(1, maxDim / Math.max(w,h));
+  const outW = Math.max(1, Math.round(w * scale));
+  const outH = Math.max(1, Math.round(h * scale));
+
+  const c = document.createElement("canvas");
+  c.width = outW; c.height = outH;
+  const ctx = c.getContext("2d", { alpha: false });
+  ctx.drawImage(img, 0, 0, outW, outH);
+
+  return c.toDataURL("image/jpeg", jpegQuality);
+}
+
+// Samla alla kort och skapa [{page, image_url: data:jpeg}] för PDF
+async function buildImagesForPdfInline() {
   const results = [];
-  const cards = Array.from(els.previewGrid.children);
+  const cards = Array.from(document.getElementById("bookPreview").children);
   for (const card of cards) {
     const wrap = card.querySelector(".imgwrap");
     const page = Number(wrap?.getAttribute("data-page"));
-    const img = wrap?.querySelector("img")?.src || "";
-    if (!page || !img) continue;
-
-    if (/^https?:\/\//i.test(img)) { results.push({ page, url: img }); continue; }
-    if (img.startsWith("data:image/")) {
-      const putUrl = `${BACKEND}/cache/${sid}/${page}.png`;
-      const res = await fetch(putUrl, {
-        method: "PUT",
-        mode: "cors",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ data_url: img })
-      });
-      const j = await res.json().catch(()=> ({}));
-      if (!res.ok || j?.error || !j?.url) throw new Error(j?.error || `Cache PUT misslyckades för sida ${page}`);
-      results.push({ page, url: j.url });
-    }
+    const src  = wrap?.querySelector("img")?.src || "";
+    if (!page || !src) continue;
+    const jpegDataUrl = await downscaleDataUrl(src, 1600, 0.82);
+    results.push({ page, image_url: jpegDataUrl });
   }
   return results;
 }
@@ -534,17 +553,17 @@ const pdfBtn = document.getElementById("pdfBtn");
 if (pdfBtn) {
   pdfBtn.addEventListener("click", async () => {
     if (!state.story) { alert("Skapa berättelsen först."); return; }
-
     try {
       setStatus("📄 Förbereder PDF… (optimerar bilder)"); startQuips();
-      const imagesSmall = await uploadImagesToCacheAndBuildList();
+
+      const imagesInline = await buildImagesForPdfInline(); // [{page, image_url}]
       const res = await fetch(`${BACKEND}/api/pdf`, {
         method: "POST",
         mode: "cors",
         headers: { "content-type":"application/json" },
         body: JSON.stringify({
           story: state.story,
-          images: imagesSmall,   // [{page, url}]
+          images: imagesInline,
           mode: "preview",
           trim: "square210",
           watermark_text: "FÖRHANDSVISNING – BokPiloten"

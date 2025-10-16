@@ -280,8 +280,11 @@ async function buildPdf({ story, images, mode="preview", trim="square210", bleed
   const heroName = story?.book?.bible?.main_character?.name || "";
   const theme = story?.book?.theme || "";
 
-  const imgByPage = new Map();
-  (images||[]).forEach(r => { const u = r?.url || r?.image_url; if (r?.page && typeof u==="string") imgByPage.set(r.page, u); });
+const imgByPage = new Map();
+(images||[]).forEach(r => {
+  const u = r?.url || r?.image_url;
+  if (r?.page && typeof u === "string") imgByPage.set(r.page, u);
+});
 
   // Cover
   try {
@@ -514,18 +517,21 @@ export default {
       if (req.method === "POST" && url.pathname === "/api/pdf") {
         try {
           const body = await req.json();
-          const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
-          if (!story?.book) return withCors(err("Missing story", 400), req);
-          if (!Array.isArray(images)) return withCors(err("Missing images[]", 400), req);
-          const fixed = images.map(r => ({ page: r.page, url: r.url || r.image_url }));
-          const pdfBytes = await buildPdf({
-            story,
-            images: fixed,
-            mode: mode==="print" ? "print" : "preview",
-            trim: trim || "square210",
-            bleed_mm,
-            watermark_text: watermark_text || (mode==="preview" ? "FÖRHANDSVISNING" : null),
-          });
+         const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
+if (!story?.book) return withCors(err("Missing story", 400), req);
+if (!Array.isArray(images)) return withCors(err("Missing images[]", 400), req);
+
+// 🔧 Viktigt: stöd både {url} och {image_url} (från frontendens data:URL)
+const fixed = images.map(r => ({ page: r.page, url: r.url || r.image_url }));
+
+const pdfBytes = await buildPdf({
+  story,
+  images: fixed,       // använd fixed här
+  mode: mode==="print" ? "print" : "preview",
+  trim: trim || "square210",
+  bleed_mm,
+  watermark_text: watermark_text || (mode==="preview" ? "FÖRHANDSVISNING" : null),
+});
           return withCors(new Response(pdfBytes, {
             status: 200,
             headers: {
