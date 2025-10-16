@@ -1,8 +1,9 @@
 // ============================================================================
-// BokPiloten – Worker v21 (Cloudflare bundle-ready)
-// - Robust PDF-flöde: PUT/GET /cache/* för per-sida-bilder, små URL:er i /api/pdf
-// - Tål även image_url + data:URL fallback (för kompabilitet)
-// - Eko-preflight + global withCors(resp, req) = CORS säkert även vid fel
+// BokPiloten – Worker v20 (Cloudflare bundle-ready)
+// - Robust gratis PDF-flöde med Cache API (per sida)
+// - Eko-preflight för CORS + global withCors(resp, req)
+// - Endpoints: /api/story, /api/ref-image, /api/images, /api/image/regenerate, /api/pdf
+// - Cache endpoints: PUT/GET /cache/:sid/:page.png
 // ============================================================================
 
 import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
@@ -301,7 +302,7 @@ async function handleCacheGet(_req, url) {
   return new Response("Not found", { status: 404, headers: CORS_HEADERS });
 }
 
-// === PDF-core: cache-first inbäddning + data: fallback ===
+// === PDF-core: cache-first inbäddning ===
 async function fetchImageBytesCacheFirst(urlStr) {
   try {
     const req = new Request(urlStr, { method: "GET" });
@@ -316,18 +317,9 @@ async function fetchImageBytesCacheFirst(urlStr) {
     return null;
   }
 }
-async function embedImage(pdfDoc, imageUrlOrDataUrl) {
-  if (!imageUrlOrDataUrl) return null;
-  // Fallback: direkt från data:URL (för bakåtkompatibilitet)
-  if (imageUrlOrDataUrl.startsWith("data:image/")) {
-    const d = dataUrlToBytes(imageUrlOrDataUrl);
-    if (!d) return null;
-    try { return await pdfDoc.embedPng(d.bytes); } catch {}
-    try { return await pdfDoc.embedJpg(d.bytes); } catch {}
-    return null;
-  }
-  // Cache-first HTTP(S)
-  const bytes = await fetchImageBytesCacheFirst(imageUrlOrDataUrl);
+async function embedImage(pdfDoc, imageUrl) {
+  if (!imageUrl) return null;
+  const bytes = await fetchImageBytesCacheFirst(imageUrl);
   if (!bytes) return null;
   try { return await pdfDoc.embedPng(bytes); } catch {}
   try { return await pdfDoc.embedJpg(bytes); } catch {}
@@ -351,9 +343,6 @@ function drawWrappedText(page, text, x, yTop, maxWidth, font, fontSize, lineHeig
   return cursorY;
 }
 async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }) {
-  const TRIMS = { square210: { w_mm: 210, h_mm: 210, default_bleed_mm: 3 } };
-  const mmToPt=(mm)=> mm * (72/25.4);
-
   const trimSpec = TRIMS[trim] || TRIMS.square210;
   const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
 
@@ -370,18 +359,17 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
 
   const pages = story?.book?.pages || [];
   const readingAge = story?.book?.reading_age || 6;
-  const { size: bodySize, leading } = (readingAge<=5?{size:22,leading:1.35}:readingAge<=8?{size:18,leading:1.35}:{size:16,leading:1.3});
+  const { size: bodySize, leading } = fontSpecForReadingAge(readingAge);
   const lineHeight = bodySize * leading;
 
   const title = story?.book?.title || "Min bok";
   const heroName = story?.book?.bible?.main_character?.name || "";
   const theme = story?.book?.theme || "";
 
-  // page -> url (acceptera url eller image_url)
+  // page -> url
   const imgByPage = new Map();
   (images || []).forEach(row => {
-    const u = row?.url || row?.image_url || null;
-    if (row?.page && typeof u === "string" && u) imgByPage.set(row.page, u);
+    if (row?.page && row?.url) imgByPage.set(row.page, row.url);
   });
 
   // ---------------- Cover ----------------
@@ -428,13 +416,6 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   }
 
   // ---------------- Inside pages ----------------
-  function pickLayoutForText(text=""){
-    const len = (text||"").length;
-    if (len <= 180) return "image_top";
-    if (len <= 280) return "text_top";
-    return "full_bleed_panel";
-  }
-
   for (const p of pages) {
     try {
       const page = pdfDoc.addPage([pageW, pageH]);
@@ -485,7 +466,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
         if (imgObj) {
           const iw = imgObj.width, ih = imgObj.height;
           const maxW = trimWpt, maxH = trimHpt;
-          const scale = Math.max(maxW / iw, maxH / ih);
+          const scale = Math.max(maxW / iw, maxH / ih); // cover
           const w = iw * scale, h = ih * scale;
           const x = contentX + (trimWpt - w) / 2;
           const y = contentY + (trimHpt - h) / 2;
@@ -557,19 +538,15 @@ async function handlePdfRequest(req) {
   const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
   if (!story?.book) return err("Missing story", 400);
   if (!Array.isArray(images)) return err("Missing images[]", 400);
-
-  // Validera men tillåt både url, image_url och data: fallback
-  const fixed = [];
   for (const row of images) {
-    if (!row || !Number.isFinite(row.page)) return err("images[].page missing", 400);
-    const u = row.url || row.image_url || null;
-    if (!u || typeof u !== "string") return err("images[] must include url or image_url", 400);
-    fixed.push({ page: row.page, url: u });
+    if (!(row && Number.isFinite(row.page) && typeof row.url === "string")) {
+      return err("images[] must be [{page:number, url:string}]", 400);
+    }
   }
 
   const pdfBytes = await buildPdf({
     story,
-    images: fixed,
+    images,
     mode: mode === "print" ? "print" : "preview",
     trim: trim || "square210",
     bleed_mm,
@@ -592,7 +569,7 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
 
-    // --- EKO-PREFLIGHT ---
+    // --- EKO-PREFLIGHT (mycket viktig för Chrome) ---
     if (req.method === "OPTIONS") {
       const reqMethod  = req.headers.get("Access-Control-Request-Method")  || "POST";
       const reqHeaders = req.headers.get("Access-Control-Request-Headers") || "content-type";
@@ -615,7 +592,7 @@ export default {
         return withCors(ok({ ok: true, ts: Date.now() }), req);
       }
 
-      // CACHE PUT/GET
+      // CACHE PUT/GET (måste komma före /api/pdf)
       if (url.pathname.startsWith("/cache/") && req.method === "PUT") {
         return withCors(await handleCachePut(req, url), req);
       }
@@ -749,7 +726,7 @@ Svara ENBART med json.
         headers: { "content-type": "application/json; charset=utf-8" }
       }), req);
     } catch (e) {
-      // Ovänade fel (CPU-limit/throw utanför try/catch) -> ge CORS
+      // Fångar ALLT oväntat (t.ex. throw utanför våra try/catch)
       console.error("UNCAUGHT:", e?.stack || e);
       return withCors(new Response(JSON.stringify({ error: "Server error" }), {
         status: 500,
