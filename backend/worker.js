@@ -285,17 +285,33 @@ async function handleCacheGet(_req, url) {
 }
 
 // === PDF-core: hämta alltid bytes via URL (ej data-URL för minne/stabilitet) ===
-async function embedImage(pdfDoc, imageUrl){
-  if (!imageUrl) return null;
-  try{
-    const r = await fetch(imageUrl);
+// Hämta bytes för en cache-URL (cache först, nät sen)
+async function fetchImageBytesCacheFirst(urlStr) {
+  try {
+    const req = new Request(urlStr, { method: "GET" });
+    const cached = await caches.default.match(req);
+    if (cached) return new Uint8Array(await cached.arrayBuffer());
+  } catch {} // fortsätt till nät-fallback
+
+  try {
+    const r = await fetch(urlStr);
     if (!r.ok) return null;
-    const bytes = new Uint8Array(await r.arrayBuffer());
-    try { return await pdfDoc.embedPng(bytes); } catch {}
-    try { return await pdfDoc.embedJpg(bytes); } catch {}
+    return new Uint8Array(await r.arrayBuffer());
+  } catch {
     return null;
-  }catch { return null; }
+  }
 }
+
+// Bädda in PNG/JPG i PDF från URL, med cache-first
+async function embedImage(pdfDoc, imageUrl) {
+  if (!imageUrl) return null;
+  const bytes = await fetchImageBytesCacheFirst(imageUrl);
+  if (!bytes) return null;
+  try { return await pdfDoc.embedPng(bytes); } catch {}
+  try { return await pdfDoc.embedJpg(bytes); } catch {}
+  return null;
+}
+
 function drawWrappedText(page, text, x, yTop, maxWidth, font, fontSize, lineHeight){
   const words = String(text||"").split(/\s+/);
   let line = "", cursorY = yTop; const lines = [];
