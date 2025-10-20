@@ -58,8 +58,8 @@ const state = {
   pageMap: new Map(),
   planMap: new Map(),
 
-  // NYTT: för PDF-steget
-  generatedImages: [],      // [{page, image_url, provider?}]
+  // För PDF-steget
+  generatedImages: [],      // [{page, image_url}]
   uploadedToCF: [],         // [{page, image_id, url}]
   pdfReady: false,
 };
@@ -284,9 +284,9 @@ function buildCards(pages, visibleCount){
   smoothScrollTo(els.previewSection);
 }
 
-/* ========= URL → DataURL (för Cloudflare-uppladdning) ========= */
+/* ========= URL → DataURL ========= */
 async function urlToDataURL(url) {
-  const res = await fetch(url);
+  const res = await fetch(url, { mode: "cors" });
   if (!res.ok) throw new Error(`Hämtning misslyckades (${res.status})`);
   const blob = await res.blob();
   return await new Promise((resolve, reject) => {
@@ -297,47 +297,124 @@ async function urlToDataURL(url) {
   });
 }
 
+/* ========= Skörda från DOM som fallback ========= */
+function harvestFromDOMIfNeeded() {
+  if (state.generatedImages && state.generatedImages.length) return;
+  const cards = Array.from(els.previewGrid.querySelectorAll(".imgwrap"));
+  const harvested = [];
+  for (const wrap of cards) {
+    const page = Number(wrap.getAttribute("data-page"));
+    const img = wrap.querySelector("img");
+    const src = img?.src || "";
+    if (page && src) {
+      harvested.push({ page, image_url: src });
+    }
+  }
+  if (harvested.length) {
+    // undvik dubletter
+    const byPage = new Map();
+    harvested.forEach(x => { if (!byPage.has(x.page)) byPage.set(x.page, x); });
+    state.generatedImages = Array.from(byPage.values());
+    console.debug("🔎 Skördade bilder från DOM:", state.generatedImages);
+  }
+}
+
 /* ========= Säkerställ att alla sidor är uppladdade till CF Images ========= */
 async function ensureUploads() {
+  harvestFromDOMIfNeeded();
+
+  if (!state.generatedImages.length) {
+    throw new Error("Inga genererade bilder hittades i minnet eller DOM.");
+  }
+
   // vilka sidor har vi redan?
   const have = new Set(state.uploadedToCF.map(r => r.page));
+
   // bygg lista över saknade från state.generatedImages
   const missing = [];
   for (const row of state.generatedImages) {
     if (!row?.page || !row?.image_url) continue;
     if (!have.has(row.page)) {
-      if (row.image_url.startsWith("data:image/")) {
-        missing.push({ page: row.page, data_url: row.image_url });
-      } else if (/^https?:\/\//i.test(row.image_url)) {
+      const src = row.image_url;
+      if (src.startsWith("data:image/")) {
+        missing.push({ page: row.page, data_url: src });
+      } else if (/^https?:\/\//i.test(src)) {
+        // Försök hämta och konvertera – om CORS bråkar, hoppa över (och felhantera senare)
         try {
-          const d = await urlToDataURL(row.image_url);
+          const d = await urlToDataURL(src);
           missing.push({ page: row.page, data_url: d });
         } catch (e) {
-          console.warn("Kunde inte konvertera till data URL:", row.image_url, e);
+          console.warn(`⚠️ Kunde inte hämta/konvertera URL för sida ${row.page}:`, src, e);
+        }
+      } else if (src.startsWith("blob:")) {
+        // blob-URL går inte att hämta över nätet; försök plocka samma <img> från DOM och rita till canvas
+        try {
+          const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${row.page}"]`);
+          const imgEl = wrap?.querySelector("img");
+          if (imgEl && imgEl.naturalWidth > 0) {
+            const c = document.createElement("canvas");
+            c.width = imgEl.naturalWidth; c.height = imgEl.naturalHeight;
+            const ctx = c.getContext("2d");
+            ctx.drawImage(imgEl, 0, 0);
+            const d = c.toDataURL("image/png");
+            if (d && d.startsWith("data:image/")) {
+              missing.push({ page: row.page, data_url: d });
+            }
+          }
+        } catch (e) {
+          console.warn(`⚠️ Kunde inte konvertera blob: för sida ${row.page}`, e);
         }
       }
     }
   }
-  if (!missing.length) return; // allt redan uppladdat
+
+  if (!missing.length) {
+    console.debug("☁️ Alla sidor verkar redan uppladdade:", state.uploadedToCF);
+    return;
+  }
 
   setStatus("☁️ Laddar upp illustrationer…");
+  console.debug("⬆️ Laddar upp till CF Images, antal:", missing.length);
   updateProgress(0, 1, `Laddar upp ${missing.length} sidor`);
 
   // batcha
   const BATCH = 6;
+  let uploadedCount = 0;
+
   for (let i = 0; i < missing.length; i += BATCH) {
     const slice = missing.slice(i, i + BATCH);
+
+    // Filtrera ut ev. misslyckade konverteringar (saknar data_url)
+    const payload = slice.filter(x => x && x.data_url && x.data_url.startsWith("data:image/"));
+    if (!payload.length) continue;
+
     const upRes = await fetch(`${BACKEND}/api/images/upload`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ items: slice })
+      body: JSON.stringify({ items: payload })
     });
+
     const upData = await upRes.json().catch(()=> ({}));
     if (!upRes.ok || upData?.error) {
       throw new Error(upData?.error || `Upload HTTP ${upRes.status}`);
     }
-    (upData.uploads||[]).forEach(r => { if (r.image_id) state.uploadedToCF.push(r); });
-    updateProgress((i + slice.length) / missing.length, 1, `Laddar upp ${Math.min(i + slice.length, missing.length)}/${missing.length}`);
+
+    const rows = upData.uploads || [];
+    for (const r of rows) {
+      if (r.image_id) {
+        state.uploadedToCF.push(r);
+        uploadedCount++;
+      } else if (r.error) {
+        // Avbryt hårt – vi vill se exakt fel (t.ex. “invalid image”)
+        throw new Error(`Uppladdning misslyckades (sida ${r.page}): ${r.error}`);
+      }
+    }
+
+    updateProgress(Math.min(i + slice.length, missing.length), missing.length, `Laddar upp ${Math.min(i + slice.length, missing.length)}/${missing.length}`);
+  }
+
+  if (!uploadedCount) {
+    throw new Error("Inga illustrationer kunde laddas upp till Cloudflare Images.");
   }
 }
 
@@ -357,12 +434,17 @@ async function onCreatePdf(){
     // Mappa -> {page, image_id} i ordningen från storyn
     const cfByPage = new Map(state.uploadedToCF.map(u => [u.page, u]));
     const pages = (state.story?.book?.pages || []).map(p => p.page);
-    const images = pages
-      .map(pg => cfByPage.get(pg))
-      .filter(Boolean)
-      .map(u => ({ page: u.page, image_id: u.image_id }));
 
-    if (!images.length) throw new Error("Hittade inga uppladdade bilder för PDF.");
+    const images = [];
+    for (const pg of pages) {
+      const u = cfByPage.get(pg);
+      if (u && u.image_id) images.push({ page: u.page, image_id: u.image_id });
+    }
+
+    if (!images.length) {
+      console.error("uploadedToCF =", state.uploadedToCF, "generatedImages =", state.generatedImages);
+      throw new Error("Hittade inga uppladdade bilder för PDF.");
+    }
 
     const res = await fetch(`${BACKEND}/api/pdf`, {
       method: "POST",
@@ -470,7 +552,7 @@ async function onSubmit(e){
     // spara för PDF-steget
     state.generatedImages = results
       .filter(r => r?.image_url)
-      .map(r => ({ page: r.page, image_url: r.image_url, provider: r.provider || "google" }));
+      .map(r => ({ page: r.page, image_url: r.image_url }));
 
     let received = 0;
     const byPageCard = new Map();
@@ -518,7 +600,6 @@ async function onSubmit(e){
 
     stopQuips();
     setStatus("✅ Klart! Sagans förhandsvisning är redo.");
-    // PDF-knappen aktiveras alltid – klicket sköter ev. uppladdning
     els.pdfBtn && (els.pdfBtn.disabled = false);
   } catch (e) {
     console.error(e);
@@ -570,7 +651,7 @@ async function regenerateOne(page){
         // uppdatera generatedImages för PDF-flödet
         const idx = state.generatedImages.findIndex(x => x.page === page);
         if (idx >= 0) state.generatedImages[idx].image_url = tmp.src;
-        else state.generatedImages.push({ page, image_url: tmp.src, provider: "google" });
+        else state.generatedImages.push({ page, image_url: tmp.src });
 
         // ta bort ev. tidigare CF-uppladdning för sidan så att ensureUploads laddar upp nya
         state.uploadedToCF = state.uploadedToCF.filter(x => x.page !== page);
@@ -601,10 +682,17 @@ function onDemo(){
     card.className = "thumb";
     if (i >= state.visibleCount) card.classList.add("locked");
     card.innerHTML = `
-      <div class="imgwrap"><img src="https://picsum.photos/seed/demo_${i}/600/400" /></div>
+      <div class="imgwrap" data-page="${i+1}">
+        <img src="https://picsum.photos/seed/demo_${i}/600/400" />
+      </div>
       <div class="txt">Sida ${i+1}: ${escapeHtml(state.form.name)}s lilla äventyr.</div>`;
     els.previewGrid.appendChild(card);
   }
+  // lägg till i generatedImages så PDF-knappen kan testas även i demo
+  state.generatedImages = Array.from({length: total}, (_,k)=>({
+    page: k+1,
+    image_url: els.previewGrid.querySelector(`.imgwrap[data-page="${k+1}"] img`)?.src || ""
+  }));
   els.previewSection.classList.remove("hidden");
   smoothScrollTo(els.previewSection);
 }
@@ -650,7 +738,6 @@ function bindEvents(){
     els.mobileMenu.setAttribute("aria-hidden", open ? "false":"true");
   });
 
-  // PDF-knapp: alltid klickbar – klicket ser till att uppladdningar finns
   els.pdfBtn?.addEventListener("click", onCreatePdf);
   if (els.pdfBtn) els.pdfBtn.disabled = false;
 }
