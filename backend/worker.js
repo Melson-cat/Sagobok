@@ -233,13 +233,16 @@ function cfImagesDeliveryURL(env, image_id, variant) {
   return `https://imagedelivery.net/${hash}/${image_id}/${v}`;
 }
 async function uploadOneToCFImages(env, { data_url, id }) {
-  if (!env.IMAGES_API_TOKEN || !env.CF_ACCOUNT_ID) throw new Error("Cloudflare Images env missing");
+  const miss = [];
+  if (!env.IMAGES_API_TOKEN) miss.push("IMAGES_API_TOKEN");
+  if (!env.CF_ACCOUNT_ID) miss.push("CF_ACCOUNT_ID");
+  if (miss.length) throw new Error("Cloudflare Images env missing: " + miss.join(", "));
+
   const file = dataUrlToBlob(data_url);
   if (!file) throw new Error("Bad data_url");
 
   const form = new FormData();
-  form.append("file", file.blob, id || `page-${Date.now()}.jpg`);
-  // form.append("id", id); // valfritt
+  form.append("file", file.blob, id || `page-${Date.now()}.png`);
 
   const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/images/v1`, {
     method: "POST",
@@ -252,6 +255,7 @@ async function uploadOneToCFImages(env, { data_url, id }) {
   const url = cfImagesDeliveryURL(env, image_id);
   return { image_id, url };
 }
+
 
 // ---------------- PDF helpers ----------------
 const MM_PER_INCH = 25.4;
