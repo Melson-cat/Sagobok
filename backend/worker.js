@@ -1,34 +1,29 @@
 // ============================================================================
-// BokPiloten – Worker v18 (Cloudflare bundle-ready)
-// - Robust gratisflöde för PDF: cachea bilder per sida i Cache API
-// - /cache PUT/GET för per-sida-uppladdning → små URL:er till /api/pdf
-// - /api/story, /api/ref-image, /api/images, /api/image/regenerate, /api/pdf
+// BokPiloten – Worker v13
+// Outline → Story med röd tråd + kategori-agnostisk hjälte + läsålder
+// Global text-kontekst per sida (ingen bild-kedjning) + uttrycksfull cartoon
+// Endpoints: /api/story, /api/ref-image, /api/images, /api/image/regenerate
 // ============================================================================
 
-import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
-
-// ---------------------------- CONSTS / HELPERS ------------------------------
-const CORS_HEADERS = {
+const CORS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
+  "access-control-allow-methods": "GET, POST, OPTIONS",
   "access-control-allow-headers": "*",
   "access-control-max-age": "600",
 };
-const JSON_HEADERS = {
-  "content-type": "application/json; charset=utf-8",
-  "cache-control": "no-store",
-  ...CORS_HEADERS,
-};
+const JSONH = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...CORS };
+const OPENAI_MODEL = "gpt-4o-mini";
 
-const ok  = (data, init={}) => new Response(JSON.stringify(data), { status: init.status || 200, headers: JSON_HEADERS });
+const ok  = (data, init={}) => new Response(JSON.stringify(data), { status: init.status || 200, headers: JSONH, ...init });
 const err = (msg, code=400, extra={}) => ok({ error: msg, ...extra }, { status: code });
 const log = (...a) => { try { console.log(...a); } catch {} };
 
-// --------------------------- MODEL CHOICES ----------------------------------
-const OPENAI_MODEL = "gpt-4o-mini";
-
-// ------------------------ OPENAI JSON HELPER --------------------------------
+// ---------------- OpenAI JSON (story) ----------------
 async function openaiJSON(env, system, user) {
+  // Säkerställ 'json' i messages för response_format: json_object
+  const sys = system.toLowerCase().includes("json") ? system : system + "\nSvara endast som giltig json.";
+  const usr = user.toLowerCase().includes("json") ? user : user + "\n(returnera bara json)";
+
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { "authorization": `Bearer ${env.API_KEY}`, "content-type": "application/json" },
@@ -36,7 +31,7 @@ async function openaiJSON(env, system, user) {
       model: OPENAI_MODEL,
       response_format: { type: "json_object" },
       temperature: 0.6,
-      messages: [{ role: "system", content: system }, { role: "user", content: user }],
+      messages: [{ role: "system", content: sys }, { role: "user", content: usr }],
     }),
   });
   if (!r.ok) throw new Error(`OpenAI ${r.status} ${await r.text().catch(()=> "")}`);
@@ -44,7 +39,7 @@ async function openaiJSON(env, system, user) {
   return JSON.parse(j?.choices?.[0]?.message?.content || "{}");
 }
 
-// --------------------------- GEMINI IMAGE -----------------------------------
+// ---------------- Gemini (image) ----------------
 function findGeminiImagePart(json) {
   const cand = json?.candidates?.[0];
   const parts = cand?.content?.parts || cand?.content?.[0]?.parts || [];
@@ -56,17 +51,20 @@ function findGeminiImagePart(json) {
   if (p) return { url: p.text };
   return null;
 }
+
+/** item: { prompt, character_ref_b64 } */
 async function geminiImage(env, item, timeoutMs=75000, attempts=3) {
   const key = env.GEMINI_API_KEY; if (!key) throw new Error("GEMINI_API_KEY missing");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(key)}`;
 
   const parts = [];
   if (item.character_ref_b64) parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
-  if (item.prev_frame_b64)    parts.push({ inlineData: { mimeType: "image/png", data: item.prev_frame_b64 } });
-  (item.refs_b64 || []).forEach(r => { if (r?.b64) parts.push({ inlineData: { mimeType: r.mime || "image/png", data: r.b64 } }); });
   parts.push({ text: item.prompt });
 
-  const body = { contents: [{ role: "user", parts }], generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.9 } };
+  const body = {
+    contents: [{ role: "user", parts }],
+    generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.9 }
+  };
 
   let last;
   for (let i=1;i<=attempts;i++){
@@ -84,19 +82,20 @@ async function geminiImage(env, item, timeoutMs=75000, attempts=3) {
   throw last || new Error("Gemini failed");
 }
 
-// --------------------------- STYLE HINTS ------------------------------------
+// ---------------- Style (expressive!) ----------------
 function styleHint(style="cartoon"){
   const s=(style||"cartoon").toLowerCase();
   if (s==="storybook") return "storybook watercolor, soft edges, paper texture, warm and cozy";
-  if (s==="pixar")     return "stylized 3D animated film still (not photographic): enlarged eyes, simplified forms, clean gradients, soft subsurface scattering, gentle rim light, shallow depth of field, expressive face rigs";
+  if (s==="pixar")
+    return "stylized 3D animated film still (not photographic): enlarged eyes, simplified forms, clean gradients, soft subsurface scattering, gentle rim light, shallow depth of field, expressive face rigs";
   if (s==="comic")     return "bold comic style, inked lines, flat colors, dynamic action framing, no speech balloons";
   if (s==="painting")  return "soft painterly illustration, visible brushwork, warm lighting, gentle textures";
   return "expressive 2D cartoon: thick-and-thin outlines, cel shading, squash-and-stretch poses, vibrant cheerful palette";
 }
 
-// ------------------------ OUTLINE & STORY SYSTEMS ---------------------------
+// ---------------- Strong Story: OUTLINE → PAGES ----------------
 const OUTLINE_SYS = `
-Du ska skriva en svensk dispositions-json ("json") för en bilderbok om en HJÄLTE (typ anges av användaren).
+Skriv en svensk dispositions-json för en bilderbok om en HJÄLTE (som användaren beskriver).
 Returnera exakt:
 {
  "outline": {
@@ -119,14 +118,15 @@ Returnera exakt:
 }
 Regler:
 - Hjälten är den typ användaren anger (barn/husdjur).
-- Tydligt mål, riktiga hinder, vändpunkt, lösning och varm payoff kopplad till "motif".
+- Tydligt mål, riktiga hinder, vändpunkt och känslomässig payoff kopplad till "motif".
 - Håll dig NOGA till användarens tema som ram (plats/aktivitet); undvik sidospår som inte stödjer temat.
-- Anpassa språk/meningslängd till reading_age.
+- Anpassa ordförråd/meningslängd till reading_age.
 - Svara ENBART med json.
 `;
 
+
 const STORY_SYS = `
-Du får en outline för en svensk bilderbok. Skriv nu boken som "json" enligt:
+Du får en outline för en svensk bilderbok. Skriv nu boken enligt:
 { "book":{
   "title": string,
   "reading_age": number,
@@ -142,19 +142,26 @@ Du får en outline för en svensk bilderbok. Skriv nu boken som "json" enligt:
     { "page": number, "text": string, "scene": string, "time_of_day": "day"|"golden_hour"|"evening"|"night", "weather":"clear"|"cloudy"|"rain"|"snow" }
   ]
 }}
-Regler:
+Hårda regler:
 - 12–20 sidor; 2–4 meningar/sida.
-- Starta i hjältes drivkraft, bygg hinder, vändpunkt, lösning och avsluta med payoff kopplad till "lesson".
-- "scene" ska vara konkret (plats + vad hjälten gör) och stödja temat.
-- Om category="pets": skriv så att även vuxna ler – charm, hjärta, lätt humor.
-- Svenska; inga tomma fält. Svara ENBART med json.
+- Starta i känsla/drivkraft (vad hjälten vill), bygg hinder, vändpunkt, lösning och avsluta med varm payoff kopplad till "lesson".
+- "scene" ska vara konkret (plats + vad hjälten gör) och STÖDJA TEMAT. Om temat innebär en huvudplats (t.ex. "handla mat i affär"), håll majoriteten av scenerna i/kring den platsen (olika gångar, kundvagn, frukt, mejeri, kassan). Tillåt max 1–2 korta övergångar om outline kräver det.
+- Om category="pets": skriv så att även vuxna ler – charm, hjärta och liten humor.
+- Svenska; inga tomma fält.
+- Svara ENBART med json.
 `;
 
-// ----------------------------- STORY HELPERS --------------------------------
-function heroDescriptor({ category, name, age, traits }){
-  if (category === "kids") return `HJÄLTE: ett barn som heter ${name||"Nova"} (${parseInt(age||6,10)} år), kännetecken: ${traits||"nyfiken, modig"}.`;
-  return `HJÄLTE: ett husdjur som heter ${name||"Nova"} (${parseInt(age||6,10)} år), kännetecken: ${traits||"lekfull, snäll"}.`;
+
+// Hjältebeskrivning
+function heroDescriptor({ category, name, age, traits }) {
+  if ((category||"kids") === "pets") {
+    return `HJÄLTE: ett husdjur (t.ex. katt/hund) vid namn ${name||"Nova"}; egenskaper: ${(traits||"nyfiken, lekfull")}.`;
+  }
+  const a = parseInt(age||6,10);
+  return `HJÄLTE: ett barn vid namn ${name||"Nova"} (${a} år), egenskaper: ${(traits||"modig, omtänksam")}.`;
 }
+
+// ---------------- Plan & Prompt helpers ----------------
 function normalizePlan(pages){
   const out=[];
   pages.forEach((p,i)=>{
@@ -170,413 +177,95 @@ function shotLine(f={}) {
   const map={EW:"extra wide",W:"wide",M:"medium",CU:"close-up"};
   return `${map[f.shot_type||"M"]} shot, ~${f.subject_size_percent||60}% subject, ≈${f.lens_mm||35}mm`;
 }
+
 function buildSeriesContext(story){
   const pages = story?.book?.pages || [];
-  const beats = pages.slice(0,12).map(p=>`p${p.page}: ${(p.scene||p.text||"").replace(/\s+/g," ").trim()}`);
-  return [`SERIES CONTEXT — title: ${story?.book?.title || "Sagobok"}`, `beats: ${beats.join(" | ")}`].join("\n");
+  const locs = [];
+  const beats = pages.map(p=>{
+    const key = (p.scene || p.text || "").replace(/\s+/g," ").trim();
+    const lkey = key.toLowerCase().match(/(strand|skog|kök|sovrum|park|hav|stad|skola|gård|sjö|berg)/)?.[1] || "plats";
+    if (!locs.includes(lkey)) locs.push(lkey);
+    return `p${p.page}: ${key}`;
+  });
+  return [
+    `SERIES CONTEXT — title: ${story?.book?.title || "Sagobok"}`,
+    `locations: ${locs.join(", ")}`,
+    `beats: ${beats.join(" | ")}`
+  ].join("\n");
 }
+
 function buildFramePrompt({ style, story, page, pageCount, frame, characterName }){
   const series = buildSeriesContext(story);
   const pg = page;
   const styleLine = styleHint(style);
-  const actingHint = (String(style).toLowerCase()==="pixar" || String(style).toLowerCase()==="cartoon")
-    ? "Expressive acting: tydlig mimik, kroppsspråk, dynamiska poser." : "";
+
   return [
     series,
     `This is page ${pg.page} of ${pageCount}.`,
-    `Render in ${styleLine}. No on-screen text or speech bubbles.`,
-    `Keep the same hero (${characterName}) from the reference image; adapt pose, camera and lighting freely.`,
-    actingHint,
+    `Render in ${styleLine}. No text or speech bubbles.`,
+    `Keep the same hero (${characterName}) from reference. Adapt pose, camera, and lighting freely.`,
     pg.time_of_day ? `Time of day: ${pg.time_of_day}.` : "",
     pg.weather ? `Weather: ${pg.weather}.` : "",
     `SCENE: ${pg.scene || pg.text || ""}`,
     `FRAMING: ${shotLine(frame)}.`,
-    `VARIETY: make this page visually distinct yet coherent.`
+    `VARIETY: each page unique yet coherent.`
   ].filter(Boolean).join("\n");
 }
-function characterCardPrompt({ style, bible, traits, category }){
+
+function characterCardPrompt({ style, bible, traits }){
   const mc=bible?.main_character||{};
   const name=mc.name||"Nova";
-  const phys=mc.physique||traits||(category==="kids" ? "child with casual outfit" : "fluffy gray cat with curious eyes");
-  const who = (category==="kids") ? "one child only" : "one pet only";
+  const phys=mc.physique||traits||"fluffy gray cat with curious eyes";
   return [
     `Character reference in ${styleHint(style)}.`,
-    `${who}, full-body, 3/4 view, neutral gray background.`,
+    `One hero only, full body, neutral background.`,
     `Hero: ${name}, ${phys}. No text.`
   ].join(" ");
 }
 
-// ============================== PDF HELPERS =================================
-const MM_PER_INCH = 25.4;
-const PT_PER_INCH = 72;
-const PT_PER_MM   = PT_PER_INCH / MM_PER_INCH;
-const TRIMS = { square210: { w_mm: 210, h_mm: 210, default_bleed_mm: 3 } };
-function mmToPt(mm){ return mm * PT_PER_MM; }
-function fontSpecForReadingAge(ra=6){
-  if (ra <= 5)  return { size: 22, leading: 1.35 };
-  if (ra <= 8)  return { size: 18, leading: 1.35 };
-  if (ra <= 12) return { size: 16, leading: 1.30 };
-  return { size: 16, leading: 1.30 };
-}
-function pickLayoutForText(text=""){
-  const len = (text||"").length;
-  if (len <= 180) return "image_top";
-  if (len <= 280) return "text_top";
-  return "full_bleed_panel";
-}
-function drawWatermark(page, text = "FÖRHANDSVISNING", color = rgb(0.2, 0.2, 0.2)) {
-  const { width, height } = page.getSize();
-  const fontSize = Math.min(width, height) * 0.08;
-  const angleRad = Math.atan2(height, width);  // diagonalt
-  const angleDeg = (angleRad * 180) / Math.PI;
-
-  page.drawText(text, {
-    x: width * 0.1,
-    y: height * 0.3,
-    size: fontSize,
-    color,
-    opacity: 0.12,
-    rotate: degrees(angleDeg)
-  });
-}
-
-// === Cache helpers (gratis) ===
-function dataUrlToBytes(dataUrl) {
-  if (!dataUrl?.startsWith("data:")) return null;
-  const [, meta, b64] = dataUrl.match(/^data:([^;]+);base64,(.+)$/) || [];
-  if (!b64) return null;
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return { bytes, mime: meta || "application/octet-stream" };
-}
-async function handleCachePut(req, url) {
-  // PUT /cache/:sid/:page.png  body: { data_url }
-  const parts = url.pathname.split("/").filter(Boolean);
-  const sid   = parts[1];
-  const file  = parts[2] || "";
-  const page  = (file.split(".")[0] || "1");
-  if (!sid || !page) return err("Bad cache path", 400);
-
-  const j = await req.json().catch(()=> ({}));
-  const d = dataUrlToBytes(j.data_url);
-  if (!d) return err("Missing/invalid data_url", 400);
-
-  const cacheKey = new Request(url.toString(), { method: "GET" });
-  const res = new Response(d.bytes, {
-    headers: {
-      "content-type": d.mime || "image/png",
-      "cache-control": "public, max-age=31536000, immutable",
-      ...CORS_HEADERS
-    }
-  });
-  await caches.default.put(cacheKey, res.clone());
-  return ok({ ok:true, url: url.toString(), sid, page: Number(page) });
-}
-async function handleCacheGet(_req, url) {
-  const cacheKey = new Request(url.toString(), { method: "GET" });
-  let res = await caches.default.match(cacheKey);
-  if (res) {
-    const h = new Headers(res.headers);
-    Object.entries(CORS_HEADERS).forEach(([k,v]) => h.set(k,v));
-    return new Response(res.body, { status: 200, headers: h });
-  }
-  return new Response("Not found", { status: 404, headers: CORS_HEADERS });
-}
-
-// === PDF-core: hämta alltid bytes via URL (ej data-URL för minne/stabilitet) ===
-async function embedImage(pdfDoc, imageUrl){
-  if (!imageUrl) return null;
-  try{
-    const r = await fetch(imageUrl);
-    if (!r.ok) return null;
-    const bytes = new Uint8Array(await r.arrayBuffer());
-    try { return await pdfDoc.embedPng(bytes); } catch {}
-    try { return await pdfDoc.embedJpg(bytes); } catch {}
-    return null;
-  }catch { return null; }
-}
-function drawWrappedText(page, text, x, yTop, maxWidth, font, fontSize, lineHeight){
-  const words = String(text||"").split(/\s+/);
-  let line = "", cursorY = yTop; const lines = [];
-  for (const w of words) {
-    const test = line ? (line+" "+w) : w;
-    const testWidth = font.widthOfTextAtSize(test, fontSize);
-    if (testWidth <= maxWidth) line = test;
-    else { if (line) lines.push(line); line = w; }
-  }
-  if (line) lines.push(line);
-  for (const ln of lines) {
-    page.drawText(ln, { x, y: cursorY, size: fontSize, font, color: rgb(0.1,0.1,0.1) });
-    cursorY -= lineHeight;
-  }
-  return cursorY;
-}
-async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }) {
-  const trimSpec = TRIMS[trim] || TRIMS.square210;
-  const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
-
-  const trimWpt = mmToPt(trimSpec.w_mm);
-  const trimHpt = mmToPt(trimSpec.h_mm);
-  const pageW = trimWpt + mmToPt(bleed * 2);
-  const pageH = trimHpt + mmToPt(bleed * 2);
-  const contentX = mmToPt(bleed);
-  const contentY = mmToPt(bleed);
-
-  const pdfDoc = await PDFDocument.create();
-  const fontBody = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const fontTitle = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-
-  const pages = story?.book?.pages || [];
-  const readingAge = story?.book?.reading_age || 6;
-  const { size: bodySize, leading } = fontSpecForReadingAge(readingAge);
-  const lineHeight = bodySize * leading;
-
-  const title = story?.book?.title || "Min bok";
-  const heroName = story?.book?.bible?.main_character?.name || "";
-  const theme = story?.book?.theme || "";
-
-  // page -> url
-  const imgByPage = new Map();
-  (images || []).forEach(row => {
-    if (row?.page && row?.url) imgByPage.set(row.page, row.url);
-  });
-
-  // ---------------- Cover ----------------
-  try {
-    const page = pdfDoc.addPage([pageW, pageH]);
-    const margin = mmToPt(18);
-    const titleSize = Math.min(trimWpt, trimHpt) * 0.07;
-    const subSize = titleSize * 0.45;
-
-    const coverImgUrl = imgByPage.get(1);
-    const coverImg = await embedImage(pdfDoc, coverImgUrl);
-    if (coverImg) {
-      const iw = coverImg.width, ih = coverImg.height;
-      const panelSize = Math.min(trimWpt - margin * 2, trimHpt - margin * 3);
-      const scale = Math.min(panelSize / iw, panelSize / ih);
-      const w = iw * scale, h = ih * scale;
-      const cx = contentX + (trimWpt - w) / 2;
-      const cy = contentY + (trimHpt - h) / 2 - mmToPt(8);
-      page.drawImage(coverImg, { x: cx, y: cy, width: w, height: h });
-    }
-
-    const tWidth = fontTitle.widthOfTextAtSize(title, titleSize);
-    page.drawText(title, {
-      x: contentX + (trimWpt - tWidth) / 2,
-      y: contentY + trimHpt - margin - titleSize,
-      size: titleSize, font: fontTitle, color: rgb(0.1, 0.1, 0.1)
-    });
-
-    const sub = theme ? `${theme}` : (heroName ? `Med ${heroName}` : "");
-    if (sub) {
-      const sWidth = fontBody.widthOfTextAtSize(sub, subSize);
-      page.drawText(sub, {
-        x: contentX + (trimWpt - sWidth) / 2,
-        y: contentY + trimHpt - margin - titleSize - subSize - mmToPt(3),
-        size: subSize, font: fontBody, color: rgb(0.25, 0.25, 0.25)
-      });
-    }
-
-    if (mode === "preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
-  } catch (e) {
-    console.error("PDF COVER ERROR:", e?.stack || e);
-    const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1) });
-  }
-
-  // ---------------- Inside pages ----------------
-  for (const p of pages) {
-    try {
-      const page = pdfDoc.addPage([pageW, pageH]);
-      const imgUrl = imgByPage.get(p.page);
-      const layout = pickLayoutForText(p.text || "");
-      const innerMargin = mmToPt(15);
-
-      const imgObj = await embedImage(pdfDoc, imgUrl);
-
-      if (layout === "image_top") {
-        const imgAreaH = trimHpt * 0.66;
-        if (imgObj) {
-          const iw = imgObj.width, ih = imgObj.height;
-          const maxW = trimWpt - innerMargin * 2;
-          const maxH = imgAreaH - innerMargin * 1.2;
-          const scale = Math.min(maxW / iw, maxH / ih);
-          const w = iw * scale, h = ih * scale;
-          const x = contentX + innerMargin + (maxW - w) / 2;
-          const y = contentY + trimHpt - innerMargin - h;
-          page.drawImage(imgObj, { x, y, width: w, height: h });
-        }
-        const textMaxW = trimWpt - innerMargin * 2;
-        const textX = contentX + innerMargin;
-        const textTopY = contentY + (trimHpt * 0.33);
-        drawWrappedText(page, p.text || "", textX, textTopY, textMaxW, fontBody, bodySize, lineHeight);
-
-      } else if (layout === "text_top") {
-        const textMaxW = trimWpt - innerMargin * 2;
-        const textX = contentX + innerMargin;
-        const textTopY = contentY + trimHpt - innerMargin - bodySize;
-        const afterY = drawWrappedText(page, p.text || "", textX, textTopY, textMaxW, fontBody, bodySize, lineHeight);
-
-        if (imgObj) {
-          const iw = imgObj.width, ih = imgObj.height;
-          const maxW = textMaxW;
-          const maxH = (afterY - (contentY + innerMargin)) - mmToPt(6);
-          if (maxH > mmToPt(20)) {
-            const scale = Math.min(maxW / iw, maxH / ih);
-            const w = iw * scale, h = ih * scale;
-            const x = textX + (maxW - w) / 2;
-            const y = contentY + innerMargin;
-            page.drawImage(imgObj, { x, y, width: w, height: h });
-          }
-        }
-
-      } else {
-        // full_bleed_panel
-        if (imgObj) {
-          const iw = imgObj.width, ih = imgObj.height;
-          const maxW = trimWpt, maxH = trimHpt;
-          const scale = Math.max(maxW / iw, maxH / ih); // cover
-          const w = iw * scale, h = ih * scale;
-          const x = contentX + (trimWpt - w) / 2;
-          const y = contentY + (trimHpt - h) / 2;
-          page.drawImage(imgObj, { x, y, width: w, height: h });
-        }
-        const panelH = Math.max(mmToPt(24), bodySize * 1.3 * 2.2);
-        const pad = mmToPt(8);
-        const panelX = contentX;
-        const panelY = contentY + mmToPt(10);
-        const panelW = trimWpt;
-
-        page.drawRectangle({ x: panelX, y: panelY, width: panelW, height: panelH, color: rgb(1, 1, 1) });
-        const textMaxW = panelW - pad * 2;
-        const textX = panelX + pad;
-        const textTopY = panelY + panelH - pad - bodySize;
-        drawWrappedText(page, p.text || "", textX, textTopY, textMaxW, fontBody, bodySize, bodySize * 1.3);
-      }
-
-      if (mode === "preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
-    } catch (e) {
-      console.error("PDF PAGE ERROR p=", p?.page, e?.stack || e);
-      const fallback = pdfDoc.addPage([pageW, pageH]);
-      fallback.drawText(`Sida ${p?.page || "?"}: kunde inte rendera.`, {
-        x: mmToPt(15), y: mmToPt(15),
-        size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1)
-      });
-      if (mode === "preview") drawWatermark(fallback, watermark_text || "FÖRHANDSVISNING");
-    }
-  }
-
-  // ---------------- Back cover ----------------
-  try {
-    const page = pdfDoc.addPage([pageW, pageH]);
-    const margin = mmToPt(18);
-    const blurb = story?.book?.lesson
-      ? `Lärdom: ${story.book.lesson}`
-      : `En berättelse skapad med BokPiloten.`;
-
-    page.drawText("Baksida", {
-      x: contentX + margin, y: contentY + trimHpt - margin - 18,
-      size: 18, font: fontTitle, color: rgb(0.1, 0.1, 0.1)
-    });
-
-    const fontBodySize = 12;
-    const lineH = fontBodySize * 1.4;
-    drawWrappedText(
-      page,
-      blurb,
-      contentX + margin,
-      contentY + trimHpt - margin - 18 - lineH,
-      trimWpt - margin * 2,
-      fontBody,
-      fontBodySize,
-      lineH
-    );
-
-    if (mode === "preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
-  } catch (e) {
-    console.error("PDF BACK COVER ERROR:", e?.stack || e);
-    const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawText("Baksidan kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1) });
-  }
-
-  return await pdfDoc.save();
-}
-
-async function handlePdfRequest(req) {
-  try {
-    const body = await req.json();
-    const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
-    if (!story?.book) return err("Missing story", 400);
-    if (!Array.isArray(images)) return err("Missing images[]", 400);
-
-    for (const row of images) {
-      if (!(row && Number.isFinite(row.page) && typeof row.url === "string")) {
-        return err("images[] must be [{page:number, url:string}]", 400);
-      }
-    }
-
-    const pdfBytes = await buildPdf({
-      story,
-      images,
-      mode: mode === "print" ? "print" : "preview",
-      trim: trim || "square210",
-      bleed_mm,
-      watermark_text: watermark_text || (mode === "preview" ? "FÖRHANDSVISNING" : null),
-    });
-
-    return new Response(pdfBytes, {
-      status: 200,
-      headers: {
-        "content-type": "application/pdf",
-        "cache-control": mode === "preview" ? "no-store" : "public, max-age=31536000, immutable",
-        "content-disposition": `inline; filename="bokpiloten-${Date.now()}.pdf"`,
-        "access-control-allow-origin": "*"
-      }
-    });
-  } catch (e) {
-    console.error("PDF ERROR:", e?.stack || e);
-    return err(e?.message || "PDF failed", 500);
-  }
-}
-
-// =============================== API ========================================
+// ============================================================================
+// API
+// ============================================================================
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
-    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
+    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
     if (req.method === "GET" && url.pathname === "/") return ok({ ok: true, ts: Date.now() });
 
-    // CACHE PUT/GET (måste komma före /api/pdf)
-    if (url.pathname.startsWith("/cache/") && req.method === "PUT") {
-      return handleCachePut(req, url);
-    }
-    if (url.pathname.startsWith("/cache/") && req.method === "GET") {
-      return handleCacheGet(req, url);
-    }
-
-    // STORY
+    // STORY (outline → pages)
     if (req.method === "POST" && url.pathname === "/api/story") {
       try {
         const body = await req.json();
         const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
-        const targetAge = Number.isFinite(parseInt(reading_age,10)) ? parseInt(reading_age,10) : parseInt(age||6,10);
+        // Läsålder: använd explicit reading_age om finns; annars kids→age, pets→8 (lite “familj”)
+        const targetAge = Number.isFinite(parseInt(reading_age,10))
+          ? parseInt(reading_age,10)
+          : ((category||"kids")==="pets" ? 8 : parseInt(age||6,10));
 
+        // 1) Outline
         const outlineUser = `
-${heroDescriptor({ category, name, age: targetAge, traits })}
-Tema: "${theme || ""}".
-Läsålder: ${targetAge}. Svara ENBART med json.
+${heroDescriptor({ category, name, age, traits })}
+Kategori: ${category||"kids"}.
+Läsålder: ${targetAge}.
+Önskat tema/poäng (om angivet): ${theme || "vänskap"}.
+Antal sidor: ${pages || 12}.
+Returnera enbart json.
 `.trim();
+
         const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
 
-        const storyUser = `
+        // 2) Book från outline
+       const storyUser = `
 OUTLINE:
 ${JSON.stringify(outline)}
-${heroDescriptor({ category, name, age: targetAge, traits })}
+${heroDescriptor({ category, name, age, traits })}
 Läsålder: ${targetAge}. Sidor: ${pages||12}. Stil: ${style||"cartoon"}. Kategori: ${category||"kids"}.
-Boken ska ha tydlig lärdom (lesson) kopplad till temat. Följ temat noga.
-Svara ENBART med json.
+Boken ska ha tydlig lärdom (lesson) kopplad till temat.
+Följ temat NOGA: håll platser/handlingar huvudsakligen inom tematisk ram.
+Returnera enbart json.
 `.trim();
+
+
         const story = await openaiJSON(env, STORY_SYS, storyUser);
         const plan  = normalizePlan(story?.book?.pages || []);
         return ok({ story, plan, previewVisible: 4 });
@@ -586,12 +275,12 @@ Svara ENBART med json.
     // REF-IMAGE
     if (req.method === "POST" && url.pathname === "/api/ref-image") {
       try{
-        const { style="cartoon", photo_b64, bible, traits="", category="pets" } = await req.json();
+        const { style="cartoon", photo_b64, bible, traits="" } = await req.json();
         if (photo_b64) {
           const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
           return ok({ ref_image_b64: b64 });
         }
-        const prompt = characterCardPrompt({ style, bible, traits, category });
+        const prompt = characterCardPrompt({ style, bible, traits });
         const g = await geminiImage(env, { prompt }, 70000, 2);
         if (!g?.b64) return ok({ ref_image_b64: null });
         return ok({ ref_image_b64: g.b64 });
@@ -605,7 +294,8 @@ Svara ENBART med json.
         const pages = story?.book?.pages || [];
         if (!pages.length) return err("No pages", 400);
         if (!ref_image_b64) return err("Missing reference image", 400);
-        const frames = (plan?.plan || []);
+
+        const frames = plan?.plan || [];
         const pageCount = pages.length;
         const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
 
@@ -623,12 +313,12 @@ Svara ENBART med json.
             const i = idx++; const item = jobs[i];
             try{
               const g = await geminiImage(env, { prompt: item.prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
-              out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
+              out.push({ page: item.page, image_url: g.image_url, provider: g.provider||"google" });
             }catch(e){ out.push({ page: item.page, error: String(e?.message||e) }); }
           }
         }
         await Promise.all(Array.from({length: CONC}, worker));
-        out.sort((a,b)=> (a.page||0)-(b.page||0));
+        out.sort((a,b)=>(a.page||0)-(b.page||0));
         return ok({ images: out });
       }catch(e){ log("images error", e?.message); return err(e.message||"Images failed", 500); }
     }
@@ -638,30 +328,15 @@ Svara ENBART med json.
       try{
         const { style="cartoon", ref_image_b64, page_text, scene_text, frame, story } = await req.json();
         if (!ref_image_b64) return err("Missing reference image", 400);
-
         const fakeStory = story || { book:{ pages:[{page:1,scene:scene_text,text:page_text}] } };
-        const pg = { page: 1, scene: scene_text, text: page_text, time_of_day: frame?.time_of_day, weather: frame?.weather };
-        const f  = { shot_type: frame?.shot_type || "M", lens_mm: frame?.lens_mm || 50, subject_size_percent: frame?.subject_size_percent || 60 };
-
-        const prompt = buildFramePrompt({
-          style, story: fakeStory, page: pg, pageCount: 1, frame: f,
-          characterName: (fakeStory.book?.bible?.main_character?.name || "Hjälten")
-        });
-
+        const pg = { page: 1, scene: scene_text, text: page_text };
+        const f  = { shot_type: frame?.shot_type||"M", lens_mm: frame?.lens_mm||50, subject_size_percent: frame?.subject_size_percent||60 };
+        const prompt = buildFramePrompt({ style, story: fakeStory, page: pg, pageCount: 1, frame: f, characterName: (fakeStory.book?.bible?.main_character?.name || "Hjälten") });
         const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
-        return ok({ image_url: g.image_url, provider: g.provider || "google" });
+        return ok({ image_url: g.image_url, provider: g.provider||"google" });
       }catch(e){ log("regen error", e?.message); return err(e.message||"Regenerate failed", 500); }
     }
 
-    // PDF
-    if (req.method === "POST" && url.pathname === "/api/pdf") {
-      try { return await handlePdfRequest(req); }
-      catch (e) { return err(e?.message || "PDF failed", 500); }
-    }
-
-    return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: {
-      "content-type": "application/json; charset=utf-8",
-      ...CORS_HEADERS,
-    }});
+    return err("Not found", 404);
   }
 };
