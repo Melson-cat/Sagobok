@@ -1,15 +1,20 @@
 // ============================================================================
-// BokPiloten – Worker v13
-// Outline → Story med röd tråd + kategori-agnostisk hjälte + läsålder
-// Global text-kontekst per sida (ingen bild-kedjning) + uttrycksfull cartoon
-// Endpoints: /api/story, /api/ref-image, /api/images, /api/image/regenerate
+// BokPiloten – Worker v13-PDF+
+// Låser v13-story/bildflödet oförändrat och lägger till:
+//  - POST /api/images/upload  → Cloudflare Images (tar data_url), svarar {uploads:[{page,image_id,url}]}
+//  - POST /api/pdf            → bygger PDF av story + [{page, image_id|url|data_url}]
+// Kräver env: API_KEY, GEMINI_API_KEY, IMAGES_API_TOKEN, CF_ACCOUNT_ID, CF_IMAGES_ACCOUNT_HASH, (CF_IMAGES_VARIANT)
 // ============================================================================
 
+import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
+
+// ---------------- CORS & helpers ----------------
 const CORS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, OPTIONS",
   "access-control-allow-headers": "*",
   "access-control-max-age": "600",
+  "access-control-expose-headers": "Content-Disposition"
 };
 const JSONH = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...CORS };
 const OPENAI_MODEL = "gpt-4o-mini";
@@ -20,7 +25,6 @@ const log = (...a) => { try { console.log(...a); } catch {} };
 
 // ---------------- OpenAI JSON (story) ----------------
 async function openaiJSON(env, system, user) {
-  // Säkerställ 'json' i messages för response_format: json_object
   const sys = system.toLowerCase().includes("json") ? system : system + "\nSvara endast som giltig json.";
   const usr = user.toLowerCase().includes("json") ? user : user + "\n(returnera bara json)";
 
@@ -56,15 +60,11 @@ function findGeminiImagePart(json) {
 async function geminiImage(env, item, timeoutMs=75000, attempts=3) {
   const key = env.GEMINI_API_KEY; if (!key) throw new Error("GEMINI_API_KEY missing");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(key)}`;
-
   const parts = [];
   if (item.character_ref_b64) parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
   parts.push({ text: item.prompt });
 
-  const body = {
-    contents: [{ role: "user", parts }],
-    generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.9 }
-  };
+  const body = { contents: [{ role: "user", parts }], generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.9 } };
 
   let last;
   for (let i=1;i<=attempts;i++){
@@ -124,7 +124,6 @@ Regler:
 - Svara ENBART med json.
 `;
 
-
 const STORY_SYS = `
 Du får en outline för en svensk bilderbok. Skriv nu boken enligt:
 { "book":{
@@ -151,7 +150,6 @@ Hårda regler:
 - Svara ENBART med json.
 `;
 
-
 // Hjältebeskrivning
 function heroDescriptor({ category, name, age, traits }) {
   if ((category||"kids") === "pets") {
@@ -163,8 +161,7 @@ function heroDescriptor({ category, name, age, traits }) {
 
 // ---------------- Plan & Prompt helpers ----------------
 function normalizePlan(pages){
-  const out=[];
-  pages.forEach((p,i)=>{
+  const out=[]; pages.forEach((p,i)=>{
     const order = [ "EW","M","CU","W" ];
     const t = order[i % order.length];
     const lens = {EW:28,W:35,M:50,CU:85}[t] || 35;
@@ -177,7 +174,6 @@ function shotLine(f={}) {
   const map={EW:"extra wide",W:"wide",M:"medium",CU:"close-up"};
   return `${map[f.shot_type||"M"]} shot, ~${f.subject_size_percent||60}% subject, ≈${f.lens_mm||35}mm`;
 }
-
 function buildSeriesContext(story){
   const pages = story?.book?.pages || [];
   const locs = [];
@@ -193,12 +189,10 @@ function buildSeriesContext(story){
     `beats: ${beats.join(" | ")}`
   ].join("\n");
 }
-
 function buildFramePrompt({ style, story, page, pageCount, frame, characterName }){
   const series = buildSeriesContext(story);
   const pg = page;
   const styleLine = styleHint(style);
-
   return [
     series,
     `This is page ${pg.page} of ${pageCount}.`,
@@ -211,7 +205,6 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName 
     `VARIETY: each page unique yet coherent.`
   ].filter(Boolean).join("\n");
 }
-
 function characterCardPrompt({ style, bible, traits }){
   const mc=bible?.main_character||{};
   const name=mc.name||"Nova";
@@ -223,29 +216,382 @@ function characterCardPrompt({ style, bible, traits }){
   ].join(" ");
 }
 
+// ---------------- Cloudflare Images helpers ----------------
+function dataUrlToBlob(dataUrl) {
+  const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/i);
+  if (!m) return null;
+  const mime = m[1]; const b64 = m[2];
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) u8[i] = bin.charCodeAt(i);
+  return { blob: new Blob([u8], { type: mime }), mime };
+}
+function cfImagesDeliveryURL(env, image_id, variant) {
+  const hash = env.CF_IMAGES_ACCOUNT_HASH;
+  if (!hash) return null;
+  const v = variant || env.CF_IMAGES_VARIANT || "public";
+  return `https://imagedelivery.net/${hash}/${image_id}/${v}`;
+}
+async function uploadOneToCFImages(env, { data_url, id }) {
+  if (!env.IMAGES_API_TOKEN || !env.CF_ACCOUNT_ID) throw new Error("Cloudflare Images env missing");
+  const file = dataUrlToBlob(data_url);
+  if (!file) throw new Error("Bad data_url");
+
+  const form = new FormData();
+  form.append("file", file.blob, id || `page-${Date.now()}.jpg`);
+  // form.append("id", id); // valfritt
+
+  const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/images/v1`, {
+    method: "POST",
+    headers: { "authorization": `Bearer ${env.IMAGES_API_TOKEN}` },
+    body: form
+  });
+  const j = await r.json().catch(()=> ({}));
+  if (!r.ok || !j.success) throw new Error(`CF Images ${r.status} ${JSON.stringify(j)}`);
+  const image_id = j?.result?.id;
+  const url = cfImagesDeliveryURL(env, image_id);
+  return { image_id, url };
+}
+
+// ---------------- PDF helpers ----------------
+const MM_PER_INCH = 25.4;
+const PT_PER_INCH = 72;
+const PT_PER_MM   = PT_PER_INCH / MM_PER_INCH;
+const TRIMS = { square210: { w_mm: 210, h_mm: 210, default_bleed_mm: 3 } };
+function mmToPt(mm){ return mm * PT_PER_MM; }
+function fontSpecForReadingAge(ra=6){
+  if (ra <= 5)  return { size: 22, leading: 1.35 };
+  if (ra <= 8)  return { size: 18, leading: 1.35 };
+  if (ra <= 12) return { size: 16, leading: 1.30 };
+  return { size: 16, leading: 1.30 };
+}
+function pickLayoutForText(text=""){
+  const len = (text||"").length;
+  if (len <= 180) return "image_top";
+  if (len <= 280) return "text_top";
+  return "full_bleed_panel";
+}
+function drawWatermark(page, text = "FÖRHANDSVISNING", color = rgb(0.2,0.2,0.2)) {
+  const { width, height } = page.getSize();
+  const fontSize = Math.min(width, height) * 0.08;
+  const angleRad = Math.atan2(height, width);
+  const angleDeg = (angleRad * 180) / Math.PI;
+  page.drawText(text, { x: width*0.1, y: height*0.3, size: fontSize, color, opacity: 0.12, rotate: degrees(angleDeg) });
+}
+function drawWrappedText(page, text, x, yTop, maxWidth, font, fontSize, lineHeight){
+  const words = String(text||"").split(/\s+/);
+  let line = "", cursorY = yTop; const lines = [];
+  for (const w of words) {
+    const test = line ? (line+" "+w) : w;
+    const testWidth = font.widthOfTextAtSize(test, fontSize);
+    if (testWidth <= maxWidth) line = test;
+    else { if (line) lines.push(line); line = w; }
+  }
+  if (line) lines.push(line);
+  for (const ln of lines) {
+    page.drawText(ln, { x, y: cursorY, size: fontSize, font, color: rgb(0.1,0.1,0.1) });
+    cursorY -= lineHeight;
+  }
+  return cursorY;
+}
+
+// Hämta bytes prioriterat: image_id → url → data_url
+async function getImageBytes(env, row) {
+  try {
+    if (row.image_id) {
+      const url = cfImagesDeliveryURL(env, row.image_id);
+      if (!url) return null;
+      const r = await fetch(url, { cf: { cacheTtl: 3600, cacheEverything: true } });
+      if (!r.ok) return null;
+      return new Uint8Array(await r.arrayBuffer());
+    }
+    if (row.url && /^https?:\/\//i.test(row.url)) {
+      const r = await fetch(row.url, { cf: { cacheTtl: 3600, cacheEverything: true } });
+      if (!r.ok) return null;
+      return new Uint8Array(await r.arrayBuffer());
+    }
+    if (row.data_url && row.data_url.startsWith("data:image/")) {
+      const m = row.data_url.match(/^data:([^;]+);base64,(.+)$/i);
+      if (!m) return null;
+      const b64 = m[2]; const bin = atob(b64);
+      const u8 = new Uint8Array(bin.length); for (let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+      return u8;
+    }
+    return null;
+  } catch { return null; }
+}
+
+async function embedImage(pdfDoc, bytes){
+  if (!bytes) return null;
+  try { return await pdfDoc.embedPng(bytes); } catch {}
+  try { return await pdfDoc.embedJpg(bytes); } catch {}
+  return null;
+}
+
+async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }, env) {
+  const trimSpec = TRIMS[trim] || TRIMS.square210;
+  const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
+
+  const trimWpt = mmToPt(trimSpec.w_mm);
+  const trimHpt = mmToPt(trimSpec.h_mm);
+  const pageW = trimWpt + mmToPt(bleed * 2);
+  const pageH = trimHpt + mmToPt(bleed * 2);
+  const contentX = mmToPt(bleed);
+  const contentY = mmToPt(bleed);
+
+  const pdfDoc = await PDFDocument.create();
+  const fontBody = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontTitle = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+  const pages = story?.book?.pages || [];
+  const readingAge = story?.book?.reading_age || 6;
+  const { size: bodySize, leading } = fontSpecForReadingAge(readingAge);
+  const lineHeight = bodySize * leading;
+
+  const title = story?.book?.title || "Min bok";
+  const heroName = story?.book?.bible?.main_character?.name || "";
+  const theme = story?.book?.theme || "";
+
+  const imgByPage = new Map();
+  (images || []).forEach(row => {
+    if (row?.page && (row.image_id || row.url || row.data_url)) imgByPage.set(row.page, row);
+  });
+
+  // Cover
+  try {
+    const page = pdfDoc.addPage([pageW, pageH]);
+    const margin = mmToPt(18);
+    const titleSize = Math.min(trimWpt, trimHpt) * 0.07;
+    const subSize = titleSize * 0.45;
+
+    const coverSrc = imgByPage.get(1);
+    if (coverSrc) {
+      const bytes = await getImageBytes(env, coverSrc);
+      const coverImg = await embedImage(pdfDoc, bytes);
+      if (coverImg) {
+        const iw = coverImg.width, ih = coverImg.height;
+        const panelSize = Math.min(trimWpt - margin * 2, trimHpt - margin * 3);
+        const scale = Math.min(panelSize / iw, panelSize / ih);
+        const w = iw * scale, h = ih * scale;
+        const cx = contentX + (trimWpt - w) / 2;
+        const cy = contentY + (trimHpt - h) / 2 - mmToPt(8);
+        page.drawImage(coverImg, { x: cx, y: cy, width: w, height: h });
+      }
+    }
+
+    const tWidth = fontTitle.widthOfTextAtSize(title, titleSize);
+    page.drawText(title, { x: contentX + (trimWpt - tWidth) / 2, y: contentY + trimHpt - margin - titleSize, size: titleSize, font: fontTitle, color: rgb(0.1, 0.1, 0.1) });
+
+    const sub = theme ? `${theme}` : (heroName ? `Med ${heroName}` : "");
+    if (sub) {
+      const sWidth = fontBody.widthOfTextAtSize(sub, subSize);
+      page.drawText(sub, { x: contentX + (trimWpt - sWidth) / 2, y: contentY + trimHpt - margin - titleSize - subSize - mmToPt(3), size: subSize, font: fontBody, color: rgb(0.25, 0.25, 0.25) });
+    }
+
+    if (mode === "preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
+  } catch (e) {
+    log("PDF COVER ERROR:", e?.message);
+    const page = pdfDoc.addPage([pageW, pageH]);
+    page.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1) });
+  }
+
+  // Inside pages
+  for (const p of pages) {
+    try {
+      const page = pdfDoc.addPage([pageW, pageH]);
+      const src = imgByPage.get(p.page);
+      const layout = pickLayoutForText(p.text || "");
+      const innerMargin = mmToPt(15);
+
+      let imgObj = null;
+      if (src) {
+        const bytes = await getImageBytes(env, src);
+        imgObj = await embedImage(pdfDoc, bytes);
+      }
+
+      if (layout === "image_top") {
+        const imgAreaH = trimHpt * 0.66;
+        if (imgObj) {
+          const iw = imgObj.width, ih = imgObj.height;
+          const maxW = trimWpt - innerMargin * 2;
+          const maxH = imgAreaH - innerMargin * 1.2;
+          const scale = Math.min(maxW / iw, maxH / ih);
+          const w = iw * scale, h = ih * scale;
+          const x = contentX + innerMargin + (maxW - w) / 2;
+          const y = contentY + trimHpt - innerMargin - h;
+          page.drawImage(imgObj, { x, y, width: w, height: h });
+        }
+        const textMaxW = trimWpt - innerMargin * 2;
+        const textX = contentX + innerMargin;
+        const textTopY = contentY + (trimHpt * 0.33);
+        drawWrappedText(page, p.text || "", textX, textTopY, textMaxW, fontBody, bodySize, lineHeight);
+
+      } else if (layout === "text_top") {
+        const textMaxW = trimWpt - innerMargin * 2;
+        const textX = contentX + innerMargin;
+        const textTopY = contentY + trimHpt - innerMargin - bodySize;
+        const afterY = drawWrappedText(page, p.text || "", textX, textTopY, textMaxW, fontBody, bodySize, lineHeight);
+
+        if (imgObj) {
+          const iw = imgObj.width, ih = imgObj.height;
+          const maxW = textMaxW;
+          const maxH = (afterY - (contentY + innerMargin)) - mmToPt(6);
+          if (maxH > mmToPt(20)) {
+            const scale = Math.min(maxW / iw, maxH / ih);
+            const w = iw * scale, h = ih * scale;
+            const x = textX + (maxW - w) / 2;
+            const y = contentY + innerMargin;
+            page.drawImage(imgObj, { x, y, width: w, height: h });
+          }
+        }
+
+      } else {
+        if (imgObj) {
+          const iw = imgObj.width, ih = imgObj.height;
+          const maxW = trimWpt, maxH = trimHpt;
+          const scale = Math.max(maxW / iw, maxH / ih);
+          const w = iw * scale, h = ih * scale;
+          const x = contentX + (trimWpt - w) / 2;
+          const y = contentY + (trimHpt - h) / 2;
+          page.drawImage(imgObj, { x, y, width: w, height: h });
+        }
+        const panelH = Math.max(mmToPt(24), bodySize * 1.3 * 2.2);
+        const pad = mmToPt(8);
+        const panelX = contentX;
+        const panelY = contentY + mmToPt(10);
+        const panelW = trimWpt;
+        page.drawRectangle({ x: panelX, y: panelY, width: panelW, height: panelH, color: rgb(1, 1, 1) });
+        const textMaxW = panelW - pad * 2;
+        const textX = panelX + pad;
+        const textTopY = panelY + panelH - pad - bodySize;
+        drawWrappedText(page, p.text || "", textX, textTopY, textMaxW, fontBody, bodySize, bodySize * 1.3);
+      }
+
+      if (mode === "preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
+    } catch (e) {
+      log("PDF PAGE ERROR p=", p?.page, e?.message);
+      const fallback = pdfDoc.addPage([pageW, pageH]);
+      fallback.drawText(`Sida ${p?.page || "?"}: kunde inte rendera.`, { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1) });
+      if (mode === "preview") drawWatermark(fallback, watermark_text || "FÖRHANDSVISNING");
+    }
+  }
+
+  // Back cover
+  try {
+    const page = pdfDoc.addPage([pageW, pageH]);
+    const margin = mmToPt(18);
+    const blurb = story?.book?.lesson ? `Lärdom: ${story.book.lesson}` : `En berättelse skapad med BokPiloten.`;
+
+    page.drawText("Baksida", { x: contentX + margin, y: contentY + trimHpt - margin - 18, size: 18, font: fontTitle, color: rgb(0.1, 0.1, 0.1) });
+    const fontBodySize = 12;
+    const lineH = fontBodySize * 1.4;
+    drawWrappedText(page, blurb, contentX + margin, contentY + trimHpt - margin - 18 - lineH, trimWpt - margin * 2, fontBody, fontBodySize, lineH);
+    if (mode === "preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
+  } catch (e) {
+    log("PDF BACK COVER ERROR:", e?.message);
+    const page = pdfDoc.addPage([pageW, pageH]);
+    page.drawText("Baksidan kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1) });
+  }
+
+  return await pdfDoc.save();
+}
+
+async function handlePdfRequest(req, env) {
+  const body = await req.json();
+  const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
+  if (!story?.book) return err("Missing story", 400);
+  if (!Array.isArray(images) || images.length === 0) return err("Missing images[]", 400);
+
+  // Validera [{page, image_id}|{page, url}|{page, data_url}]
+  for (const row of images) {
+    if (!Number.isFinite(row?.page)) return err("images[].page missing", 400);
+    if (!(row.image_id || row.url || row.data_url)) return err("images[] row must include image_id or url or data_url", 400);
+  }
+
+  const pdfBytes = await buildPdf({
+    story,
+    images,
+    mode: mode === "print" ? "print" : "preview",
+    trim: trim || "square210",
+    bleed_mm,
+    watermark_text: watermark_text || (mode === "preview" ? "FÖRHANDSVISNING" : null),
+  }, env);
+
+  const headers = new Headers({
+    "content-type": "application/pdf",
+    "cache-control": mode === "preview" ? "no-store" : "public, max-age=31536000, immutable",
+        "content-disposition": `inline; filename="bokpiloten-${Date.now()}.pdf"`,
+    ...CORS
+  });
+  return new Response(pdfBytes, { status: 200, headers });
+}
+
+// ---------------- Images: bulk upload -> Cloudflare Images ------------------
+async function handleUploadRequest(req, env) {
+  try {
+    const body = await req.json().catch(() => ({}));
+    // Stöd både {items:[{page,data_url,id?},...]} och single {page,data_url,id?}
+    const items = Array.isArray(body?.items)
+      ? body.items
+      : (body?.data_url ? [body] : []);
+
+    if (!items.length) return err("Body must include items[] or {page,data_url}", 400);
+
+    const uploads = [];
+    for (const it of items) {
+      if (!Number.isFinite(it?.page)) {
+        uploads.push({ page: it?.page ?? null, error: "missing page" });
+        continue;
+      }
+      if (typeof it?.data_url !== "string" || !it.data_url.startsWith("data:image/")) {
+        uploads.push({ page: it.page, error: "invalid data_url" });
+        continue;
+      }
+      try {
+        const u = await uploadOneToCFImages(env, { data_url: it.data_url, id: it.id });
+        uploads.push({ page: it.page, image_id: u.image_id, url: u.url });
+      } catch (e) {
+        uploads.push({ page: it.page, error: String(e?.message || e) });
+      }
+    }
+    return ok({ uploads });
+  } catch (e) {
+    return err(e?.message || "Upload failed", 500);
+  }
+}
+
 // ============================================================================
 // API
 // ============================================================================
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
-    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-    if (req.method === "GET" && url.pathname === "/") return ok({ ok: true, ts: Date.now() });
 
-    // STORY (outline → pages)
+    // Preflight
+    if (req.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: CORS });
+    }
+
+    // Health
+    if (req.method === "GET" && url.pathname === "/") {
+      return ok({ ok: true, ts: Date.now() });
+    }
+
+    // ---------------- STORY (outline -> pages)  [v13 orörd] ----------------
     if (req.method === "POST" && url.pathname === "/api/story") {
       try {
         const body = await req.json();
         const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
-        // Läsålder: använd explicit reading_age om finns; annars kids→age, pets→8 (lite “familj”)
-        const targetAge = Number.isFinite(parseInt(reading_age,10))
-          ? parseInt(reading_age,10)
-          : ((category||"kids")==="pets" ? 8 : parseInt(age||6,10));
+
+        // Läsålder: explicit reading_age om satt, annars kids=age, pets=8
+        const targetAge = Number.isFinite(parseInt(reading_age, 10))
+          ? parseInt(reading_age, 10)
+          : ((category || "kids") === "pets" ? 8 : parseInt(age || 6, 10));
 
         // 1) Outline
         const outlineUser = `
 ${heroDescriptor({ category, name, age, traits })}
-Kategori: ${category||"kids"}.
+Kategori: ${category || "kids"}.
 Läsålder: ${targetAge}.
 Önskat tema/poäng (om angivet): ${theme || "vänskap"}.
 Antal sidor: ${pages || 12}.
@@ -255,26 +601,28 @@ Returnera enbart json.
         const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
 
         // 2) Book från outline
-       const storyUser = `
+        const storyUser = `
 OUTLINE:
 ${JSON.stringify(outline)}
 ${heroDescriptor({ category, name, age, traits })}
-Läsålder: ${targetAge}. Sidor: ${pages||12}. Stil: ${style||"cartoon"}. Kategori: ${category||"kids"}.
+Läsålder: ${targetAge}. Sidor: ${pages || 12}. Stil: ${style || "cartoon"}. Kategori: ${category || "kids"}.
 Boken ska ha tydlig lärdom (lesson) kopplad till temat.
 Följ temat NOGA: håll platser/handlingar huvudsakligen inom tematisk ram.
 Returnera enbart json.
 `.trim();
 
-
         const story = await openaiJSON(env, STORY_SYS, storyUser);
         const plan  = normalizePlan(story?.book?.pages || []);
         return ok({ story, plan, previewVisible: 4 });
-      } catch (e) { log("story error", e?.message); return err(e.message||"Story failed", 500); }
+      } catch (e) {
+        log("story error", e?.message);
+        return err(e.message || "Story failed", 500);
+      }
     }
 
-    // REF-IMAGE
+    // ---------------- REF-IMAGE  [v13 orörd] ----------------
     if (req.method === "POST" && url.pathname === "/api/ref-image") {
-      try{
+      try {
         const { style="cartoon", photo_b64, bible, traits="" } = await req.json();
         if (photo_b64) {
           const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
@@ -284,12 +632,15 @@ Returnera enbart json.
         const g = await geminiImage(env, { prompt }, 70000, 2);
         if (!g?.b64) return ok({ ref_image_b64: null });
         return ok({ ref_image_b64: g.b64 });
-      }catch(e){ log("ref-image error", e?.message); return err("Ref generation failed", 500); }
+      } catch (e) {
+        log("ref-image error", e?.message);
+        return err("Ref generation failed", 500);
+      }
     }
 
-    // IMAGES
+    // ---------------- IMAGES (generate pages) [v13 orörd] -------------------
     if (req.method === "POST" && url.pathname === "/api/images") {
-      try{
+      try {
         const { style="cartoon", ref_image_b64, story, plan, concurrency=4 } = await req.json();
         const pages = story?.book?.pages || [];
         if (!pages.length) return err("No pages", 400);
@@ -306,37 +657,67 @@ Returnera enbart json.
         });
 
         const out = [];
-        const CONC = Math.min(Math.max(parseInt(concurrency||3,10),1),8);
+        const CONC = Math.min(Math.max(parseInt(concurrency || 3, 10), 1), 8);
         let idx = 0;
-        async function worker(){
+        async function worker() {
           while (idx < jobs.length) {
             const i = idx++; const item = jobs[i];
-            try{
+            try {
               const g = await geminiImage(env, { prompt: item.prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
-              out.push({ page: item.page, image_url: g.image_url, provider: g.provider||"google" });
-            }catch(e){ out.push({ page: item.page, error: String(e?.message||e) }); }
+              out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
+            } catch (e) {
+              out.push({ page: item.page, error: String(e?.message || e) });
+            }
           }
         }
-        await Promise.all(Array.from({length: CONC}, worker));
-        out.sort((a,b)=>(a.page||0)-(b.page||0));
+        await Promise.all(Array.from({ length: CONC }, worker));
+        out.sort((a, b) => (a.page || 0) - (b.page || 0));
         return ok({ images: out });
-      }catch(e){ log("images error", e?.message); return err(e.message||"Images failed", 500); }
+      } catch (e) {
+        log("images error", e?.message);
+        return err(e.message || "Images failed", 500);
+      }
     }
 
-    // REGENERATE
+    // ---------------- IMAGES: upload to CF Images (ny) ----------------------
+    if (req.method === "POST" && url.pathname === "/api/images/upload") {
+      return handleUploadRequest(req, env);
+    }
+
+    // ---------------- REGENERATE single (v13 orörd) -------------------------
     if (req.method === "POST" && url.pathname === "/api/image/regenerate") {
-      try{
+      try {
         const { style="cartoon", ref_image_b64, page_text, scene_text, frame, story } = await req.json();
         if (!ref_image_b64) return err("Missing reference image", 400);
-        const fakeStory = story || { book:{ pages:[{page:1,scene:scene_text,text:page_text}] } };
+        const fakeStory = story || { book: { pages: [{ page: 1, scene: scene_text, text: page_text }] } };
         const pg = { page: 1, scene: scene_text, text: page_text };
-        const f  = { shot_type: frame?.shot_type||"M", lens_mm: frame?.lens_mm||50, subject_size_percent: frame?.subject_size_percent||60 };
+        const f  = { shot_type: frame?.shot_type || "M", lens_mm: frame?.lens_mm || 50, subject_size_percent: frame?.subject_size_percent || 60 };
         const prompt = buildFramePrompt({ style, story: fakeStory, page: pg, pageCount: 1, frame: f, characterName: (fakeStory.book?.bible?.main_character?.name || "Hjälten") });
         const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
-        return ok({ image_url: g.image_url, provider: g.provider||"google" });
-      }catch(e){ log("regen error", e?.message); return err(e.message||"Regenerate failed", 500); }
+        return ok({ image_url: g.image_url, provider: g.provider || "google" });
+      } catch (e) {
+        log("regen error", e?.message);
+        return err(e.message || "Regenerate failed", 500);
+      }
     }
 
-    return err("Not found", 404);
+    // ---------------- PDF build (ny) ----------------------------------------
+    if (req.method === "POST" && url.pathname === "/api/pdf") {
+      try {
+        return await handlePdfRequest(req, env);
+      } catch (e) {
+        return err(e?.message || "PDF failed", 500);
+      }
+    }
+
+    // 404
+    return new Response(JSON.stringify({ error: "Not found" }), {
+      status: 404,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        ...CORS
+      }
+    });
   }
 };
+
