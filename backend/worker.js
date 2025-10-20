@@ -720,4 +720,15 @@ Returnera enbart json.
     });
   }
 };
+// DEBUG: kolla att env är bundna
+if (req.method === "GET" && url.pathname === "/api/images/env") {
+  return ok({
+    has: {
+      CF_ACCOUNT_ID: !!env.CF_ACCOUNT_ID,
+      IMAGES_API_TOKEN: !!env.IMAGES_API_TOKEN,
+      CF_IMAGES_ACCOUNT_HASH: !!env.CF_IMAGES_ACCOUNT_HASH,
+      CF_IMAGES_VARIANT: !!env.CF_IMAGES_VARIANT,
+    }
+  });
+}
 
