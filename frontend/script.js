@@ -417,62 +417,51 @@ async function ensureUploads() {
     throw new Error("Inga illustrationer kunde laddas upp till Cloudflare Images.");
   }
 }
+async function onCreatePdf() {
+  try {
+    if (!state.story) throw new Error("Ingen story i minnet.");
 
-/* ========= PDF-knapp ========= */
-async function onCreatePdf(){
-  try{
-    if (!state.story) {
-      alert("Skapa först förhandsvisningen (berättelse + bilder).");
-      return;
-    }
-    // Se till att vi har uppladdningar för alla genererade sidor
-    await ensureUploads();
-
-    setStatus("📄 Bygger PDF…");
-    updateProgress(0,1,"PDF");
-
-    // Mappa -> {page, image_id} i ordningen från storyn
-    const cfByPage = new Map(state.uploadedToCF.map(u => [u.page, u]));
-    const pages = (state.story?.book?.pages || []).map(p => p.page);
-
-    const images = [];
-    for (const pg of pages) {
-      const u = cfByPage.get(pg);
-      if (u && u.image_id) images.push({ page: u.page, image_id: u.image_id });
+    // Försök ladda upp alla illustrationer till Cloudflare Images.
+    // Om något strular (t.ex. CORS vid demo-URL:er), fortsätter vi ändå med direkta URL:er.
+    try {
+      await ensureUploads();
+    } catch (e) {
+      console.warn("⚠️ ensureUploads misslyckades, faller tillbaka till direkta URL:er:", e);
     }
 
-    if (!images.length) {
-      console.error("uploadedToCF =", state.uploadedToCF, "generatedImages =", state.generatedImages);
-      throw new Error("Hittade inga uppladdade bilder för PDF.");
-    }
+    // Föredra Cloudflare-uploads (image_id/url); annars använd genererade URL:er
+    const images = (state.uploadedToCF?.length
+      ? state.uploadedToCF.map(r => ({ page: r.page, image_id: r.image_id, url: r.url }))
+      : (state.generatedImages || []).map(r => ({ page: r.page, url: r.image_url }))
+    );
 
+    if (!images.length) throw new Error("Hittade inga illustrationer att lägga i PDF:en.");
+
+    setStatus("📕 Bygger PDF…");
     const res = await fetch(`${BACKEND}/api/pdf`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         story: state.story,
         images,
-        mode: "preview",
+        mode: "preview",        // byt till "print" när du vill ha bleed m.m.
         trim: "square210",
-        watermark_text: "FÖRHANDSVISNING – BokPiloten"
-      })
+        watermark_text: "FÖRHANDSVISNING"
+      }),
     });
-
-    if (!res.ok) {
-      const j = await res.json().catch(()=> ({}));
-      throw new Error(j?.error || `HTTP ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`PDF misslyckades (HTTP ${res.status})`);
 
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
-    window.open(url, "_blank", "noopener");
-    setStatus("✅ PDF öppnad i ny flik.");
+    window.open(url, "_blank");
+    setStatus(null);
   } catch (e) {
     console.error(e);
-    alert("Kunde inte skapa PDF: " + (e?.message || e));
     setStatus(null);
+    alert(e?.message || "Kunde inte skapa PDF.");
   }
 }
+
 
 /* ========= Submit ========= */
 async function onSubmit(e){

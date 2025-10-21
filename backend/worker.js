@@ -563,7 +563,6 @@ async function handleUploadRequest(req, env) {
     return err(e?.message || "Upload failed", 500);
   }
 }
-
 // ============================================================================
 // API
 // ============================================================================
@@ -581,18 +580,30 @@ export default {
       return ok({ ok: true, ts: Date.now() });
     }
 
+    // --- DEBUG: visa att env-variablerna är bundna (TA BORT i prod om du vill)
+    if (req.method === "GET" && url.pathname === "/api/images/env") {
+      return ok({
+        has: {
+          CF_ACCOUNT_ID: !!env.CF_ACCOUNT_ID,
+          IMAGES_API_TOKEN: !!env.IMAGES_API_TOKEN,
+          CF_IMAGES_ACCOUNT_HASH: !!env.CF_IMAGES_ACCOUNT_HASH,
+          CF_IMAGES_VARIANT: !!env.CF_IMAGES_VARIANT,
+          API_KEY: !!env.API_KEY,
+          GEMINI_API_KEY: !!env.GEMINI_API_KEY,
+        }
+      });
+    }
+
     // ---------------- STORY (outline -> pages)  [v13 orörd] ----------------
     if (req.method === "POST" && url.pathname === "/api/story") {
       try {
         const body = await req.json();
         const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
 
-        // Läsålder: explicit reading_age om satt, annars kids=age, pets=8
         const targetAge = Number.isFinite(parseInt(reading_age, 10))
           ? parseInt(reading_age, 10)
           : ((category || "kids") === "pets" ? 8 : parseInt(age || 6, 10));
 
-        // 1) Outline
         const outlineUser = `
 ${heroDescriptor({ category, name, age, traits })}
 Kategori: ${category || "kids"}.
@@ -604,7 +615,6 @@ Returnera enbart json.
 
         const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
 
-        // 2) Book från outline
         const storyUser = `
 OUTLINE:
 ${JSON.stringify(outline)}
@@ -683,9 +693,30 @@ Returnera enbart json.
       }
     }
 
-    // ---------------- IMAGES: upload to CF Images (ny) ----------------------
+    // ---------------- IMAGES: upload to CF Images (NY) ----------------------
     if (req.method === "POST" && url.pathname === "/api/images/upload") {
-      return handleUploadRequest(req, env);
+      try {
+        const body = await req.json().catch(() => ({}));
+        const items = Array.isArray(body?.items)
+          ? body.items
+          : (body?.data_url ? [body] : []);
+        if (!items.length) return err("Body must include items[] or {page,data_url}", 400);
+
+        const uploads = [];
+        for (const it of items) {
+          if (!Number.isFinite(it?.page)) { uploads.push({ page: it?.page ?? null, error: "missing page" }); continue; }
+          if (typeof it?.data_url !== "string" || !it.data_url.startsWith("data:image/")) { uploads.push({ page: it.page, error: "invalid data_url" }); continue; }
+          try {
+            const u = await uploadOneToCFImages(env, { data_url: it.data_url, id: it.id });
+            uploads.push({ page: it.page, image_id: u.image_id, url: u.url });
+          } catch (e) {
+            uploads.push({ page: it.page, error: String(e?.message || e) });
+          }
+        }
+        return ok({ uploads });
+      } catch (e) {
+        return err(e?.message || "Upload failed", 500);
+      }
     }
 
     // ---------------- REGENERATE single (v13 orörd) -------------------------
@@ -705,7 +736,7 @@ Returnera enbart json.
       }
     }
 
-    // ---------------- PDF build (ny) ----------------------------------------
+    // ---------------- PDF build (din v13-PDF+) ------------------------------
     if (req.method === "POST" && url.pathname === "/api/pdf") {
       try {
         return await handlePdfRequest(req, env);
@@ -717,22 +748,7 @@ Returnera enbart json.
     // 404
     return new Response(JSON.stringify({ error: "Not found" }), {
       status: 404,
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-        ...CORS
-      }
+      headers: { "content-type": "application/json; charset=utf-8", ...CORS }
     });
   }
 };
-// DEBUG: kolla att env är bundna
-if (req.method === "GET" && url.pathname === "/api/images/env") {
-  return ok({
-    has: {
-      CF_ACCOUNT_ID: !!env.CF_ACCOUNT_ID,
-      IMAGES_API_TOKEN: !!env.IMAGES_API_TOKEN,
-      CF_IMAGES_ACCOUNT_HASH: !!env.CF_IMAGES_ACCOUNT_HASH,
-      CF_IMAGES_VARIANT: !!env.CF_IMAGES_VARIANT,
-    }
-  });
-}
-
