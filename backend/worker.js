@@ -6,7 +6,10 @@
 //  - POST /api/images           -> interior pages (Gemini)        [{page,image_url}]
 //  - POST /api/cover            -> cover image (Gemini)           {image_url}
 //  - POST /api/images/upload    -> Cloudflare Images              {uploads:[{page|kind,image_id,url}]}
+//  - POST /api/image/regenerate -> single page (Gemini)           {image_url}
 //  - POST /api/pdf              -> story + images -> PDF
+//  - GET  /api/images/env       -> debug: env flags
+//  - GET  /                    -> health
 // Env: API_KEY, GEMINI_API_KEY, IMAGES_API_TOKEN, CF_ACCOUNT_ID,
 //      CF_IMAGES_ACCOUNT_HASH, (CF_IMAGES_VARIANT)
 // ============================================================================
@@ -79,9 +82,8 @@ async function geminiImage(env, item, timeoutMs=80000, attempts=3) {
     generationConfig: {
       responseModalities: ["IMAGE"],
       temperature: 0.33,
-      topP: 0.9,
-      // square output, fokus på konsekvens
-      aspectRatio: "1:1",
+      topP: 0.9
+      // OBS: INTE aspectRatio (stöds ej) – vi säger 1:1 i prompten.
     }
   };
 
@@ -225,7 +227,6 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName 
     `VARIETY: each page unique yet coherent.`
   ].filter(Boolean).join("\n");
 }
-
 function characterCardPrompt({ style, bible, traits }){
   const mc=bible?.main_character||{};
   const name=mc.name||"Nova";
@@ -235,6 +236,20 @@ function characterCardPrompt({ style, bible, traits }){
     `One hero only, full body, neutral background.`,
     `Hero: ${name}, ${phys}. No text.`
   ].join(" ");
+}
+function buildCoverPrompt({ style, story, characterName }) {
+  const title = story?.book?.title || "Min bok";
+  const theme = story?.book?.theme || "";
+  const styleLine = styleHint(style);
+
+  return [
+    `BOOK COVER ILLUSTRATION (front cover), ${styleLine}.`,
+    `Square composition (1:1). No text, no logos, no title on the image.`,
+    `Focus on the main hero (${characterName}) from the reference. Keep identity perfectly consistent.`,
+    `Cinematography: bold, iconic, clean background/scene that sells the theme.`,
+    theme ? `Theme cue: ${theme}.` : "",
+    `Avoid speech bubbles and typography.`
+  ].filter(Boolean).join("\n");
 }
 
 // ---------------- Cloudflare Images helpers ----------------
@@ -426,7 +441,6 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     const titleSize = Math.min(trimWpt, trimHpt) * 0.08;
     const subSize = Math.max(12, titleSize * 0.42);
     const marginX = contentX + mmToPt(18);
-    const tWidth = fontTitle.widthOfTextAtSize(title, titleSize);
     const tx = marginX;
     const ty = bandY + bandH - titleSize - mmToPt(6);
     page.drawText(title, { x: tx, y: ty, size: titleSize, font: fontTitle, color: rgb(0.1,0.1,0.1) });
@@ -464,33 +478,28 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
         if (imgObj) drawImageCover(page, imgObj, imgX, imgY, imgW, imgH);
       }
 
-      const textBoxTop = (L.imagePos === "top")
-        ? (imgY - gap)
-        : (imgY + imgH + gap);
-
       const textTop = (L.imagePos === "top")
-        ? textBoxTop
+        ? (imgY - gap)
         : (contentY + trimHpt - inner);
 
       const textBottom = (L.imagePos === "top")
         ? (contentY + inner)
-        : (contentY + imgH + gap + inner);
+        : (imgY + imgH + gap);
 
       const textH = Math.max(textTop - textBottom, mmToPt(30));
       const textW = trimWpt - inner*2;
       const textX = contentX + inner;
-      const padX  = mmToPt(2);
 
       const { size: baseSize, leading } = fontSpecForReadingAge(readingAge);
       const bodySize = (String(p.text||"").length > 380) ? baseSize * 0.92 : baseSize;
       const lineH = bodySize * (leading + 0.02);
 
-      const textMaxW = textW - padX*2;
+      const textMaxW = textW - mmToPt(4);
       const textStartY = (L.imagePos === "top")
         ? (textBottom + textH - bodySize)
         : (textTop - bodySize);
 
-      drawWrappedText(page, p.text || "", textX + padX, textStartY, textMaxW, fontBody, bodySize, lineH);
+      drawWrappedText(page, p.text || "", textX + mmToPt(2), textStartY, textMaxW, fontBody, bodySize, lineH);
 
       if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
     } catch (e) {
@@ -562,7 +571,6 @@ async function handlePdfRequest(req, env) {
   return new Response(pdfBytes, { status: 200, headers });
 }
 
-// ---------------- Images: bulk upload -> Cloudflare Images ------------------
 async function handleUploadRequest(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -593,19 +601,164 @@ async function handleUploadRequest(req, env) {
   }
 }
 
+async function handleStoryRequest(req, env) {
+  try {
+    const body = await req.json();
+    const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
+
+    const targetAge = Number.isFinite(parseInt(reading_age, 10))
+      ? parseInt(reading_age, 10)
+      : ((category || "kids") === "pets" ? 8 : parseInt(age || 6, 10));
+
+    const outlineUser = `
+${heroDescriptor({ category, name, age, traits })}
+Kategori: ${category || "kids"}.
+Läsålder: ${targetAge}.
+Önskat tema/poäng (om angivet): ${theme || "vänskap"}.
+Antal sidor: ${pages || 12}.
+Returnera enbart json.
+`.trim();
+
+    const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
+
+    const storyUser = `
+OUTLINE:
+${JSON.stringify(outline)}
+${heroDescriptor({ category, name, age, traits })}
+Läsålder: ${targetAge}. Sidor: ${pages || 12}. Stil: ${style || "cartoon"}. Kategori: ${category || "kids"}.
+Boken ska ha tydlig lärdom (lesson) kopplad till temat.
+Följ temat NOGA: håll platser/handlingar huvudsakligen inom tematisk ram.
+Returnera enbart json.
+`.trim();
+
+    const story = await openaiJSON(env, STORY_SYS, storyUser);
+    const plan  = normalizePlan(story?.book?.pages || []);
+    return ok({ story, plan, previewVisible: 4 });
+  } catch (e) {
+    log("story error", e?.message);
+    return err(e.message || "Story failed", 500);
+  }
+}
+
+async function handleRefImageRequest(req, env) {
+  try {
+    const { style="cartoon", photo_b64, bible, traits="" } = await req.json();
+    if (photo_b64) {
+      const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
+      return ok({ ref_image_b64: b64 });
+    }
+    const prompt = characterCardPrompt({ style, bible, traits });
+    const g = await geminiImage(env, {
+      prompt,
+      guidance: "Character turn-around reference, full body, neutral background, no text."
+    }, 80000, 2);
+    if (!g?.b64) return ok({ ref_image_b64: null });
+    return ok({ ref_image_b64: g.b64 });
+  } catch (e) {
+    log("ref-image error", e?.message);
+    return err("Ref generation failed", 500);
+  }
+}
+
+async function handleImagesRequest(req, env) {
+  try {
+    const { style="cartoon", ref_image_b64, story, plan, concurrency=4 } = await req.json();
+    const pages = story?.book?.pages || [];
+    if (!pages.length) return err("No pages", 400);
+    if (!ref_image_b64) return err("Missing reference image", 400);
+
+    const frames = plan?.plan || [];
+    const pageCount = pages.length;
+    const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
+
+    const jobs = pages.map(pg => {
+      const f = frames.find(x => x.page === pg.page) || {};
+      const prompt = buildFramePrompt({ style, story, page: pg, pageCount, frame: f, characterName: heroName });
+      return { page: pg.page, prompt };
+    });
+
+    const out = [];
+    const CONC = Math.min(Math.max(parseInt(concurrency || 3, 10), 1), 8);
+    let idx = 0;
+    async function worker() {
+      while (idx < jobs.length) {
+        const i = idx++; const item = jobs[i];
+        try {
+          const g = await geminiImage(env, {
+            prompt: item.prompt,
+            character_ref_b64: ref_image_b64,
+            guidance: "Use the reference image to keep the hero identical in every frame."
+          }, 80000, 3);
+          out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
+        } catch (e) {
+          out.push({ page: item.page, error: String(e?.message || e) });
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: CONC }, worker));
+    out.sort((a, b) => (a.page || 0) - (b.page || 0));
+    return ok({ images: out });
+  } catch (e) {
+    log("images error", e?.message);
+    return err(e.message || "Images failed", 500);
+  }
+}
+
+async function handleCoverRequest(req, env) {
+  try {
+    const { style = "cartoon", ref_image_b64, story } = await req.json();
+    if (!ref_image_b64) return err("Missing reference image", 400);
+    if (!story?.book)   return err("Missing story.book", 400);
+
+    const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
+    const prompt   = buildCoverPrompt({ style, story, characterName: heroName });
+
+    const g = await geminiImage(env, {
+      prompt,
+      character_ref_b64: ref_image_b64,
+      guidance: "Keep character identity strictly consistent with the reference image. No text."
+    }, 80000, 3);
+
+    return ok({ image_url: g.image_url, provider: g.provider || "google" });
+  } catch (e) {
+    log("cover error", e?.message);
+    return err(e?.message || "Cover generation failed", 500);
+  }
+}
+
+async function handleRegenerateRequest(req, env) {
+  try {
+    const { style="cartoon", ref_image_b64, page_text, scene_text, frame, story } = await req.json();
+    if (!ref_image_b64) return err("Missing reference image", 400);
+    const fakeStory = story || { book: { pages: [{ page: 1, scene: scene_text, text: page_text }] } };
+    const pg = { page: 1, scene: scene_text, text: page_text };
+    const f  = { shot_type: frame?.shot_type || "M", lens_mm: frame?.lens_mm || 50, subject_size_percent: frame?.subject_size_percent || 60 };
+    const heroName = (fakeStory.book?.bible?.main_character?.name || "Hjälten");
+    const prompt = buildFramePrompt({ style, story: fakeStory, page: pg, pageCount: 1, frame: f, characterName: heroName });
+    const g = await geminiImage(env, {
+      prompt,
+      character_ref_b64: ref_image_b64,
+      guidance: "Use the reference image to keep the hero identical in every frame."
+    }, 80000, 3);
+    return ok({ image_url: g.image_url, provider: g.provider || "google" });
+  } catch (e) {
+    log("regen error", e?.message);
+    return err(e.message || "Regenerate failed", 500);
+  }
+}
+
 // ---------------- ROUTER ----------------
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
 
-       if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+    // Preflight
+    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
     // Health
-    if (req.method === "GET" && url.pathname === "/") {
-      return ok({ ok: true, ts: Date.now() });
-    }
+    if (req.method === "GET" && url.pathname === "/") return ok({ ok: true, ts: Date.now() });
 
-    // Env probe (remove in prod)
+    // Debug env flags
     if (req.method === "GET" && url.pathname === "/api/images/env") {
       return ok({
         has: {
@@ -619,177 +772,26 @@ export default {
       });
     }
 
-    // ---------- STORY (outline -> pages) ----------
-    if (req.method === "POST" && url.pathname === "/api/story") {
-      try {
-        const body = await req.json().catch(() => ({}));
-        const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
+    // Story
+    if (req.method === "POST" && url.pathname === "/api/story") return await handleStoryRequest(req, env);
 
-        const targetAge = Number.isFinite(parseInt(reading_age, 10))
-          ? parseInt(reading_age, 10)
-          : ((category || "kids") === "pets" ? 8 : parseInt(age || 6, 10));
+    // Reference image
+    if (req.method === "POST" && url.pathname === "/api/ref-image") return await handleRefImageRequest(req, env);
 
-        const outlineUser = `
-${heroDescriptor({ category, name, age, traits })}
-Kategori: ${category || "kids"}.
-Läsålder: ${targetAge}.
-Önskat tema/poäng (om angivet): ${theme || "vänskap"}.
-Antal sidor: ${pages || 12}.
-Returnera enbart json.
-`.trim();
+    // Interior images
+    if (req.method === "POST" && url.pathname === "/api/images") return await handleImagesRequest(req, env);
 
-        const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
+    // Cover image
+    if (req.method === "POST" && url.pathname === "/api/cover") return await handleCoverRequest(req, env);
 
-        const storyUser = `
-OUTLINE:
-${JSON.stringify(outline)}
-${heroDescriptor({ category, name, age, traits })}
-Läsålder: ${targetAge}. Sidor: ${pages || 12}. Stil: ${style || "cartoon"}. Kategori: ${category || "kids"}.
-Boken ska ha tydlig lärdom (lesson) kopplad till temat.
-Följ temat NOGA: håll platser/handlingar huvudsakligen inom tematisk ram.
-Returnera enbart json.
-`.trim();
+    // Regenerate one
+    if (req.method === "POST" && url.pathname === "/api/image/regenerate") return await handleRegenerateRequest(req, env);
 
-        const story = await openaiJSON(env, STORY_SYS, storyUser);
-        const plan  = normalizePlan(story?.book?.pages || []);
-        return ok({ story, plan, previewVisible: 4 });
-      } catch (e) {
-        log("story error", e?.message);
-        return err(e?.message || "Story failed", 500);
-      }
-    }
+    // Uploads -> CF Images
+    if (req.method === "POST" && url.pathname === "/api/images/upload") return await handleUploadRequest(req, env);
 
-    // ---------- REF-IMAGE (character sheet) ----------
-    if (req.method === "POST" && url.pathname === "/api/ref-image") {
-      try {
-        const { style="cartoon", photo_b64, bible, traits="" } = await req.json();
-        if (photo_b64) {
-          const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
-          return ok({ ref_image_b64: b64 });
-        }
-        const prompt = characterCardPrompt({ style, bible, traits });
-        const g = await geminiImage(env, { prompt, guidance: "Keep one consistent hero. Full body on neutral background for use as reference across all pages." }, 80000, 2);
-        return ok({ ref_image_b64: g?.b64 || null });
-      } catch (e) {
-        log("ref-image error", e?.message);
-        return err("Ref generation failed", 500);
-      }
-    }
-
-    // ---------- INTERIOR IMAGES ----------
-    if (req.method === "POST" && url.pathname === "/api/images") {
-      try {
-        const { style="cartoon", ref_image_b64, story, plan, concurrency=4 } = await req.json();
-        const pages = story?.book?.pages || [];
-        if (!pages.length) return err("No pages", 400);
-        if (!ref_image_b64) return err("Missing reference image", 400);
-
-        const frames = plan?.plan || [];
-        const pageCount = pages.length;
-        const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
-
-        const jobs = pages.map(pg => {
-          const f = frames.find(x => x.page === pg.page) || {};
-          const prompt = buildFramePrompt({ style, story, page: pg, pageCount, frame: f, characterName: heroName });
-          return { page: pg.page, prompt };
-        });
-
-        const out = [];
-        const CONC = Math.min(Math.max(parseInt(concurrency || 3, 10), 1), 8);
-        let idx = 0;
-        async function worker() {
-          while (idx < jobs.length) {
-            const i = idx++; const item = jobs[i];
-            try {
-              const g = await geminiImage(env, {
-                prompt: item.prompt,
-                guidance: "Use the attached reference to keep the hero's identity 100% consistent across the series. No text.",
-                character_ref_b64: ref_image_b64
-              }, 80000, 3);
-              out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
-            } catch (e) {
-              out.push({ page: item.page, error: String(e?.message || e) });
-            }
-          }
-        }
-        await Promise.all(Array.from({ length: CONC }, worker));
-        out.sort((a, b) => (a.page || 0) - (b.page || 0));
-        return ok({ images: out });
-      } catch (e) {
-        log("images error", e?.message);
-        return err(e?.message || "Images failed", 500);
-      }
-    }
-
-    // ---------- COVER IMAGE ----------
-    if (req.method === "POST" && url.pathname === "/api/cover") {
-      try {
-        const { style="cartoon", ref_image_b64, story } = await req.json();
-        if (!story?.book) return err("Missing story", 400);
-        if (!ref_image_b64) return err("Missing reference image", 400);
-
-        const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
-        const series = buildSeriesContext(story);
-        const styleLine = styleHint(style);
-        const prompt = [
-          series,
-          "Create a FRONT COVER illustration (no title text, no author text).",
-          `Render in ${styleLine}.`,
-          "Square composition (1:1). Bold, iconic pose; clean space near top for a title band (we will overlay it later).",
-          `Keep the same hero (${heroName}) from the reference exactly consistent. Background should hint at the book's primary setting.`
-        ].join("\n");
-
-        const g = await geminiImage(env, {
-          prompt,
-          guidance: "Use the attached reference to ensure exact character identity. Avoid any text or logos.",
-          character_ref_b64: ref_image_b64
-        }, 90000, 3);
-
-        return ok({ image_url: g.image_url, provider: g.provider || "google" });
-      } catch (e) {
-        log("cover error", e?.message);
-        return err(e?.message || "Cover failed", 500);
-      }
-    }
-
-    // ---------- REGENERATE ONE PAGE ----------
-    if (req.method === "POST" && url.pathname === "/api/image/regenerate") {
-      try {
-        const { style="cartoon", ref_image_b64, page_text, scene_text, frame, story } = await req.json();
-        if (!ref_image_b64) return err("Missing reference image", 400);
-        const fakeStory = story || { book: { pages: [{ page: 1, scene: scene_text, text: page_text }] } };
-        const pg = { page: 1, scene: scene_text, text: page_text };
-        const f  = { shot_type: frame?.shot_type || "M", lens_mm: frame?.lens_mm || 50, subject_size_percent: frame?.subject_size_percent || 60 };
-        const prompt = buildFramePrompt({ style, story: fakeStory, page: pg, pageCount: 1, frame: f, characterName: (fakeStory.book?.bible?.main_character?.name || "Hjälten") });
-        const g = await geminiImage(env, {
-          prompt,
-          guidance: "Regeneration: keep the hero identical to the reference. No text.",
-          character_ref_b64: ref_image_b64
-        }, 80000, 3);
-        return ok({ image_url: g.image_url, provider: g.provider || "google" });
-      } catch (e) {
-        log("regen error", e?.message);
-        return err(e?.message || "Regenerate failed", 500);
-      }
-    }
-
-    // ---------- UPLOAD (CF Images) ----------
-    if (req.method === "POST" && url.pathname === "/api/images/upload") {
-      try {
-        return await handleUploadRequest(req, env);
-      } catch (e) {
-        return err(e?.message || "Upload failed", 500);
-      }
-    }
-
-    // ---------- PDF ----------
-    if (req.method === "POST" && url.pathname === "/api/pdf") {
-      try {
-        return await handlePdfRequest(req, env);
-      } catch (e) {
-        return err(e?.message || "PDF failed", 500);
-      }
-    }
+    // PDF
+    if (req.method === "POST" && url.pathname === "/api/pdf") return await handlePdfRequest(req, env);
 
     // 404
     return new Response(JSON.stringify({ error: "Not found" }), {
