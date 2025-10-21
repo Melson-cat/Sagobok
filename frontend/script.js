@@ -1,8 +1,12 @@
-/* =================== Konfiguration =================== */
-// Tillåt override via ?backend=
-const BACKEND = new URLSearchParams(location.search).get("backend")
-  || "https://bokpilot-backend.sebastian-runell.workers.dev";
+/* ============================================================================
+   BokPiloten – Frontend v14 (worker-kompatibel)
+   - Steg: STORY -> REF -> COVER -> IMAGES -> (valfr) UPLOAD -> PDF
+   - Visar 4 första sidor skarpt i griden (som tidigare)
+   - Omslag renderas i egen ruta över förhandsvisningen (valfritt)
+   ========================================================================== */
 
+/* =================== Konfiguration =================== */
+const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
 const STORAGE_KEY = "bokpiloten_form_v6";
 const MAX_AGE = 120;
 const MIN_AGE = 1;
@@ -35,7 +39,6 @@ const els = {
   mobileMenu: document.getElementById("mobileMenu"),
   readingAgeNumber: document.getElementById("readingAge"),
   pdfBtn: document.getElementById("pdfBtn"),
-  printMode: document.getElementById("printMode"), // <input type="checkbox" id="printMode">
 };
 
 /* Läsålder segmented knappar */
@@ -46,8 +49,8 @@ const state = {
   form: {
     category: "kids",
     name: "Nova",
-    age: 6,              // hjälte
-    reading_age: 6,      // läsålder
+    age: 6,                 // hjälte
+    reading_age: 6,         // läsnivå
     pages: 16,
     style: "cartoon",
     theme: "",
@@ -55,32 +58,39 @@ const state = {
     traits: "",
     photoDataUrl: null,
   },
+
   visibleCount: 4,
+
+  // worker-data
   story: null,
   plan: null,
   refB64: null,
+
+  // UI-index
   pageMap: new Map(),
   planMap: new Map(),
 
-  // PDF
-  generatedImages: [],      // [{page, image_url}]
-  uploadedToCF: [],         // [{page, image_id, url}]
+  // bilder
+  cover: null,                 // { image_url } eller { image_id, url }
+  generatedImages: [],         // [{page, image_url}]
+  uploadedToCF: [],            // [{page|0, kind?, image_id, url}]
+
+  pdfReady: false,
 };
 
 /* =================== Helpers =================== */
-const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
-const toInt = (v, fb=0)=> { const n = parseInt(v,10); return Number.isFinite(n) ? n : fb; };
-const escapeHtml = (s)=> String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
-const smoothScrollTo = (el)=> el?.scrollIntoView({ behavior: "smooth", block: "start" });
+function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+function toInt(v, fb=0){ const n = parseInt(v,10); return Number.isFinite(n) ? n : fb; }
+function escapeHtml(s){ return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;"); }
+function smoothScrollTo(el){ el?.scrollIntoView({ behavior: "smooth", block: "start" }); }
 
-/* ========= Statusbar ========= */
+/* ===== Levande status ===== */
 const STATUS_QUIPS = [
   "puffar kuddar…","polerar morrhår…","tänder nattlampan…",
   "drar undan tunga skuggor…","räknar stjärnor…","lägger mjukare bokeh…",
   "sorterar leksaker…","justerar rim light…"
 ];
 let quipTimer = null;
-
 function ensureStatusBar(){
   let bar = document.getElementById("statusBar");
   if (!bar) {
@@ -100,7 +110,6 @@ function setStatus(msg){
 function startQuips(){
   stopQuips();
   const bar = ensureStatusBar();
-  bar.querySelector(".status-quips")?.remove();
   const aside = document.createElement("span");
   aside.className = "status-quips";
   aside.style.marginLeft = "8px";
@@ -111,7 +120,7 @@ function startQuips(){
 function stopQuips(){
   if (quipTimer) clearInterval(quipTimer);
   quipTimer = null;
-  document.querySelector(".status-quips")?.remove();
+  const q = document.querySelector(".status-quips"); if (q) q.remove();
 }
 function updateProgress(current, total, label){
   const bar = ensureStatusBar();
@@ -127,7 +136,7 @@ function updateProgress(current, total, label){
   prog.querySelector(".progress-label").textContent = label || "";
 }
 
-/* ========= LocalStorage ========= */
+/* LocalStorage */
 function saveForm(){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.form)); }catch{} }
 function loadForm(){
   try{
@@ -150,10 +159,10 @@ function setCategory(cat, save=true){
 function setRefMode(mode, focus=true){
   const m = mode === "photo" ? "photo" : "desc";
   state.form.refMode = m;
-  els.refDescBtn?.classList.toggle("active", m==="desc");
-  els.refPhotoBtn?.classList.toggle("active", m==="photo");
-  els.traitsBlock?.classList.toggle("hidden", m!=="desc");
-  els.photoBlock?.classList.toggle("hidden", m!=="photo");
+  els.refDescBtn.classList.toggle("active", m==="desc");
+  els.refPhotoBtn.classList.toggle("active", m==="photo");
+  els.traitsBlock.classList.toggle("hidden", m!=="desc");
+  els.photoBlock.classList.toggle("hidden", m!=="photo");
   if (focus) (m==="desc" ? els.traits : els.charPhoto)?.focus();
   saveForm();
 }
@@ -173,33 +182,33 @@ function setReadingAgeByChip(range){
 /* ========= Form read/write ========= */
 function readForm(){
   const f = state.form;
-  f.name = (els.name?.value || "Nova").trim();
-  f.age = clamp(toInt(els.age?.value,6), MIN_AGE, MAX_AGE);
-  f.pages = VALID_PAGES.has(toInt(els.pages?.value)) ? toInt(els.pages.value) : 16;
-  f.style = els.style?.value || "cartoon";
-  f.theme = (els.theme?.value || "").trim();
-  f.traits = (els.traits?.value || "").trim();
+  f.name = (els.name.value || "Nova").trim();
+  f.age = clamp(toInt(els.age.value,6), MIN_AGE, MAX_AGE);
+  f.pages = VALID_PAGES.has(toInt(els.pages.value)) ? toInt(els.pages.value) : 16;
+  f.style = els.style.value || "cartoon";
+  f.theme = (els.theme.value || "").trim();
+  f.traits = (els.traits.value || "").trim();
   f.reading_age = clamp(toInt(els.readingAgeNumber?.value ?? f.reading_age, f.reading_age), 3, 12);
 }
 function writeForm(){
-  if (els.name) els.name.value = state.form.name;
-  if (els.age) els.age.value = state.form.age;
-  if (els.pages) els.pages.value = state.form.pages;
-  if (els.style) els.style.value = state.form.style;
-  if (els.theme) els.theme.value = state.form.theme;
-  if (els.traits) els.traits.value = state.form.traits;
+  els.name.value = state.form.name;
+  els.age.value = state.form.age;
+  els.pages.value = state.form.pages;
+  els.style.value = state.form.style;
+  els.theme.value = state.form.theme;
+  els.traits.value = state.form.traits;
   if (els.readingAgeNumber) els.readingAgeNumber.value = state.form.reading_age;
   const target = state.form.reading_age<=5 ? "4-5" : state.form.reading_age<=8 ? "6-8" : state.form.reading_age<=12 ? "9-12" : "familj";
   setReadingAgeByChip(target);
   setCategory(state.form.category, false);
   setRefMode(state.form.refMode, false);
-  if (state.form.photoDataUrl && els.photoPreview) {
+  if (state.form.photoDataUrl) {
     els.photoPreview.src = state.form.photoDataUrl;
     els.photoPreview.classList.remove("hidden");
   }
 }
 
-/* ========= Downscale (med enkel rotationsfix) ========= */
+/* ========= Downscale ========= */
 async function downscaleFileToDataURL(file, maxDim = MAX_REF_DIM) {
   const img = await new Promise((resolve,reject)=>{
     const r = new FileReader();
@@ -207,45 +216,32 @@ async function downscaleFileToDataURL(file, maxDim = MAX_REF_DIM) {
     r.onerror = reject; r.readAsDataURL(file);
   });
   const w = img.naturalWidth, h = img.naturalHeight;
-  const long = Math.max(w, h);
-  const scale = Math.min(1, maxDim / long);
-  let cw = Math.round(w*scale), ch = Math.round(h*scale);
-
+  const scale = Math.min(1, maxDim / Math.max(w,h));
+  if (scale >= 1) return img.src;
   const c = document.createElement("canvas");
-  const ctx = c.getContext("2d");
-  // enkel heuristik: vänd “stående” om EXIF saknas men foto verkar felvänt
-  if (w < h && h > w*1.2) {
-    c.width = ch; c.height = cw;
-    ctx.translate(c.width, 0); ctx.rotate(Math.PI/2);
-    ctx.drawImage(img, 0, 0, cw, ch);
-  } else {
-    c.width = cw; c.height = ch;
-    ctx.drawImage(img, 0, 0, cw, ch);
-  }
+  c.width = Math.round(w*scale); c.height = Math.round(h*scale);
+  const ctx = c.getContext("2d"); ctx.drawImage(img,0,0,c.width,c.height);
   return c.toDataURL("image/png", 0.92);
 }
 
 /* ========= Foto-preview ========= */
 async function onPhotoChange(){
-  const f = els.charPhoto?.files?.[0];
+  const f = els.charPhoto.files?.[0];
   if (!f) {
     state.form.photoDataUrl = null;
-    els.photoPreview?.classList.add("hidden");
-    if (els.photoPreview) els.photoPreview.src = "";
+    els.photoPreview.classList.add("hidden");
+    els.photoPreview.src = "";
     saveForm(); return;
   }
   const dataUrl = await downscaleFileToDataURL(f, MAX_REF_DIM);
   state.form.photoDataUrl = dataUrl;
-  if (els.photoPreview) {
-    els.photoPreview.src = dataUrl;
-    els.photoPreview.classList.remove("hidden");
-  }
+  els.photoPreview.src = dataUrl;
+  els.photoPreview.classList.remove("hidden");
   saveForm();
 }
 
 /* ========= Skeleton ========= */
 function renderSkeleton(count=4){
-  if (!els.previewGrid) return;
   els.previewGrid.innerHTML = "";
   for (let i=0;i<count;i++){
     const el = document.createElement("article");
@@ -258,7 +254,7 @@ function renderSkeleton(count=4){
       </div>`;
     els.previewGrid.appendChild(el);
   }
-  els.previewSection?.classList.remove("hidden");
+  els.previewSection.classList.remove("hidden");
 }
 
 /* ========= Validering ========= */
@@ -277,9 +273,8 @@ function validateForm(){
   return problems;
 }
 
-/* ========= Cards ========= */
+/* ========= Kort ========= */
 function buildCards(pages, visibleCount){
-  if (!els.previewGrid) return;
   els.previewGrid.innerHTML = "";
   state.pageMap.clear();
   pages.forEach((pg,i)=>{
@@ -299,8 +294,29 @@ function buildCards(pages, visibleCount){
       </div>`;
     els.previewGrid.appendChild(card);
   });
-  els.previewSection?.classList.remove("hidden");
+  els.previewSection.classList.remove("hidden");
   smoothScrollTo(els.previewSection);
+}
+
+/* ========= Cover-preview ========= */
+function showCoverPreview() {
+  const id = "coverPreview";
+  let cont = document.getElementById(id);
+  if (!state.cover?.image_url) { cont?.remove(); return; }
+  if (!cont) {
+    cont = document.createElement("section");
+    cont.id = id;
+    cont.className = "panel";
+    const h = document.createElement("h3");
+    h.textContent = "Omslag";
+    cont.appendChild(h);
+    const wrap = document.createElement("div");
+    wrap.className = "thumb";
+    wrap.innerHTML = `<div class="imgwrap"><img alt="Omslag" /></div>`;
+    cont.appendChild(wrap);
+    els.previewSection.parentNode.insertBefore(cont, els.previewSection);
+  }
+  cont.querySelector("img").src = state.cover.image_url;
 }
 
 /* ========= URL → DataURL ========= */
@@ -316,16 +332,15 @@ async function urlToDataURL(url) {
   });
 }
 
-/* ========= Skörda från DOM om state saknar bilder ========= */
+/* ========= Skörda från DOM som fallback ========= */
 function harvestFromDOMIfNeeded() {
   if (state.generatedImages && state.generatedImages.length) return;
-  if (!els.previewGrid) return;
   const cards = Array.from(els.previewGrid.querySelectorAll(".imgwrap"));
   const harvested = [];
   for (const wrap of cards) {
     const page = Number(wrap.getAttribute("data-page"));
     const img = wrap.querySelector("img");
-    const src = img?.currentSrc || img?.src || "";
+    const src = img?.src || "";
     if (page && src) harvested.push({ page, image_url: src });
   }
   if (harvested.length) {
@@ -336,87 +351,103 @@ function harvestFromDOMIfNeeded() {
   }
 }
 
-/* ========= Uppladdning till CF Images ========= */
+/* ========= Säkerställ CF-uppladdningar (inkl. cover) ========= */
 async function ensureUploads() {
   harvestFromDOMIfNeeded();
-  if (!state.generatedImages.length) throw new Error("Inga genererade bilder hittades i minnet eller DOM.");
 
-  // de vi redan har
-  const have = new Set(state.uploadedToCF.map(r => r.page));
-  const missing = [];
-
-  for (const row of state.generatedImages) {
-    if (!row?.page || !row?.image_url || have.has(row.page)) continue;
-    const src = row.image_url;
-    if (src.startsWith("data:image/")) {
-      missing.push({ page: row.page, data_url: src });
-    } else if (/^https?:\/\//i.test(src)) {
-      try { missing.push({ page: row.page, data_url: await urlToDataURL(src) }); }
-      catch (e) { console.warn(`⚠️ Kunde inte hämta URL för sida ${row.page}:`, e); }
-    } else if (src.startsWith("blob:")) {
-      try {
-        const wrap = els.previewGrid?.querySelector(`.imgwrap[data-page="${row.page}"]`);
-        const imgEl = wrap?.querySelector("img");
-        if (imgEl && imgEl.naturalWidth > 0) {
-          const c = document.createElement("canvas");
-          c.width = imgEl.naturalWidth; c.height = imgEl.naturalHeight;
-          c.getContext("2d").drawImage(imgEl, 0, 0);
-          const d = c.toDataURL("image/png");
-          if (d?.startsWith("data:image/")) missing.push({ page: row.page, data_url: d });
-        }
-      } catch (e) { console.warn(`⚠️ Kunde inte konvertera blob: för sida ${row.page}`, e); }
-    }
+  if (!state.generatedImages.length && !state.cover?.image_url) {
+    throw new Error("Inga genererade bilder (eller omslag) hittades.");
   }
 
-  if (!missing.length) { console.debug("☁️ Alla sidor redan uppladdade:", state.uploadedToCF); return; }
+  const have = new Set(
+    state.uploadedToCF.map(r => (r.kind === "cover" ? "cover" : `p${r.page}`))
+  );
+
+  const missing = [];
+
+  // 1) Omslag
+  if (state.cover?.image_url && !have.has("cover")) {
+    let d = null;
+    if (state.cover.image_url.startsWith("data:image/")) d = state.cover.image_url;
+    else d = await urlToDataURL(state.cover.image_url).catch(()=> null);
+    if (d) missing.push({ kind: "cover", data_url: d });
+  }
+
+  // 2) Sidor
+  for (const row of state.generatedImages) {
+    if (!row?.page || !row?.image_url) continue;
+    if (have.has(`p${row.page}`)) continue;
+
+    const src = row.image_url;
+    let d = null;
+    if (src.startsWith("data:image/")) d = src;
+    else if (/^https?:\/\//i.test(src)) d = await urlToDataURL(src).catch(()=> null);
+    else if (src.startsWith("blob:")) {
+      const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${row.page}"] img`);
+      if (wrap && wrap.naturalWidth > 0) {
+        const c = document.createElement("canvas");
+        c.width = wrap.naturalWidth; c.height = wrap.naturalHeight;
+        c.getContext("2d").drawImage(wrap, 0, 0);
+        d = c.toDataURL("image/png");
+      }
+    }
+    if (d) missing.push({ page: row.page, data_url: d });
+  }
+
+  if (!missing.length) {
+    console.debug("☁️ Alla sidor/omslag verkar redan uppladdade:", state.uploadedToCF);
+    return;
+  }
 
   setStatus("☁️ Laddar upp illustrationer…");
-  updateProgress(0, 1, `Laddar upp ${missing.length} sidor`);
+  updateProgress(0, 1, `Laddar upp ${missing.length} bild(er)`);
 
   const BATCH = 6;
   for (let i = 0; i < missing.length; i += BATCH) {
-    const payload = missing.slice(i, i + BATCH).filter(x => x?.data_url?.startsWith("data:image/"));
-    if (!payload.length) continue;
+    const slice = missing.slice(i, i + BATCH).filter(x => x?.data_url?.startsWith("data:image/"));
+    if (!slice.length) continue;
 
     const upRes = await fetch(`${BACKEND}/api/images/upload`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ items: payload })
+      body: JSON.stringify({ items: slice })
     });
+
     const upData = await upRes.json().catch(()=> ({}));
     if (!upRes.ok || upData?.error) throw new Error(upData?.error || `Upload HTTP ${upRes.status}`);
 
-    const rows = upData.uploads || [];
-    for (const r of rows) {
+    for (const r of (upData.uploads || [])) {
       if (r.image_id) state.uploadedToCF.push(r);
-      else if (r.error) throw new Error(`Uppladdning misslyckades (sida ${r.page}): ${r.error}`);
+      else if (r.error) throw new Error(`Uppladdning misslyckades (${r.page ?? r.kind}): ${r.error}`);
     }
-    updateProgress(Math.min(i + payload.length, missing.length), missing.length, `Laddar upp ${Math.min(i + payload.length, missing.length)}/${missing.length}`);
-  }
 
-  // Dedupe (senaste vinner)
-  const byPage = new Map();
-  for (const r of state.uploadedToCF) if (r?.page && r?.image_id) byPage.set(r.page, r);
-  state.uploadedToCF = Array.from(byPage.values());
+    updateProgress(Math.min(i + slice.length, missing.length), missing.length, `Laddar upp ${Math.min(i + slice.length, missing.length)}/${missing.length}`);
+  }
 }
 
 /* ========= PDF ========= */
-let pdfBusy = false;
-
 async function onCreatePdf() {
-  if (pdfBusy) return;
-  pdfBusy = true;
-  if (els.pdfBtn) els.pdfBtn.disabled = true;
   try {
     if (!state.story) throw new Error("Ingen story i minnet.");
 
-    try { await ensureUploads(); }
-    catch (e) { console.warn("⚠️ ensureUploads misslyckades, använder direkta URL:er:", e); }
+    try { await ensureUploads(); } catch (e) { console.warn("ensureUploads varnade:", e); }
 
-    const images = (state.uploadedToCF?.length
-      ? state.uploadedToCF.map(r => ({ page: r.page, image_id: r.image_id, url: r.url }))
-      : (state.generatedImages || []).map(r => ({ page: r.page, url: r.image_url }))
-    ).sort((a,b)=>a.page-b.page);
+    const images = [];
+
+    // 1) Cover
+    const coverUploaded = state.uploadedToCF.find(x => x.kind === "cover" || x.page === 0);
+    if (coverUploaded) images.push({ kind: "cover", image_id: coverUploaded.image_id, url: coverUploaded.url });
+    else if (state.cover?.image_url) images.push({ kind: "cover", url: state.cover.image_url });
+
+    // 2) Sidor
+    if (state.uploadedToCF.length) {
+      for (const r of state.uploadedToCF) {
+        if (r.kind === "cover" || r.page === 0) continue;
+        images.push({ page: r.page, image_id: r.image_id, url: r.url });
+      }
+    } else {
+      for (const r of state.generatedImages) images.push({ page: r.page, url: r.image_url });
+    }
 
     if (!images.length) throw new Error("Hittade inga illustrationer att lägga i PDF:en.");
 
@@ -427,9 +458,9 @@ async function onCreatePdf() {
       body: JSON.stringify({
         story: state.story,
         images,
-        mode: els.printMode?.checked ? "print" : "preview",
+        mode: "preview",
         trim: "square210",
-        watermark_text: "FÖRHANDSVISNING"
+        watermark_text: "FÖRHANDSVISNING" // sätt null om du vill ta bort watermark
       }),
     });
     if (!res.ok) throw new Error(`PDF misslyckades (HTTP ${res.status})`);
@@ -442,23 +473,10 @@ async function onCreatePdf() {
     console.error(e);
     setStatus(null);
     alert(e?.message || "Kunde inte skapa PDF.");
-  } finally {
-    pdfBusy = false;
-    if (els.pdfBtn) els.pdfBtn.disabled = false;
   }
 }
 
-/* ========= Bildladdning med retry ========= */
-async function loadImgWithRetry(src, tries=3, delay=500){
-  for (let i=0;i<tries;i++){
-    try {
-      await new Promise((res, rej) => { const im = new Image(); im.onload = res; im.onerror = rej; im.src = src; });
-      return src;
-    } catch(e) { if (i===tries-1) throw e; await new Promise(r=>setTimeout(r, delay*(i+1))); }
-  }
-}
-
-/* ========= Submit ========= */
+/* ========= Submit (hela flödet) ========= */
 async function onSubmit(e){
   e.preventDefault();
   const problems = validateForm();
@@ -466,14 +484,15 @@ async function onSubmit(e){
 
   readForm();
   renderSkeleton(4);
-  setStatus("✏️ Skriver berättelsen…"); updateProgress(0,3,"1/3 – Berättelsen");
+  setStatus("✏️ Skriver berättelsen…"); updateProgress(0,4,"1/4 – Berättelsen");
   startQuips();
   if (els.submitBtn){ els.submitBtn.disabled = true; els.submitBtn.innerHTML = 'Skapar förhandsvisning… <span class="spinner"></span>'; }
-  if (els.pdfBtn) els.pdfBtn.disabled = true;
 
   // rensa tidigare resultat
   state.generatedImages = [];
   state.uploadedToCF = [];
+  state.cover = null;
+  state.pdfReady = false;
 
   try{
     // 1) STORY + PLAN
@@ -502,7 +521,7 @@ async function onSubmit(e){
     buildCards(pages, state.visibleCount);
 
     // 2) REF IMAGE
-    setStatus("🖼️ Låser hjälten (referens)…"); updateProgress(1,3,"2/3 – Referens");
+    setStatus("🖼️ Låser hjälten (referens)…"); updateProgress(1,4,"2/4 – Referens");
     const refRes = await fetch(`${BACKEND}/api/ref-image`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -517,8 +536,24 @@ async function onSubmit(e){
     state.refB64 = refData.ref_image_b64 || null;
     if (!state.refB64) throw new Error("Ingen referensbild kunde hämtas/skapas.");
 
-    // 3) IMAGES
-    setStatus("🎥 Lägger kameror & ljus…"); updateProgress(2,3,"3/3 – Bildplan");
+    // 3) COVER (nytt steg)
+    setStatus("🎯 Tar fram omslaget…"); updateProgress(2,4,"3/4 – Omslag");
+    const coverRes = await fetch(`${BACKEND}/api/cover`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        style: state.form.style,
+        ref_image_b64: state.refB64,
+        story: state.story
+      })
+    });
+    const coverData = await coverRes.json().catch(()=> ({}));
+    if (!coverRes.ok || coverData?.error) throw new Error(coverData?.error || `HTTP ${coverRes.status}`);
+    state.cover = { image_url: coverData.image_url };
+    showCoverPreview();
+
+    // 4) IMAGES
+    setStatus("🎨 Illustrerar sidor…"); updateProgress(3,4,"4/4 – Sidor");
     const imgRes = await fetch(`${BACKEND}/api/images`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -533,11 +568,9 @@ async function onSubmit(e){
     if (!imgRes.ok || imgData?.error) throw new Error(imgData?.error || "Bildgenerering misslyckades");
 
     const results = imgData.images || [];
-    // spara för PDF-steget
-    state.generatedImages = results
-      .filter(r => r?.image_url)
-      .map(r => ({ page: r.page, image_url: r.image_url }));
+    state.generatedImages = results.filter(r => r?.image_url).map(r => ({ page: r.page, image_url: r.image_url }));
 
+    // Rendera till korten
     let received = 0;
     const byPageCard = new Map();
     Array.from(els.previewGrid.children).forEach(card=>{
@@ -552,16 +585,18 @@ async function onSubmit(e){
       const sk = card.querySelector(".skeleton");
 
       if (row.image_url) {
-        try {
-          const okSrc = await loadImgWithRetry(row.image_url);
-          imgEl.src = okSrc; sk?.remove(); imgEl.style.opacity = "1";
-          const prov = card.querySelector(".img-provider");
-          if (prov){ prov.textContent = "🎨 Gemini"; prov.classList.remove("hidden"); }
-          card.querySelector(".retry-wrap")?.classList.add("hidden");
-        } catch {
-          sk?.remove();
-          card.querySelector(".retry-wrap")?.classList.remove("hidden");
-        }
+        await new Promise(resolve=>{
+          const tmp = new Image();
+          tmp.onload = ()=>{
+            imgEl.src = tmp.src; sk?.remove(); imgEl.style.opacity = "1";
+            const prov = card.querySelector(".img-provider");
+            if (prov){ prov.textContent = "🎨 Gemini"; prov.classList.remove("hidden"); }
+            card.querySelector(".retry-wrap")?.classList.add("hidden");
+            resolve();
+          };
+          tmp.onerror = ()=>{ sk?.remove(); resolve(); };
+          tmp.src = row.image_url;
+        });
       } else {
         sk?.remove();
         const fb = document.createElement("div");
@@ -579,11 +614,6 @@ async function onSubmit(e){
       updateProgress(received, results.length, `Illustrerar ${received}/${results.length} …`);
       await new Promise(r=> setTimeout(r, 120));
     }
-
-    // lås upp resterande kort när allt är inne
-    Array.from(els.previewGrid.children).forEach((card,i)=>{
-      if (i >= state.visibleCount) card.classList.remove("locked");
-    });
 
     stopQuips();
     setStatus("✅ Klart! Sagans förhandsvisning är redo.");
@@ -627,19 +657,27 @@ async function regenerateOne(page){
     const j = await res.json().catch(()=> ({}));
     if (!res.ok || j?.error) throw new Error(j?.error || `HTTP ${res.status}`);
 
-    const okSrc = await loadImgWithRetry(j.image_url);
-    imgEl.src = okSrc; imgEl.style.opacity = "1"; sk.remove();
-    const prov = card.querySelector(".img-provider");
-    if (prov){ prov.textContent = "🎨 Gemini"; prov.classList.remove("hidden"); }
-    card.querySelector(".retry-wrap")?.classList.add("hidden");
+    await new Promise(resolve=>{
+      const tmp = new Image();
+      tmp.onload = ()=>{
+        imgEl.src = tmp.src; imgEl.style.opacity = "1"; sk.remove();
+        const prov = card.querySelector(".img-provider");
+        if (prov){ prov.textContent = "🎨 Gemini"; prov.classList.remove("hidden"); }
+        card.querySelector(".retry-wrap")?.classList.add("hidden");
 
-    // uppdatera state för PDF
-    const idx = state.generatedImages.findIndex(x => x.page === page);
-    if (idx >= 0) state.generatedImages[idx].image_url = okSrc;
-    else state.generatedImages.push({ page, image_url: okSrc });
-    // ta bort ev tidigare upload för sidan
-    state.uploadedToCF = state.uploadedToCF.filter(x => x.page !== page);
+        // uppdatera generatedImages
+        const idx = state.generatedImages.findIndex(x => x.page === page);
+        if (idx >= 0) state.generatedImages[idx].image_url = tmp.src;
+        else state.generatedImages.push({ page, image_url: tmp.src });
 
+        // ta bort ev. tidigare CF-uppladdning för sidan
+        state.uploadedToCF = state.uploadedToCF.filter(x => x.page !== page);
+
+        resolve();
+      };
+      tmp.onerror = ()=>{ sk.remove(); resolve(); };
+      tmp.src = j.image_url;
+    });
   } catch {
     sk.remove();
     const fb = document.createElement("div");
@@ -662,18 +700,19 @@ function onDemo(){
     if (i >= state.visibleCount) card.classList.add("locked");
     card.innerHTML = `
       <div class="imgwrap" data-page="${i+1}">
-        <img src="https://picsum.photos/seed/demo_${i}/600/600" />
+        <img src="https://picsum.photos/seed/demo_${i}/600/400" />
       </div>
       <div class="txt">Sida ${i+1}: ${escapeHtml(state.form.name)}s lilla äventyr.</div>`;
     els.previewGrid.appendChild(card);
   }
+  state.cover = { image_url: "https://picsum.photos/seed/cover_demo/1200/1200" };
+  showCoverPreview();
   state.generatedImages = Array.from({length: total}, (_,k)=>({
     page: k+1,
     image_url: els.previewGrid.querySelector(`.imgwrap[data-page="${k+1}"] img`)?.src || ""
   }));
   els.previewSection.classList.remove("hidden");
   smoothScrollTo(els.previewSection);
-  if (els.pdfBtn) els.pdfBtn.disabled = false;
 }
 
 /* ========= Events ========= */
@@ -692,7 +731,7 @@ function bindEvents(){
     });
   });
 
-  ["name","age","pages","style","theme","traits","readingAge","readingAgeNumber"].forEach(id=>{
+  ["name","age","pages","style","theme","traits","readingAge"].forEach(id=>{
     const el = document.getElementById(id);
     el?.addEventListener("input", ()=> { readForm(); saveForm(); });
   });
@@ -710,14 +749,14 @@ function bindEvents(){
   });
 
   els.navToggle?.addEventListener("click", ()=>{
-    els.mobileMenu?.classList.toggle("open");
-    const open = els.mobileMenu?.classList.contains("open");
-    els.navToggle?.setAttribute("aria-expanded", open ? "true":"false");
-    els.mobileMenu?.setAttribute("aria-hidden", open ? "false":"true");
+    els.mobileMenu.classList.toggle("open");
+    const open = els.mobileMenu.classList.contains("open");
+    els.navToggle.setAttribute("aria-expanded", open ? "true":"false");
+    els.mobileMenu.setAttribute("aria-hidden", open ? "false":"true");
   });
 
   els.pdfBtn?.addEventListener("click", onCreatePdf);
-  if (els.pdfBtn) els.pdfBtn.disabled = true;  // aktiveras när preview är klar
+  if (els.pdfBtn) els.pdfBtn.disabled = false;
 }
 
 /* ========= Init ========= */
