@@ -366,66 +366,57 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   });
 
   // Cover
-  try {
-    const page = pdfDoc.addPage([pageW, pageH]);
-    const margin = mmToPt(18);
-    const titleSize = Math.min(trimWpt, trimHpt) * 0.07;
-    const subSize = titleSize * 0.45;
+ // Cover
+try {
+  const page = pdfDoc.addPage([pageW, pageH]);
+  const inner = mmToPt(GRID.inner_mm);
 
-    const coverSrc = imgByPage.get(1);
-    if (coverSrc) {
-      const bytes = await getImageBytes(env, coverSrc);
-      const coverImg = await embedImage(pdfDoc, bytes);
-      if (coverImg) {
-        const iw = coverImg.width, ih = coverImg.height;
-        const panelSize = Math.min(trimWpt - margin * 2, trimHpt - margin * 3);
-        const scale = Math.min(panelSize / iw, panelSize / ih);
-        const w = iw * scale, h = ih * scale;
-        const cx = contentX + (trimWpt - w) / 2;
-        const cy = contentY + (trimHpt - h) / 2 - mmToPt(8);
-        page.drawImage(coverImg, { x: cx, y: cy, width: w, height: h });
-      }
+  const coverSrc = imgByPage.get(1);
+  if (coverSrc) {
+    const bytes = await getImageBytes(env, coverSrc);
+    const coverImg = await embedImage(pdfDoc, bytes);
+    if (coverImg) {
+      // HELSIDA (inkl. bleed): låt bilden fylla trimytan helt
+     const boxX = 0;
+const boxY = 0;
+const boxW = pageW;
+const boxH = pageH;
+drawImageCover(page, coverImg, boxX, boxY, boxW, boxH);
     }
-
-    const tWidth = fontTitle.widthOfTextAtSize(title, titleSize);
-    page.drawText(title, { x: contentX + (trimWpt - tWidth) / 2, y: contentY + trimHpt - margin - titleSize, size: titleSize, font: fontTitle, color: rgb(0.1, 0.1, 0.1) });
-
-    const sub = theme ? `${theme}` : (heroName ? `Med ${heroName}` : "");
-    if (sub) {
-      const sWidth = fontBody.widthOfTextAtSize(sub, subSize);
-      page.drawText(sub, { x: contentX + (trimWpt - sWidth) / 2, y: contentY + trimHpt - margin - titleSize - subSize - mmToPt(3), size: subSize, font: fontBody, color: rgb(0.25, 0.25, 0.25) });
-    }
-
-    if (mode === "preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
-  } catch (e) {
-    log("PDF COVER ERROR:", e?.message);
-    const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1) });
   }
 
-  // Inside pages
-// ---------------- Inside pages (kvadratisk layout) ----------------
+  // Titel + undertitel på band
+  const subtitle = theme ? `${theme}` : (heroName ? `Med ${heroName}` : "");
+  drawTitleBand(page, fontTitle, fontBody, title, subtitle, pageW, pageH, contentX, contentY, trimWpt, trimHpt);
+
+  if (mode === "preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
+} catch (e) {
+  log("PDF COVER ERROR:", e?.message);
+  const page = pdfDoc.addPage([pageW, pageH]);
+  page.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8,0.1,0.1) });
+}
+
+
+ // ---------------- Inside pages (kvadratisk layout + COVER) ----------------
 for (const p of pages) {
   try {
     const page = pdfDoc.addPage([pageW, pageH]);
 
-    // Inre marginaler
-    const inner = mmToPt(14);
-    const textPad = mmToPt(8);
+    const inner = mmToPt(GRID.inner_mm);
+    const gap = mmToPt(GRID.gap_mm);
+    const pad = mmToPt(GRID.pad_mm);
 
-    // Kvadratisk bildruta uppe på sidan
-    // – höjd ~55–62% av trimsidan beroende på textmängd
-    const layout = pickLayoutForText(p.text || "");
-    const imgBoxSide =
-      layout === "image_focus" ? (trimHpt * 0.62) :
-      layout === "balanced"    ? (trimHpt * 0.58) :
-                                 (trimHpt * 0.52);
+    // Bildandel av sidan (trim), dynamiskt efter textlängd
+    const imgShare = pickImageShare(p.text || "");
+    const imgSide = Math.min(trimWpt - inner*2, trimHpt * imgShare);
 
-    const imgBoxSize = Math.min(imgBoxSide, trimWpt - inner*2); // kvadrat
-    const imgBoxX = contentX + (trimWpt - imgBoxSize) / 2;
-    const imgBoxY = contentY + trimHpt - inner - imgBoxSize;
+    // Kvadratisk bildruta centrerad överst
+    const imgBoxW = imgSide;
+    const imgBoxH = imgSide;
+    const imgBoxX = contentX + (trimWpt - imgBoxW) / 2;
+    const imgBoxY = contentY + trimHpt - inner - imgBoxH;
 
-    // Bild (contain i kvadratisk ruta – aldrig utanför)
+    // Ladda bild
     const src = imgByPage.get(p.page);
     let imgObj = null;
     if (src) {
@@ -433,38 +424,36 @@ for (const p of pages) {
       imgObj = await embedImage(pdfDoc, bytes);
     }
 
+    // Rita bild – COVER i kvadraten (fyller alltid rutan)
     if (imgObj) {
-      const iw = imgObj.width, ih = imgObj.height;
-      // contain i kvadratisk ruta
-      const scale = Math.min(imgBoxSize / iw, imgBoxSize / ih);
-      const w = iw * scale, h = ih * scale;
-      const x = imgBoxX + (imgBoxSize - w) / 2;
-      const y = imgBoxY + (imgBoxSize - h) / 2;
-      page.drawImage(imgObj, { x, y, width: w, height: h });
+      drawImageCover(page, imgObj, imgBoxX, imgBoxY, imgBoxW, imgBoxH);
     }
 
     // Textpanel under bilden
-    const textTop = imgBoxY - mmToPt(10);
+    const textTop = imgBoxY - gap;
     const panelTop = textTop;
     const panelBot = contentY + inner;
-    const panelH = Math.max(panelTop - panelBot, mmToPt(30));
+    const panelH = Math.max(panelTop - panelBot, mmToPt(34));
     const panelW = trimWpt - inner*2;
     const panelX = contentX + inner;
     const panelY = panelBot;
 
-    // lätt vit platta för läsbarhet (lämna ren i print)
-    page.drawRectangle({
-      x: panelX, y: panelY, width: panelW, height: panelH,
-      color: rgb(1,1,1)
-    });
+    // I PREVIEW: vit platta för “skärm-läsbarhet”.
+    // I PRINT: ingen platta → text direkt på pappret.
+    if (mode === "preview") {
+  page.drawRectangle({
+    x: panelX, y: panelY, width: panelW, height: panelH,
+    color: rgb(0.99, 0.99, 0.99)
+  });
+}
 
-    // text – lite tätare leading än omslaget
-    const { size: bodySize, leading } = fontSpecForReadingAge(readingAge);
-    const lineH = bodySize * 1.33;
+    // Typografi
+    const { size: bodySize } = fontSpecForReadingAge(readingAge);
+    const lineH = bodySize * 1.35;
 
-    const textMaxW = panelW - textPad*2;
-    const textX = panelX + textPad;
-    const textTopY = panelY + panelH - textPad - bodySize;
+    const textMaxW = panelW - pad*2;
+    const textX = panelX + pad;
+    const textTopY = panelY + panelH - pad - bodySize;
 
     drawWrappedText(page, p.text || "", textX, textTopY, textMaxW, fontBody, bodySize, lineH);
 
@@ -480,22 +469,41 @@ for (const p of pages) {
 }
 
 
-  // Back cover
-  try {
-    const page = pdfDoc.addPage([pageW, pageH]);
-    const margin = mmToPt(18);
-    const blurb = story?.book?.lesson ? `Lärdom: ${story.book.lesson}` : `En berättelse skapad med BokPiloten.`;
 
-    page.drawText("Baksida", { x: contentX + margin, y: contentY + trimHpt - margin - 18, size: 18, font: fontTitle, color: rgb(0.1, 0.1, 0.1) });
-    const fontBodySize = 12;
-    const lineH = fontBodySize * 1.4;
-    drawWrappedText(page, blurb, contentX + margin, contentY + trimHpt - margin - 18 - lineH, trimWpt - margin * 2, fontBody, fontBodySize, lineH);
-    if (mode === "preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
-  } catch (e) {
-    log("PDF BACK COVER ERROR:", e?.message);
-    const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawText("Baksidan kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1) });
+// Back cover
+try {
+  const page = pdfDoc.addPage([pageW, pageH]);
+  const inner = mmToPt(GRID.inner_mm);
+
+  // Mild bakgrund i preview (ren vit i print)
+  if (mode === "preview") {
+    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.98,0.98,0.98) });
   }
+
+  const blurb = story?.book?.lesson
+    ? `Lärdom: ${story.book.lesson}`
+    : `En berättelse skapad med BokPiloten.`;
+
+  const head = "Om boken";
+  const headSize = 18;
+  const bodySize = 12;
+  const lh = bodySize * 1.4;
+
+  const startX = contentX + inner;
+  let cursorY = contentY + trimHpt - inner - headSize;
+
+  page.drawText(head, { x: startX, y: cursorY, size: headSize, font: fontTitle, color: rgb(0.1,0.1,0.1) });
+  cursorY -= (headSize + mmToPt(4));
+
+  drawWrappedText(page, blurb, startX, cursorY, (trimWpt - inner*2), fontBody, bodySize, lh);
+
+  if (mode === "preview") drawWatermark(page, watermark_text || "FÖRHANDSVISNING");
+} catch (e) {
+  log("PDF BACK COVER ERROR:", e?.message);
+  const page = pdfDoc.addPage([pageW, pageH]);
+  page.drawText("Baksidan kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1) });
+}
+
 
   return await pdfDoc.save();
 }
@@ -529,6 +537,63 @@ async function handlePdfRequest(req, env) {
   });
   return new Response(pdfBytes, { status: 200, headers });
 }
+
+// --- Layout helpers (cover/contain + grid) ---
+function drawImageContain(page, img, boxX, boxY, boxW, boxH) {
+  const iw = img.width, ih = img.height;
+  const scale = Math.min(boxW / iw, boxH / ih);
+  const w = iw * scale, h = ih * scale;
+  const x = boxX + (boxW - w) / 2;
+  const y = boxY + (boxH - h) / 2;
+  page.drawImage(img, { x, y, width: w, height: h });
+}
+
+function drawImageCover(page, img, boxX, boxY, boxW, boxH) {
+  // Skala så att rutan FYLLS; croppar överflöd
+  const iw = img.width, ih = img.height;
+  const scale = Math.max(boxW / iw, boxH / ih);
+  const w = iw * scale, h = ih * scale;
+  const x = boxX + (boxW - w) / 2;
+  const y = boxY + (boxH - h) / 2;
+  page.drawImage(img, { x, y, width: w, height: h });
+}
+
+// Baseline/innermarginaler – “bokigare” rytm
+const GRID = {
+  inner_mm: 14,       // inre marginal
+  gap_mm: 8,          // mellan bild och text
+  pad_mm: 8,          // textpanel padding
+};
+
+// Mer aggressiv bildandel beroende på textlängd
+function pickImageShare(text = "") {
+  const len = text.trim().length;
+  if (len <= 160) return 0.78;  // nästan helsidesbild
+  if (len <= 320) return 0.70;  // balanserad
+  return 0.62;                  // mer plats för text
+}
+
+// Rubrikband för omslag
+function drawTitleBand(page, fontTitle, fontBody, title, subtitle, pageW, pageH, contentX, contentY, trimWpt, trimHpt) {
+  const bandH = Math.min(trimHpt * 0.18, 90);
+  const bandY = contentY + trimHpt - bandH - mmToPt(10);
+  // Halvtransparent band (i preview); i print kör vi helvitt för säker läsbarhet
+  page.drawRectangle({ x: contentX + mmToPt(10), y: bandY, width: trimWpt - mmToPt(20), height: bandH, color: rgb(1,1,1), opacity: 1 });
+
+  const titleSize = Math.min(trimWpt, trimHpt) * 0.08; // större
+  const subSize = Math.max(12, titleSize * 0.42);
+  const marginX = contentX + mmToPt(18);
+
+  const tWidth = fontTitle.widthOfTextAtSize(title, titleSize);
+  const tx = marginX; // vänsterställd ger bokkänsla
+  const ty = bandY + bandH - titleSize - mmToPt(6);
+  page.drawText(title, { x: tx, y: ty, size: titleSize, font: fontTitle, color: rgb(0.1,0.1,0.1) });
+
+  if (subtitle) {
+    page.drawText(subtitle, { x: tx, y: ty - subSize - mmToPt(4), size: subSize, font: fontBody, color: rgb(0.25,0.25,0.25) });
+  }
+}
+
 
 // ---------------- Images: bulk upload -> Cloudflare Images ------------------
 async function handleUploadRequest(req, env) {

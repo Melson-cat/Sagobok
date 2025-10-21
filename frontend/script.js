@@ -1,6 +1,9 @@
 /* =================== Konfiguration =================== */
-const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
-const STORAGE_KEY = "bokpiloten_form_v5";
+// Tillåt override via ?backend=
+const BACKEND = new URLSearchParams(location.search).get("backend")
+  || "https://bokpilot-backend.sebastian-runell.workers.dev";
+
+const STORAGE_KEY = "bokpiloten_form_v6";
 const MAX_AGE = 120;
 const MIN_AGE = 1;
 const VALID_PAGES = new Set([12, 16, 20]);
@@ -32,6 +35,7 @@ const els = {
   mobileMenu: document.getElementById("mobileMenu"),
   readingAgeNumber: document.getElementById("readingAge"),
   pdfBtn: document.getElementById("pdfBtn"),
+  printMode: document.getElementById("printMode"), // <input type="checkbox" id="printMode">
 };
 
 /* Läsålder segmented knappar */
@@ -43,7 +47,7 @@ const state = {
     category: "kids",
     name: "Nova",
     age: 6,              // hjälte
-    reading_age: 6,      // ny!
+    reading_age: 6,      // läsålder
     pages: 16,
     style: "cartoon",
     theme: "",
@@ -58,25 +62,25 @@ const state = {
   pageMap: new Map(),
   planMap: new Map(),
 
-  // För PDF-steget
+  // PDF
   generatedImages: [],      // [{page, image_url}]
   uploadedToCF: [],         // [{page, image_id, url}]
-  pdfReady: false,
 };
 
 /* =================== Helpers =================== */
-function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
-function toInt(v, fb=0){ const n = parseInt(v,10); return Number.isFinite(n) ? n : fb; }
-function escapeHtml(s){ return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;"); }
-function smoothScrollTo(el){ el?.scrollIntoView({ behavior: "smooth", block: "start" }); }
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+const toInt = (v, fb=0)=> { const n = parseInt(v,10); return Number.isFinite(n) ? n : fb; };
+const escapeHtml = (s)=> String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
+const smoothScrollTo = (el)=> el?.scrollIntoView({ behavior: "smooth", block: "start" });
 
-/* ===== Levande status ===== */
+/* ========= Statusbar ========= */
 const STATUS_QUIPS = [
   "puffar kuddar…","polerar morrhår…","tänder nattlampan…",
   "drar undan tunga skuggor…","räknar stjärnor…","lägger mjukare bokeh…",
   "sorterar leksaker…","justerar rim light…"
 ];
 let quipTimer = null;
+
 function ensureStatusBar(){
   let bar = document.getElementById("statusBar");
   if (!bar) {
@@ -96,6 +100,7 @@ function setStatus(msg){
 function startQuips(){
   stopQuips();
   const bar = ensureStatusBar();
+  bar.querySelector(".status-quips")?.remove();
   const aside = document.createElement("span");
   aside.className = "status-quips";
   aside.style.marginLeft = "8px";
@@ -106,7 +111,7 @@ function startQuips(){
 function stopQuips(){
   if (quipTimer) clearInterval(quipTimer);
   quipTimer = null;
-  const q = document.querySelector(".status-quips"); if (q) q.remove();
+  document.querySelector(".status-quips")?.remove();
 }
 function updateProgress(current, total, label){
   const bar = ensureStatusBar();
@@ -122,7 +127,7 @@ function updateProgress(current, total, label){
   prog.querySelector(".progress-label").textContent = label || "";
 }
 
-/* LocalStorage */
+/* ========= LocalStorage ========= */
 function saveForm(){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.form)); }catch{} }
 function loadForm(){
   try{
@@ -145,10 +150,10 @@ function setCategory(cat, save=true){
 function setRefMode(mode, focus=true){
   const m = mode === "photo" ? "photo" : "desc";
   state.form.refMode = m;
-  els.refDescBtn.classList.toggle("active", m==="desc");
-  els.refPhotoBtn.classList.toggle("active", m==="photo");
-  els.traitsBlock.classList.toggle("hidden", m!=="desc");
-  els.photoBlock.classList.toggle("hidden", m!=="photo");
+  els.refDescBtn?.classList.toggle("active", m==="desc");
+  els.refPhotoBtn?.classList.toggle("active", m==="photo");
+  els.traitsBlock?.classList.toggle("hidden", m!=="desc");
+  els.photoBlock?.classList.toggle("hidden", m!=="photo");
   if (focus) (m==="desc" ? els.traits : els.charPhoto)?.focus();
   saveForm();
 }
@@ -168,33 +173,33 @@ function setReadingAgeByChip(range){
 /* ========= Form read/write ========= */
 function readForm(){
   const f = state.form;
-  f.name = (els.name.value || "Nova").trim();
-  f.age = clamp(toInt(els.age.value,6), MIN_AGE, MAX_AGE);
-  f.pages = VALID_PAGES.has(toInt(els.pages.value)) ? toInt(els.pages.value) : 16;
-  f.style = els.style.value || "cartoon";
-  f.theme = (els.theme.value || "").trim();
-  f.traits = (els.traits.value || "").trim();
+  f.name = (els.name?.value || "Nova").trim();
+  f.age = clamp(toInt(els.age?.value,6), MIN_AGE, MAX_AGE);
+  f.pages = VALID_PAGES.has(toInt(els.pages?.value)) ? toInt(els.pages.value) : 16;
+  f.style = els.style?.value || "cartoon";
+  f.theme = (els.theme?.value || "").trim();
+  f.traits = (els.traits?.value || "").trim();
   f.reading_age = clamp(toInt(els.readingAgeNumber?.value ?? f.reading_age, f.reading_age), 3, 12);
 }
 function writeForm(){
-  els.name.value = state.form.name;
-  els.age.value = state.form.age;
-  els.pages.value = state.form.pages;
-  els.style.value = state.form.style;
-  els.theme.value = state.form.theme;
-  els.traits.value = state.form.traits;
+  if (els.name) els.name.value = state.form.name;
+  if (els.age) els.age.value = state.form.age;
+  if (els.pages) els.pages.value = state.form.pages;
+  if (els.style) els.style.value = state.form.style;
+  if (els.theme) els.theme.value = state.form.theme;
+  if (els.traits) els.traits.value = state.form.traits;
   if (els.readingAgeNumber) els.readingAgeNumber.value = state.form.reading_age;
   const target = state.form.reading_age<=5 ? "4-5" : state.form.reading_age<=8 ? "6-8" : state.form.reading_age<=12 ? "9-12" : "familj";
   setReadingAgeByChip(target);
   setCategory(state.form.category, false);
   setRefMode(state.form.refMode, false);
-  if (state.form.photoDataUrl) {
+  if (state.form.photoDataUrl && els.photoPreview) {
     els.photoPreview.src = state.form.photoDataUrl;
     els.photoPreview.classList.remove("hidden");
   }
 }
 
-/* ========= Downscale ========= */
+/* ========= Downscale (med enkel rotationsfix) ========= */
 async function downscaleFileToDataURL(file, maxDim = MAX_REF_DIM) {
   const img = await new Promise((resolve,reject)=>{
     const r = new FileReader();
@@ -202,32 +207,45 @@ async function downscaleFileToDataURL(file, maxDim = MAX_REF_DIM) {
     r.onerror = reject; r.readAsDataURL(file);
   });
   const w = img.naturalWidth, h = img.naturalHeight;
-  const scale = Math.min(1, maxDim / Math.max(w,h));
-  if (scale >= 1) return img.src;
+  const long = Math.max(w, h);
+  const scale = Math.min(1, maxDim / long);
+  let cw = Math.round(w*scale), ch = Math.round(h*scale);
+
   const c = document.createElement("canvas");
-  c.width = Math.round(w*scale); c.height = Math.round(h*scale);
-  const ctx = c.getContext("2d"); ctx.drawImage(img,0,0,c.width,c.height);
+  const ctx = c.getContext("2d");
+  // enkel heuristik: vänd “stående” om EXIF saknas men foto verkar felvänt
+  if (w < h && h > w*1.2) {
+    c.width = ch; c.height = cw;
+    ctx.translate(c.width, 0); ctx.rotate(Math.PI/2);
+    ctx.drawImage(img, 0, 0, cw, ch);
+  } else {
+    c.width = cw; c.height = ch;
+    ctx.drawImage(img, 0, 0, cw, ch);
+  }
   return c.toDataURL("image/png", 0.92);
 }
 
 /* ========= Foto-preview ========= */
 async function onPhotoChange(){
-  const f = els.charPhoto.files?.[0];
+  const f = els.charPhoto?.files?.[0];
   if (!f) {
     state.form.photoDataUrl = null;
-    els.photoPreview.classList.add("hidden");
-    els.photoPreview.src = "";
+    els.photoPreview?.classList.add("hidden");
+    if (els.photoPreview) els.photoPreview.src = "";
     saveForm(); return;
   }
   const dataUrl = await downscaleFileToDataURL(f, MAX_REF_DIM);
   state.form.photoDataUrl = dataUrl;
-  els.photoPreview.src = dataUrl;
-  els.photoPreview.classList.remove("hidden");
+  if (els.photoPreview) {
+    els.photoPreview.src = dataUrl;
+    els.photoPreview.classList.remove("hidden");
+  }
   saveForm();
 }
 
 /* ========= Skeleton ========= */
 function renderSkeleton(count=4){
+  if (!els.previewGrid) return;
   els.previewGrid.innerHTML = "";
   for (let i=0;i<count;i++){
     const el = document.createElement("article");
@@ -240,7 +258,7 @@ function renderSkeleton(count=4){
       </div>`;
     els.previewGrid.appendChild(el);
   }
-  els.previewSection.classList.remove("hidden");
+  els.previewSection?.classList.remove("hidden");
 }
 
 /* ========= Validering ========= */
@@ -259,8 +277,9 @@ function validateForm(){
   return problems;
 }
 
-/* ========= Kort ========= */
+/* ========= Cards ========= */
 function buildCards(pages, visibleCount){
+  if (!els.previewGrid) return;
   els.previewGrid.innerHTML = "";
   state.pageMap.clear();
   pages.forEach((pg,i)=>{
@@ -280,7 +299,7 @@ function buildCards(pages, visibleCount){
       </div>`;
     els.previewGrid.appendChild(card);
   });
-  els.previewSection.classList.remove("hidden");
+  els.previewSection?.classList.remove("hidden");
   smoothScrollTo(els.previewSection);
 }
 
@@ -297,21 +316,19 @@ async function urlToDataURL(url) {
   });
 }
 
-/* ========= Skörda från DOM som fallback ========= */
+/* ========= Skörda från DOM om state saknar bilder ========= */
 function harvestFromDOMIfNeeded() {
   if (state.generatedImages && state.generatedImages.length) return;
+  if (!els.previewGrid) return;
   const cards = Array.from(els.previewGrid.querySelectorAll(".imgwrap"));
   const harvested = [];
   for (const wrap of cards) {
     const page = Number(wrap.getAttribute("data-page"));
     const img = wrap.querySelector("img");
-    const src = img?.src || "";
-    if (page && src) {
-      harvested.push({ page, image_url: src });
-    }
+    const src = img?.currentSrc || img?.src || "";
+    if (page && src) harvested.push({ page, image_url: src });
   }
   if (harvested.length) {
-    // undvik dubletter
     const byPage = new Map();
     harvested.forEach(x => { if (!byPage.has(x.page)) byPage.set(x.page, x); });
     state.generatedImages = Array.from(byPage.values());
@@ -319,73 +336,46 @@ function harvestFromDOMIfNeeded() {
   }
 }
 
-/* ========= Säkerställ att alla sidor är uppladdade till CF Images ========= */
+/* ========= Uppladdning till CF Images ========= */
 async function ensureUploads() {
   harvestFromDOMIfNeeded();
+  if (!state.generatedImages.length) throw new Error("Inga genererade bilder hittades i minnet eller DOM.");
 
-  if (!state.generatedImages.length) {
-    throw new Error("Inga genererade bilder hittades i minnet eller DOM.");
-  }
-
-  // vilka sidor har vi redan?
+  // de vi redan har
   const have = new Set(state.uploadedToCF.map(r => r.page));
-
-  // bygg lista över saknade från state.generatedImages
   const missing = [];
+
   for (const row of state.generatedImages) {
-    if (!row?.page || !row?.image_url) continue;
-    if (!have.has(row.page)) {
-      const src = row.image_url;
-      if (src.startsWith("data:image/")) {
-        missing.push({ page: row.page, data_url: src });
-      } else if (/^https?:\/\//i.test(src)) {
-        // Försök hämta och konvertera – om CORS bråkar, hoppa över (och felhantera senare)
-        try {
-          const d = await urlToDataURL(src);
-          missing.push({ page: row.page, data_url: d });
-        } catch (e) {
-          console.warn(`⚠️ Kunde inte hämta/konvertera URL för sida ${row.page}:`, src, e);
+    if (!row?.page || !row?.image_url || have.has(row.page)) continue;
+    const src = row.image_url;
+    if (src.startsWith("data:image/")) {
+      missing.push({ page: row.page, data_url: src });
+    } else if (/^https?:\/\//i.test(src)) {
+      try { missing.push({ page: row.page, data_url: await urlToDataURL(src) }); }
+      catch (e) { console.warn(`⚠️ Kunde inte hämta URL för sida ${row.page}:`, e); }
+    } else if (src.startsWith("blob:")) {
+      try {
+        const wrap = els.previewGrid?.querySelector(`.imgwrap[data-page="${row.page}"]`);
+        const imgEl = wrap?.querySelector("img");
+        if (imgEl && imgEl.naturalWidth > 0) {
+          const c = document.createElement("canvas");
+          c.width = imgEl.naturalWidth; c.height = imgEl.naturalHeight;
+          c.getContext("2d").drawImage(imgEl, 0, 0);
+          const d = c.toDataURL("image/png");
+          if (d?.startsWith("data:image/")) missing.push({ page: row.page, data_url: d });
         }
-      } else if (src.startsWith("blob:")) {
-        // blob-URL går inte att hämta över nätet; försök plocka samma <img> från DOM och rita till canvas
-        try {
-          const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${row.page}"]`);
-          const imgEl = wrap?.querySelector("img");
-          if (imgEl && imgEl.naturalWidth > 0) {
-            const c = document.createElement("canvas");
-            c.width = imgEl.naturalWidth; c.height = imgEl.naturalHeight;
-            const ctx = c.getContext("2d");
-            ctx.drawImage(imgEl, 0, 0);
-            const d = c.toDataURL("image/png");
-            if (d && d.startsWith("data:image/")) {
-              missing.push({ page: row.page, data_url: d });
-            }
-          }
-        } catch (e) {
-          console.warn(`⚠️ Kunde inte konvertera blob: för sida ${row.page}`, e);
-        }
-      }
+      } catch (e) { console.warn(`⚠️ Kunde inte konvertera blob: för sida ${row.page}`, e); }
     }
   }
 
-  if (!missing.length) {
-    console.debug("☁️ Alla sidor verkar redan uppladdade:", state.uploadedToCF);
-    return;
-  }
+  if (!missing.length) { console.debug("☁️ Alla sidor redan uppladdade:", state.uploadedToCF); return; }
 
   setStatus("☁️ Laddar upp illustrationer…");
-  console.debug("⬆️ Laddar upp till CF Images, antal:", missing.length);
   updateProgress(0, 1, `Laddar upp ${missing.length} sidor`);
 
-  // batcha
   const BATCH = 6;
-  let uploadedCount = 0;
-
   for (let i = 0; i < missing.length; i += BATCH) {
-    const slice = missing.slice(i, i + BATCH);
-
-    // Filtrera ut ev. misslyckade konverteringar (saknar data_url)
-    const payload = slice.filter(x => x && x.data_url && x.data_url.startsWith("data:image/"));
+    const payload = missing.slice(i, i + BATCH).filter(x => x?.data_url?.startsWith("data:image/"));
     if (!payload.length) continue;
 
     const upRes = await fetch(`${BACKEND}/api/images/upload`, {
@@ -393,47 +383,40 @@ async function ensureUploads() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ items: payload })
     });
-
     const upData = await upRes.json().catch(()=> ({}));
-    if (!upRes.ok || upData?.error) {
-      throw new Error(upData?.error || `Upload HTTP ${upRes.status}`);
-    }
+    if (!upRes.ok || upData?.error) throw new Error(upData?.error || `Upload HTTP ${upRes.status}`);
 
     const rows = upData.uploads || [];
     for (const r of rows) {
-      if (r.image_id) {
-        state.uploadedToCF.push(r);
-        uploadedCount++;
-      } else if (r.error) {
-        // Avbryt hårt – vi vill se exakt fel (t.ex. “invalid image”)
-        throw new Error(`Uppladdning misslyckades (sida ${r.page}): ${r.error}`);
-      }
+      if (r.image_id) state.uploadedToCF.push(r);
+      else if (r.error) throw new Error(`Uppladdning misslyckades (sida ${r.page}): ${r.error}`);
     }
-
-    updateProgress(Math.min(i + slice.length, missing.length), missing.length, `Laddar upp ${Math.min(i + slice.length, missing.length)}/${missing.length}`);
+    updateProgress(Math.min(i + payload.length, missing.length), missing.length, `Laddar upp ${Math.min(i + payload.length, missing.length)}/${missing.length}`);
   }
 
-  if (!uploadedCount) {
-    throw new Error("Inga illustrationer kunde laddas upp till Cloudflare Images.");
-  }
+  // Dedupe (senaste vinner)
+  const byPage = new Map();
+  for (const r of state.uploadedToCF) if (r?.page && r?.image_id) byPage.set(r.page, r);
+  state.uploadedToCF = Array.from(byPage.values());
 }
+
+/* ========= PDF ========= */
+let pdfBusy = false;
+
 async function onCreatePdf() {
+  if (pdfBusy) return;
+  pdfBusy = true;
+  if (els.pdfBtn) els.pdfBtn.disabled = true;
   try {
     if (!state.story) throw new Error("Ingen story i minnet.");
 
-    // Försök ladda upp alla illustrationer till Cloudflare Images.
-    // Om något strular (t.ex. CORS vid demo-URL:er), fortsätter vi ändå med direkta URL:er.
-    try {
-      await ensureUploads();
-    } catch (e) {
-      console.warn("⚠️ ensureUploads misslyckades, faller tillbaka till direkta URL:er:", e);
-    }
+    try { await ensureUploads(); }
+    catch (e) { console.warn("⚠️ ensureUploads misslyckades, använder direkta URL:er:", e); }
 
-    // Föredra Cloudflare-uploads (image_id/url); annars använd genererade URL:er
     const images = (state.uploadedToCF?.length
       ? state.uploadedToCF.map(r => ({ page: r.page, image_id: r.image_id, url: r.url }))
       : (state.generatedImages || []).map(r => ({ page: r.page, url: r.image_url }))
-    );
+    ).sort((a,b)=>a.page-b.page);
 
     if (!images.length) throw new Error("Hittade inga illustrationer att lägga i PDF:en.");
 
@@ -444,7 +427,7 @@ async function onCreatePdf() {
       body: JSON.stringify({
         story: state.story,
         images,
-        mode: "preview",        // byt till "print" när du vill ha bleed m.m.
+        mode: els.printMode?.checked ? "print" : "preview",
         trim: "square210",
         watermark_text: "FÖRHANDSVISNING"
       }),
@@ -459,9 +442,21 @@ async function onCreatePdf() {
     console.error(e);
     setStatus(null);
     alert(e?.message || "Kunde inte skapa PDF.");
+  } finally {
+    pdfBusy = false;
+    if (els.pdfBtn) els.pdfBtn.disabled = false;
   }
 }
 
+/* ========= Bildladdning med retry ========= */
+async function loadImgWithRetry(src, tries=3, delay=500){
+  for (let i=0;i<tries;i++){
+    try {
+      await new Promise((res, rej) => { const im = new Image(); im.onload = res; im.onerror = rej; im.src = src; });
+      return src;
+    } catch(e) { if (i===tries-1) throw e; await new Promise(r=>setTimeout(r, delay*(i+1))); }
+  }
+}
 
 /* ========= Submit ========= */
 async function onSubmit(e){
@@ -474,11 +469,11 @@ async function onSubmit(e){
   setStatus("✏️ Skriver berättelsen…"); updateProgress(0,3,"1/3 – Berättelsen");
   startQuips();
   if (els.submitBtn){ els.submitBtn.disabled = true; els.submitBtn.innerHTML = 'Skapar förhandsvisning… <span class="spinner"></span>'; }
+  if (els.pdfBtn) els.pdfBtn.disabled = true;
 
   // rensa tidigare resultat
   state.generatedImages = [];
   state.uploadedToCF = [];
-  state.pdfReady = false;
 
   try{
     // 1) STORY + PLAN
@@ -557,18 +552,16 @@ async function onSubmit(e){
       const sk = card.querySelector(".skeleton");
 
       if (row.image_url) {
-        await new Promise(resolve=>{
-          const tmp = new Image();
-          tmp.onload = ()=>{
-            imgEl.src = tmp.src; sk?.remove(); imgEl.style.opacity = "1";
-            const prov = card.querySelector(".img-provider");
-            if (prov){ prov.textContent = "🎨 Gemini"; prov.classList.remove("hidden"); }
-            card.querySelector(".retry-wrap")?.classList.add("hidden");
-            resolve();
-          };
-          tmp.onerror = ()=>{ sk?.remove(); resolve(); };
-          tmp.src = row.image_url;
-        });
+        try {
+          const okSrc = await loadImgWithRetry(row.image_url);
+          imgEl.src = okSrc; sk?.remove(); imgEl.style.opacity = "1";
+          const prov = card.querySelector(".img-provider");
+          if (prov){ prov.textContent = "🎨 Gemini"; prov.classList.remove("hidden"); }
+          card.querySelector(".retry-wrap")?.classList.add("hidden");
+        } catch {
+          sk?.remove();
+          card.querySelector(".retry-wrap")?.classList.remove("hidden");
+        }
       } else {
         sk?.remove();
         const fb = document.createElement("div");
@@ -587,6 +580,11 @@ async function onSubmit(e){
       await new Promise(r=> setTimeout(r, 120));
     }
 
+    // lås upp resterande kort när allt är inne
+    Array.from(els.previewGrid.children).forEach((card,i)=>{
+      if (i >= state.visibleCount) card.classList.remove("locked");
+    });
+
     stopQuips();
     setStatus("✅ Klart! Sagans förhandsvisning är redo.");
     els.pdfBtn && (els.pdfBtn.disabled = false);
@@ -599,7 +597,7 @@ async function onSubmit(e){
   }
 }
 
-/* ========= Regenerera ========= */
+/* ========= Regenerera en sida ========= */
 async function regenerateOne(page){
   const pageObj = state.pageMap.get(page);
   const planObj = state.planMap.get(page) || null;
@@ -629,27 +627,19 @@ async function regenerateOne(page){
     const j = await res.json().catch(()=> ({}));
     if (!res.ok || j?.error) throw new Error(j?.error || `HTTP ${res.status}`);
 
-    await new Promise(resolve=>{
-      const tmp = new Image();
-      tmp.onload = ()=>{
-        imgEl.src = tmp.src; imgEl.style.opacity = "1"; sk.remove();
-        const prov = card.querySelector(".img-provider");
-        if (prov){ prov.textContent = "🎨 Gemini"; prov.classList.remove("hidden"); }
-        card.querySelector(".retry-wrap")?.classList.add("hidden");
+    const okSrc = await loadImgWithRetry(j.image_url);
+    imgEl.src = okSrc; imgEl.style.opacity = "1"; sk.remove();
+    const prov = card.querySelector(".img-provider");
+    if (prov){ prov.textContent = "🎨 Gemini"; prov.classList.remove("hidden"); }
+    card.querySelector(".retry-wrap")?.classList.add("hidden");
 
-        // uppdatera generatedImages för PDF-flödet
-        const idx = state.generatedImages.findIndex(x => x.page === page);
-        if (idx >= 0) state.generatedImages[idx].image_url = tmp.src;
-        else state.generatedImages.push({ page, image_url: tmp.src });
+    // uppdatera state för PDF
+    const idx = state.generatedImages.findIndex(x => x.page === page);
+    if (idx >= 0) state.generatedImages[idx].image_url = okSrc;
+    else state.generatedImages.push({ page, image_url: okSrc });
+    // ta bort ev tidigare upload för sidan
+    state.uploadedToCF = state.uploadedToCF.filter(x => x.page !== page);
 
-        // ta bort ev. tidigare CF-uppladdning för sidan så att ensureUploads laddar upp nya
-        state.uploadedToCF = state.uploadedToCF.filter(x => x.page !== page);
-
-        resolve();
-      };
-      tmp.onerror = ()=>{ sk.remove(); resolve(); };
-      tmp.src = j.image_url;
-    });
   } catch {
     sk.remove();
     const fb = document.createElement("div");
@@ -672,18 +662,18 @@ function onDemo(){
     if (i >= state.visibleCount) card.classList.add("locked");
     card.innerHTML = `
       <div class="imgwrap" data-page="${i+1}">
-        <img src="https://picsum.photos/seed/demo_${i}/600/400" />
+        <img src="https://picsum.photos/seed/demo_${i}/600/600" />
       </div>
       <div class="txt">Sida ${i+1}: ${escapeHtml(state.form.name)}s lilla äventyr.</div>`;
     els.previewGrid.appendChild(card);
   }
-  // lägg till i generatedImages så PDF-knappen kan testas även i demo
   state.generatedImages = Array.from({length: total}, (_,k)=>({
     page: k+1,
     image_url: els.previewGrid.querySelector(`.imgwrap[data-page="${k+1}"] img`)?.src || ""
   }));
   els.previewSection.classList.remove("hidden");
   smoothScrollTo(els.previewSection);
+  if (els.pdfBtn) els.pdfBtn.disabled = false;
 }
 
 /* ========= Events ========= */
@@ -694,7 +684,6 @@ function bindEvents(){
   els.refPhotoBtn?.addEventListener("click", ()=> setRefMode("photo"));
   els.charPhoto?.addEventListener("change", onPhotoChange);
 
-  // Läsålder chips
   readingAgeSeg.forEach(btn=>{
     btn.addEventListener("click", ()=>{
       readingAgeSeg.forEach(b=> b.classList.remove("active"));
@@ -703,7 +692,7 @@ function bindEvents(){
     });
   });
 
-  ["name","age","pages","style","theme","traits","readingAge"].forEach(id=>{
+  ["name","age","pages","style","theme","traits","readingAge","readingAgeNumber"].forEach(id=>{
     const el = document.getElementById(id);
     el?.addEventListener("input", ()=> { readForm(); saveForm(); });
   });
@@ -721,14 +710,14 @@ function bindEvents(){
   });
 
   els.navToggle?.addEventListener("click", ()=>{
-    els.mobileMenu.classList.toggle("open");
-    const open = els.mobileMenu.classList.contains("open");
-    els.navToggle.setAttribute("aria-expanded", open ? "true":"false");
-    els.mobileMenu.setAttribute("aria-hidden", open ? "false":"true");
+    els.mobileMenu?.classList.toggle("open");
+    const open = els.mobileMenu?.classList.contains("open");
+    els.navToggle?.setAttribute("aria-expanded", open ? "true":"false");
+    els.mobileMenu?.setAttribute("aria-hidden", open ? "false":"true");
   });
 
   els.pdfBtn?.addEventListener("click", onCreatePdf);
-  if (els.pdfBtn) els.pdfBtn.disabled = false;
+  if (els.pdfBtn) els.pdfBtn.disabled = true;  // aktiveras när preview är klar
 }
 
 /* ========= Init ========= */
