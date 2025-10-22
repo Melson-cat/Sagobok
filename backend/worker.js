@@ -308,23 +308,55 @@ function drawWatermark(page, text = "FÖRHANDSVISNING", color = rgb(0.2, 0.2, 0.
   const angleDeg = (angleRad * 180) / Math.PI;
   page.drawText(text, { x: width * 0.1, y: height * 0.3, size: fontSize, color, opacity: 0.12, rotate: degrees(angleDeg) });
 }
-function drawWrappedText(page, text, x, yTop, maxWidth, font, fontSize, lineHeight) {
+function drawWrappedTextFit(page, text, boxX, boxY, boxW, boxH, font, baseSize, baseLeading, minSize=12) {
+  // Försök från basstorleken, krymp nedåt tills allt får plats
+  let size = baseSize;
+  for (; size >= minSize; size -= 1) {
+    const lineH = size * baseLeading;
+    const words = String(text || "").split(/\s+/);
+    const lines = [];
+    let line = "";
+    for (const w of words) {
+      const test = line ? line + " " + w : w;
+      const testWidth = font.widthOfTextAtSize(test, size);
+      if (testWidth <= boxW) line = test;
+      else { if (line) lines.push(line); line = w; }
+    }
+    if (line) lines.push(line);
+
+    const totalHeight = lines.length * lineH;
+    if (totalHeight <= boxH) {
+      // Rita
+      let y = boxY + boxH - lineH; // topp-justera inom panelen
+      for (const ln of lines) {
+        page.drawText(ln, { x: boxX, y, size, font, color: rgb(0.1,0.1,0.1) });
+        y -= lineH;
+      }
+      return { size, lines };
+    }
+  }
+  // Om även minsta storlek inte räcker: rita så mycket som får plats
+  const size = minSize;
+  const lineH = size * baseLeading;
   const words = String(text || "").split(/\s+/);
-  let line = "", cursorY = yTop;
   const lines = [];
+  let line = "";
   for (const w of words) {
     const test = line ? line + " " + w : w;
-    const testWidth = font.widthOfTextAtSize(test, fontSize);
-    if (testWidth <= maxWidth) line = test;
+    const testWidth = font.widthOfTextAtSize(test, size);
+    if (testWidth <= boxW) line = test;
     else { if (line) lines.push(line); line = w; }
+    if (lines.length * lineH >= boxH - lineH) break; // lämna sista raden för att få plats
   }
-  if (line) lines.push(line);
+  if (line && lines.length * lineH < boxH) lines.push(line + " …");
+  let y = boxY + boxH - lineH;
   for (const ln of lines) {
-    page.drawText(ln, { x, y: cursorY, size: fontSize, font, color: rgb(0.1, 0.1, 0.1) });
-    cursorY -= lineHeight;
+    page.drawText(ln, { x: boxX, y, size, font, color: rgb(0.1,0.1,0.1) });
+    y -= lineH;
   }
-  return cursorY;
+  return { size, lines, truncated: true };
 }
+
 
 async function getImageBytes(env, row) {
   try {
@@ -411,8 +443,9 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   const contentY = mmToPt(bleed);
 
   const pdfDoc = await PDFDocument.create();
-  const fontBody = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const fontTitle = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+ const fontBody = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+const fontTitle = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
 
   const pages = story?.book?.pages || [];
   const readingAge = story?.book?.reading_age || 6;
@@ -455,62 +488,70 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   }
 
   // ---- Inside pages ----
-  for (const p of pages) {
-    try {
-      const page = pdfDoc.addPage([pageW, pageH]);
-      const inner = mmToPt(GRID.inner_mm);
-      const gap = mmToPt(GRID.gap_mm);
-      const pad = mmToPt(GRID.pad_mm);
+for (const p of pages) {
+  try {
+    const page = pdfDoc.addPage([pageW, pageH]);
+    const inner = mmToPt(GRID.inner_mm);
+    const gap = mmToPt(GRID.gap_mm);
+    const pad = mmToPt(GRID.pad_mm);
 
-      const imgShare = pickImageShare(p.text || "");
-      const imgSide = Math.min(trimWpt - inner * 2, trimHpt * imgShare);
+    // 1) Textpanelen: bestäm höjd först (så bilden aldrig krockar)
+    //   – min 95pt för kort text, max 240pt för längre
+    const { size: baseBodySize, leading: baseLeading } = fontSpecForReadingAge(readingAge);
+    const PANEL_MIN = 95;
+    const PANEL_MAX = 240;
 
-      const imgBoxW = imgSide, imgBoxH = imgSide;
-      const imgBoxX = contentX + (trimWpt - imgBoxW) / 2;
-      const imgBoxY = contentY + trimHpt - inner - imgBoxH;
+    // Heuristik baserat på textlängd
+    const tlen = (p.text || "").trim().length;
+    let panelH = tlen <= 140 ? PANEL_MIN : tlen <= 320 ? Math.min(180, PANEL_MAX) : PANEL_MAX;
 
-      const src = imgByPage.get(p.page);
-      let imgObj = null;
-      if (src) {
-        const bytes = await getImageBytes(env, src);
-        imgObj = await embedImage(pdfDoc, bytes);
-      }
-      if (imgObj) drawImageCover(page, imgObj, imgBoxX, imgBoxY, imgBoxW, imgBoxH);
+    // 2) Bildytan tar resten av höjden (med inside-marginal & gap)
+    const availableH = (trimHpt - inner*2) - panelH - gap;
+    const imgSide = Math.max(Math.min(trimWpt - inner*2, availableH), 120); // minst 120pt höjd
+    const imgBoxW = imgSide, imgBoxH = imgSide;
+    const imgBoxX = contentX + (trimWpt - imgBoxW) / 2;
+    const imgBoxY = contentY + trimHpt - inner - imgBoxH;
 
-      const panelTop = imgBoxY - gap;
-      const panelBot = contentY + inner;
-      const panelH = Math.max(panelTop - panelBot, mmToPt(34));
-      const panelW = trimWpt - inner * 2;
-      const panelX = contentX + inner;
-      const panelY = panelBot;
-
-      if (mode === "preview") {
-        page.drawRectangle({ x: panelX, y: panelY, width: panelW, height: panelH, color: rgb(0.99, 0.99, 0.99) });
-      }
-
-      const { size: bodySize } = fontSpecForReadingAge(readingAge);
-      const lineH = bodySize * 1.35;
-
-      const textMaxW = panelW - pad * 2;
-      const textX = panelX + pad;
-      const textTopY = panelY + panelH - pad - bodySize;
-
-      drawWrappedText(page, p.text || "", textX, textTopY, textMaxW, fontBody, bodySize, lineH);
-
-      if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
-    } catch (e) {
-      log("PDF PAGE ERROR p=", p?.page, e?.message);
-      const fallback = pdfDoc.addPage([pageW, pageH]);
-      fallback.drawText(`Sida ${p?.page || "?"}: kunde inte rendera.`, {
-        x: mmToPt(15),
-        y: mmToPt(15),
-        size: 12,
-        font: fontBody,
-        color: rgb(0.8, 0.1, 0.1),
-      });
-      if (mode === "preview" && watermark_text) drawWatermark(fallback, watermark_text);
+    // 3) Bild
+    const src = imgByPage.get(p.page);
+    let imgObj = null;
+    if (src) {
+      const bytes = await getImageBytes(env, src);
+      imgObj = await embedImage(pdfDoc, bytes);
     }
+    if (imgObj) {
+      // Låt bilden fylla rutan (cover) + en ljus fond för snygg övergång
+      page.drawRectangle({ x: imgBoxX, y: imgBoxY, width: imgBoxW, height: imgBoxH, color: rgb(1,1,1) });
+      drawImageCover(page, imgObj, imgBoxX, imgBoxY, imgBoxW, imgBoxH);
+    }
+
+    // 4) Textpanel (under bilden)
+    const panelW = trimWpt - inner*2;
+    const panelX = contentX + inner;
+    const panelY = imgBoxY - gap - panelH;
+
+    // Bakplatta i preview för läsbarhet
+    if (mode === "preview") {
+      page.drawRectangle({ x: panelX, y: panelY, width: panelW, height: panelH, color: rgb(0.99,0.99,0.99) });
+    }
+
+    // 5) Text som alltid får plats
+    const textMaxW = panelW - pad*2;
+    const textX = panelX + pad;
+    const textY = panelY; // drawWrappedTextFit utgår från panelens box
+    drawWrappedTextFit(page, p.text || "", textX, textY, textMaxW, panelH - pad*2, fontBody, baseBodySize, 1.35, 12);
+
+    if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
+  } catch (e) {
+    log("PDF PAGE ERROR p=", p?.page, e?.message);
+    const fallback = pdfDoc.addPage([pageW, pageH]);
+    fallback.drawText(`Sida ${p?.page || "?"}: kunde inte rendera.`, {
+      x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1)
+    });
+    if (mode === "preview" && watermark_text) drawWatermark(fallback, watermark_text);
   }
+}
+
 
   // ---- Back cover ----
   try {
