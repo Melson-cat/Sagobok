@@ -1,5 +1,7 @@
 // ============================================================================
 // BokPiloten – Worker v14 “Bookish PDF + Solid Ref Image + Cover”
+// ============================================================================
+// BokPiloten – Worker v15 "Spread PDF, Solid Ref, Cover"
 // Endpoints:
 //  - POST /api/story            -> outline -> story (OpenAI)
 //  - POST /api/ref-image        -> character reference (Gemini)  {ref_image_b64}
@@ -7,9 +9,9 @@
 //  - POST /api/cover            -> cover image (Gemini)           {image_url}
 //  - POST /api/images/upload    -> Cloudflare Images              {uploads:[{page|kind,image_id,url}]}
 //  - POST /api/image/regenerate -> single page (Gemini)           {image_url}
-//  - POST /api/pdf              -> story + images -> PDF
+//  - POST /api/pdf              -> story + images -> PDF (spread layout)
 //  - GET  /api/images/env       -> debug: env flags
-//  - GET  /                    -> health
+//  - GET  /                     -> health
 // Env: API_KEY, GEMINI_API_KEY, IMAGES_API_TOKEN, CF_ACCOUNT_ID,
 //      CF_IMAGES_ACCOUNT_HASH, (CF_IMAGES_VARIANT)
 // ============================================================================
@@ -69,22 +71,15 @@ async function geminiImage(env, item, timeoutMs=80000, attempts=3) {
   const key = env.GEMINI_API_KEY; if (!key) throw new Error("GEMINI_API_KEY missing");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(key)}`;
 
-  // Viktigt: lägg referensen först i parts för att ankra identiteten.
+  // Viktigt: referens först i parts för att låsa identitet.
   const parts = [];
-  if (item.character_ref_b64) {
-    parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
-  }
+  if (item.character_ref_b64) parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
   if (item.guidance) parts.push({ text: item.guidance });
-  parts.push({ text: item.prompt });
+  parts.push({ text: `${item.prompt}\n\nOutput: square 1:1 composition. No text in the image.` });
 
   const body = {
     contents: [{ role: "user", parts }],
-    generationConfig: {
-      responseModalities: ["IMAGE"],
-      temperature: 0.33,
-      topP: 0.9
-      // OBS: INTE aspectRatio (stöds ej) – vi säger 1:1 i prompten.
-    }
+    generationConfig: { responseModalities: ["IMAGE"], temperature: 0.33, topP: 0.9 }
   };
 
   let last;
@@ -219,7 +214,7 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName 
     `This is page ${pg.page} of ${pageCount}.`,
     `Render in ${styleLine}. No text or speech bubbles.`,
     `Square composition (1:1), comfortable headroom, keep limbs fully in frame.`,
-    `Keep the same hero (${characterName}) from reference. Adapt pose, camera, and lighting freely.`,
+    `Keep the same hero (${characterName}) from the reference. Match coat/eyes/wardrobe exactly.`,
     pg.time_of_day ? `Time of day: ${pg.time_of_day}.` : "",
     pg.weather ? `Weather: ${pg.weather}.` : "",
     `SCENE: ${pg.scene || pg.text || ""}`,
@@ -238,17 +233,14 @@ function characterCardPrompt({ style, bible, traits }){
   ].join(" ");
 }
 function buildCoverPrompt({ style, story, characterName }) {
-  const title = story?.book?.title || "Min bok";
   const theme = story?.book?.theme || "";
   const styleLine = styleHint(style);
-
   return [
     `BOOK COVER ILLUSTRATION (front cover), ${styleLine}.`,
-    `Square composition (1:1). No text, no logos, no title on the image.`,
-    `Focus on the main hero (${characterName}) from the reference. Keep identity perfectly consistent.`,
-    `Cinematography: bold, iconic, clean background/scene that sells the theme.`,
+    `Square 1:1 composition, iconic and clean.`,
+    `Focus on the main hero (${characterName}) from the reference. Identity must be perfectly consistent.`,
     theme ? `Theme cue: ${theme}.` : "",
-    `Avoid speech bubbles and typography.`
+    `No text, no logos, no speech balloons.`
   ].filter(Boolean).join("\n");
 }
 
@@ -299,12 +291,12 @@ const PT_PER_MM   = PT_PER_INCH / MM_PER_INCH;
 const TRIMS = { square210: { w_mm: 210, h_mm: 210, default_bleed_mm: 3 } };
 function mmToPt(mm){ return mm * PT_PER_MM; }
 
-// Font-spec + inbäddning av riktig TTF (fallback till Helvetica)
+// Gradsättning per läsålder
 function fontSpecForReadingAge(ra=6){
-  if (ra <= 5)  return { size: 22, leading: 1.35 };
-  if (ra <= 8)  return { size: 18, leading: 1.35 };
-  if (ra <= 12) return { size: 16, leading: 1.32 };
-  return { size: 16, leading: 1.32 };
+  if (ra <= 5)  return { size: 24, leading: 1.40 };
+  if (ra <= 8)  return { size: 20, leading: 1.38 };
+  if (ra <= 12) return { size: 18, leading: 1.34 };
+  return { size: 18, leading: 1.34 };
 }
 async function tryEmbedTtf(pdfDoc, url) {
   try {
@@ -313,14 +305,6 @@ async function tryEmbedTtf(pdfDoc, url) {
     const bytes = new Uint8Array(await r.arrayBuffer());
     return await pdfDoc.embedFont(bytes, { subset: true });
   } catch { return null; }
-}
-
-// Bild + text-layout (ingen vit platta)
-function pickPageLayout(text="", pageIndex=0){
-  const len = String(text||"").trim().length;
-  const imageShare = len <= 160 ? 0.78 : len <= 320 ? 0.70 : 0.62;
-  const imagePos   = (len > 320) ? "bottom" : (pageIndex % 2 === 0 ? "top" : "bottom");
-  return { imageShare, imagePos };
 }
 
 function drawWatermark(page, text = "FÖRHANDSVISNING", color = rgb(0.2,0.2,0.2)) {
@@ -346,8 +330,6 @@ function drawWrappedText(page, text, x, yTop, maxWidth, font, fontSize, lineHeig
   }
   return cursorY;
 }
-
-// bytes helper
 async function getImageBytes(env, row) {
   try {
     if (row.image_id) {
@@ -378,8 +360,6 @@ async function embedImage(pdfDoc, bytes){
   try { return await pdfDoc.embedJpg(bytes); } catch {}
   return null;
 }
-
-// Draw helpers
 function drawImageCover(page, img, boxX, boxY, boxW, boxH) {
   const iw = img.width, ih = img.height;
   const scale = Math.max(boxW / iw, boxH / ih);
@@ -388,9 +368,8 @@ function drawImageCover(page, img, boxX, boxY, boxW, boxH) {
   const y = boxY + (boxH - h) / 2;
   page.drawImage(img, { x, y, width: w, height: h });
 }
-const GRID = { inner_mm: 14, gap_mm: 8 };
 
-// Build PDF
+// ---------------- Build PDF: SPREAD LAYOUT ----------------
 async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }, env) {
   const trimSpec = TRIMS[trim] || TRIMS.square210;
   const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
@@ -404,7 +383,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
 
   const pdfDoc = await PDFDocument.create();
 
-  // Försök bädda in Bitter; fallback till Helvetica
+  // Typsnitt
   const bitterReg = await tryEmbedTtf(pdfDoc, "https://raw.githubusercontent.com/google/fonts/main/ofl/bitter/Bitter%5Bwght%5D.ttf");
   const bitterBold = await tryEmbedTtf(pdfDoc, "https://raw.githubusercontent.com/google/fonts/main/ofl/bitter/Bitter-Bold.ttf");
   const fontBody  = bitterReg || await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -417,16 +396,15 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   const heroName = story?.book?.bible?.main_character?.name || "";
   const theme = story?.book?.theme || "";
 
-  // Map images: by page + cover
+  // Map images
   let coverSrc = null;
   const imgByPage = new Map();
   (images || []).forEach(row => {
-    if (row?.kind === "cover") coverSrc = row;
-    if (row?.page === 0) coverSrc = row;
+    if (row?.kind === "cover" || row?.page === 0) coverSrc = row;
     if (row?.page && (row.image_id || row.url || row.data_url)) imgByPage.set(row.page, row);
   });
 
-  // ---- Cover ----
+  // ---- Cover (1 sida) ----
   try {
     const page = pdfDoc.addPage([pageW, pageH]);
     if (coverSrc) {
@@ -434,14 +412,13 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
       const img = await embedImage(pdfDoc, bytes);
       if (img) drawImageCover(page, img, 0, 0, pageW, pageH);
     }
-    // Title band (visas även utan bild)
+    // Titelband
     const bandH = Math.min(trimHpt * 0.18, 90);
     const bandY = contentY + trimHpt - bandH - mmToPt(10);
     page.drawRectangle({ x: contentX + mmToPt(10), y: bandY, width: trimWpt - mmToPt(20), height: bandH, color: rgb(1,1,1), opacity: 1 });
     const titleSize = Math.min(trimWpt, trimHpt) * 0.08;
     const subSize = Math.max(12, titleSize * 0.42);
-    const marginX = contentX + mmToPt(18);
-    const tx = marginX;
+    const tx = contentX + mmToPt(18);
     const ty = bandY + bandH - titleSize - mmToPt(6);
     page.drawText(title, { x: tx, y: ty, size: titleSize, font: fontTitle, color: rgb(0.1,0.1,0.1) });
     const sub = theme ? `${theme}` : (heroName ? `Med ${heroName}` : "");
@@ -453,68 +430,68 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     page.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8,0.1,0.1) });
   }
 
-  // ---- Inside pages ----
+  // ---- Uppslag: för varje story-sida skapar vi 2 PDF-sidor ----
+  const { size: baseSize, leading } = fontSpecForReadingAge(readingAge);
   for (let i = 0; i < pages.length; i++) {
     const p = pages[i];
+
+    // VÄNSTER: helbild (fullbleed)
     try {
-      const page = pdfDoc.addPage([pageW, pageH]);
-
-      const inner = mmToPt(GRID.inner_mm);
-      const gap   = mmToPt(GRID.gap_mm);
-
-      const L = pickPageLayout(p.text || "", i);
-      const imgSide = Math.min(trimWpt - inner*2, trimHpt * L.imageShare);
-
-      const imgW = imgSide, imgH = imgSide;
-      const imgX = contentX + (trimWpt - imgW) / 2;
-      const imgY = (L.imagePos === "top")
-        ? (contentY + trimHpt - inner - imgH)
-        : (contentY + inner);
-
+      const imgPage = pdfDoc.addPage([pageW, pageH]);
       const src = imgByPage.get(p.page);
       if (src) {
         const bytes = await getImageBytes(env, src);
         const imgObj = await embedImage(pdfDoc, bytes);
-        if (imgObj) drawImageCover(page, imgObj, imgX, imgY, imgW, imgH);
+        if (imgObj) drawImageCover(imgPage, imgObj, 0, 0, pageW, pageH);
       }
-
-      const textTop = (L.imagePos === "top")
-        ? (imgY - gap)
-        : (contentY + trimHpt - inner);
-
-      const textBottom = (L.imagePos === "top")
-        ? (contentY + inner)
-        : (imgY + imgH + gap);
-
-      const textH = Math.max(textTop - textBottom, mmToPt(30));
-      const textW = trimWpt - inner*2;
-      const textX = contentX + inner;
-
-      const { size: baseSize, leading } = fontSpecForReadingAge(readingAge);
-      const bodySize = (String(p.text||"").length > 380) ? baseSize * 0.92 : baseSize;
-      const lineH = bodySize * (leading + 0.02);
-
-      const textMaxW = textW - mmToPt(4);
-      const textStartY = (L.imagePos === "top")
-        ? (textBottom + textH - bodySize)
-        : (textTop - bodySize);
-
-      drawWrappedText(page, p.text || "", textX + mmToPt(2), textStartY, textMaxW, fontBody, bodySize, lineH);
-
-      if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
+      if (mode === "preview" && watermark_text) drawWatermark(imgPage, watermark_text);
     } catch (e) {
-      log("PDF PAGE ERROR p=", p?.page, e?.message);
       const fallback = pdfDoc.addPage([pageW, pageH]);
-      fallback.drawText(`Sida ${p?.page || "?"}: kunde inte rendera.`, {
-        x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1)
+      fallback.drawText(`Bild saknas (sida ${p.page}).`, { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8,0.1,0.1) });
+    }
+
+    // HÖGER: vit textsida
+    try {
+      const textPage = pdfDoc.addPage([pageW, pageH]);
+
+      // Marginaler – inner lite större
+      const m = { inner: mmToPt(22), outer: mmToPt(18), top: mmToPt(20), bottom: mmToPt(24) };
+
+      // Vit bakgrund för skärmvisning
+      textPage.drawRectangle({ x: 0, y: 0, width: pageW, height: pageH, color: rgb(1,1,1) });
+
+      // Textblock
+      const textX = contentX + m.inner;
+      const textW = trimWpt - m.inner - m.outer;
+      const textTopY = contentY + trimHpt - m.top;
+
+      const long = (String(p.text||"").length > 420);
+      const bodySize = long ? baseSize * 0.94 : baseSize;
+      const lineH = bodySize * leading;
+
+      drawWrappedText(textPage, p.text || "", textX, textTopY, textW, fontBody, bodySize, lineH);
+
+      // Sidnummer (ytterhörn)
+      const num = `${p.page}`;
+      textPage.drawText(num, {
+        x: contentX + trimWpt - m.outer - 8,
+        y: contentY + m.bottom - mmToPt(6),
+        size: 10,
+        font: fontBody,
+        color: rgb(0.25,0.25,0.25)
       });
+
+      if (mode === "preview" && watermark_text) drawWatermark(textPage, watermark_text);
+    } catch (e) {
+      const fallback = pdfDoc.addPage([pageW, pageH]);
+      fallback.drawText(`Text kunde inte renderas (sida ${p.page}).`, { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8,0.1,0.1) });
     }
   }
 
-  // ---- Back cover ----
+  // ---- Baksida (enkel) ----
   try {
     const page = pdfDoc.addPage([pageW, pageH]);
-    const inner = mmToPt(GRID.inner_mm);
+    const inner = mmToPt(22);
     const blurb = story?.book?.lesson
       ? `Lärdom: ${story.book.lesson}`
       : `En berättelse skapad med BokPiloten.`;
@@ -529,11 +506,10 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
 
     page.drawText(head, { x: startX, y: cursorY, size: headSize, font: fontTitle, color: rgb(0.1,0.1,0.1) });
     cursorY -= (headSize + mmToPt(4));
-
     drawWrappedText(page, blurb, startX, cursorY, (trimWpt - inner*2), fontBody, bodySize, lh);
+
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   } catch (e) {
-    log("PDF BACK COVER ERROR:", e?.message);
     const page = pdfDoc.addPage([pageW, pageH]);
     page.drawText("Baksidan kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1) });
   }
@@ -559,7 +535,7 @@ async function handlePdfRequest(req, env) {
     mode: mode === "print" ? "print" : "preview",
     trim: trim || "square210",
     bleed_mm,
-    watermark_text: watermark_text ?? null, // watermark bara om truthy
+    watermark_text: watermark_text ?? null,
   }, env);
 
   const headers = new Headers({
@@ -577,7 +553,6 @@ async function handleUploadRequest(req, env) {
     const items = Array.isArray(body?.items)
       ? body.items
       : (body?.data_url ? [body] : []);
-
     if (!items.length) return err("Body must include items[] or {page|kind,data_url}", 400);
 
     const uploads = [];
@@ -752,13 +727,10 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
 
-    // Preflight
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
-    // Health
     if (req.method === "GET" && url.pathname === "/") return ok({ ok: true, ts: Date.now() });
 
-    // Debug env flags
     if (req.method === "GET" && url.pathname === "/api/images/env") {
       return ok({
         has: {
@@ -772,28 +744,14 @@ export default {
       });
     }
 
-    // Story
     if (req.method === "POST" && url.pathname === "/api/story") return await handleStoryRequest(req, env);
-
-    // Reference image
     if (req.method === "POST" && url.pathname === "/api/ref-image") return await handleRefImageRequest(req, env);
-
-    // Interior images
     if (req.method === "POST" && url.pathname === "/api/images") return await handleImagesRequest(req, env);
-
-    // Cover image
     if (req.method === "POST" && url.pathname === "/api/cover") return await handleCoverRequest(req, env);
-
-    // Regenerate one
     if (req.method === "POST" && url.pathname === "/api/image/regenerate") return await handleRegenerateRequest(req, env);
-
-    // Uploads -> CF Images
     if (req.method === "POST" && url.pathname === "/api/images/upload") return await handleUploadRequest(req, env);
-
-    // PDF
     if (req.method === "POST" && url.pathname === "/api/pdf") return await handlePdfRequest(req, env);
 
-    // 404
     return new Response(JSON.stringify({ error: "Not found" }), {
       status: 404,
       headers: { "content-type": "application/json; charset=utf-8", ...CORS }
