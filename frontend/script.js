@@ -5,6 +5,9 @@
    =================================================================== */
 const API = "https://bokpilot-backend.sebastian-runell.workers.dev";
 
+// Cover-strategi: "skip" = generera inte omslag alls, "async" = generera i bakgrunden (rekommenderas)
+const COVER_STRATEGY = "async";
+
 /* --------------------------- Elements --------------------------- */
 const els = {
   body: document.body,
@@ -406,7 +409,6 @@ async function onCreatePdf() {
   }
 }
 
-/* --------------------------- Submit flow --------------------------- */
 async function onSubmit(e) {
   e.preventDefault();
 
@@ -414,24 +416,15 @@ async function onSubmit(e) {
   readForm();
   const problems = [];
   if (!state.form.name) problems.push("Ange ett namn.");
-  if (state.form.age < MIN_AGE || state.form.age > MAX_AGE)
-    problems.push("Hjältens ålder verkar orimlig.");
+  if (state.form.age < MIN_AGE || state.form.age > MAX_AGE) problems.push("Hjältens ålder verkar orimlig.");
   if (!VALID_PAGES.has(state.form.pages)) problems.push("Ogiltigt sidantal.");
-  if (state.form.reading_age < 3 || state.form.reading_age > 12)
-    problems.push("Läsålder bör vara 3–12 (eller välj Familj).");
+  if (state.form.reading_age < 3 || state.form.reading_age > 12) problems.push("Läsålder bör vara 3–12 (eller välj Familj).");
   if (state.form.refMode === "desc") {
-    if (!state.form.traits || state.form.traits.length < 6)
-      problems.push(
-        "Beskriv gärna kännetecken – eller ladda upp foto för bäst resultat."
-      );
+    if (!state.form.traits || state.form.traits.length < 6) problems.push("Beskriv gärna kännetecken – eller ladda upp foto för bäst resultat.");
   } else if (state.form.refMode === "photo") {
-    if (!state.form.photoDataUrl)
-      problems.push("Ladda upp ett foto – eller byt till Beskrivning.");
+    if (!state.form.photoDataUrl) problems.push("Ladda upp ett foto – eller byt till Beskrivning.");
   }
-  if (problems.length) {
-    alert("Korrigera:\n\n• " + problems.join("\n• "));
-    return;
-  }
+  if (problems.length) { alert("Korrigera:\n\n• " + problems.join("\n• ")); return; }
 
   // UI
   renderSkeleton(5);
@@ -462,8 +455,7 @@ async function onSubmit(e) {
       }),
     });
     const storyData = await storyRes.json().catch(() => ({}));
-    if (!storyRes.ok || storyData?.error)
-      throw new Error(storyData?.error || `HTTP ${storyRes.status}`);
+    if (!storyRes.ok || storyData?.error) throw new Error(storyData?.error || `HTTP ${storyRes.status}`);
     state.story = storyData.story;
     state.plan = storyData.plan || { plan: [] };
 
@@ -484,8 +476,7 @@ async function onSubmit(e) {
       }),
     });
     const refData = await refRes.json().catch(() => ({}));
-    if (!refRes.ok || refData?.error)
-      throw new Error(refData?.error || `HTTP ${refRes.status}`);
+    if (!refRes.ok || refData?.error) throw new Error(refData?.error || `HTTP ${refRes.status}`);
     state.ref_b64 = refData.ref_image_b64 || null;
     if (!state.ref_b64) throw new Error("Ingen referensbild kunde skapas.");
 
@@ -503,8 +494,7 @@ async function onSubmit(e) {
       }),
     });
     const imgData = await imgRes.json().catch(() => ({}));
-    if (!imgRes.ok || imgData?.error)
-      throw new Error(imgData?.error || "Bildgenerering misslyckades");
+    if (!imgRes.ok || imgData?.error) throw new Error(imgData?.error || "Bildgenerering misslyckades");
 
     const results = imgData.images || [];
     let received = 0;
@@ -513,9 +503,7 @@ async function onSubmit(e) {
         state.images_by_page.set(row.page, { image_url: row.image_url });
         fillCard(row.page, row.image_url, "Gemini");
       } else {
-        const wrap = els.previewGrid.querySelector(
-          `.imgwrap[data-page="${row.page}"]`
-        );
+        const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${row.page}"]`);
         if (wrap) {
           const fb = document.createElement("div");
           fb.className = "img-fallback";
@@ -528,34 +516,19 @@ async function onSubmit(e) {
       setStatus(`🎨 Målar sida ${received}/${results.length}…`, 38 + (received / Math.max(1, results.length)) * 32);
     }
 
-    // 4) COVER
-    setStatus("📕 Skapar omslag…", 74);
-    const covRes = await fetch(`${API}/api/cover`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        style: state.form.style,
-        ref_image_b64: state.ref_b64,
-        story: state.story,
-      }),
-    });
-    const cov = await covRes.json().catch(() => ({}));
-    if (!covRes.ok || cov?.error)
-      throw new Error(cov?.error || `HTTP ${covRes.status}`);
-    state.cover_preview_url = cov.image_url || null;
-    if (state.cover_preview_url) fillCard(0, state.cover_preview_url, "Gemini");
-
-    // 5) CLOUDFLARE IMAGES (cover + alla sidor)
-    setStatus("☁️ Laddar upp illustrationer…", 86);
-
-    const items = [];
-
-    // cover
-    if (state.cover_preview_url) {
-      const du = await urlToDataURL(state.cover_preview_url);
-      if (du) items.push({ kind: "cover", data_url: du });
+    // 4) COVER (icke-blockerande eller hoppa över)
+    if (COVER_STRATEGY === "async") {
+      // starta i bakgrunden – ingen await
+      generateCoverAsync().catch(()=>{ /* ignoreras i UI */ });
+      // Visa att omslaget inte blockerar
+      setStatus("☁️ Laddar upp illustrationer…", 86);
+    } else {
+      // skip: låt PDF använda sida 1 som omslag i workern
+      setStatus("☁️ Laddar upp illustrationer…", 86);
     }
-    // pages
+
+    // 5) CLOUDFLARE IMAGES (alla sidor, omslag läggs till senare om/ när det finns)
+    const items = [];
     for (const p of pages) {
       const row = state.images_by_page.get(p.page);
       if (!row) continue;
@@ -565,19 +538,8 @@ async function onSubmit(e) {
 
     if (items.length) {
       const uploads = await uploadToCF(items);
-      // indexera
       const byPage = new Map();
-      let coverCF = null;
-      for (const u of uploads) {
-        if (u.kind === "cover" || u.page === 0) coverCF = u;
-        if (Number.isFinite(u.page)) byPage.set(u.page, u);
-      }
-      if (coverCF?.image_id) {
-        state.cover_image_id = coverCF.image_id;
-        // byt preview-URL till CF (skarpare cache)
-        state.cover_preview_url = coverCF.url || state.cover_preview_url;
-        fillCard(0, state.cover_preview_url, "CF");
-      }
+      for (const u of uploads) if (Number.isFinite(u.page)) byPage.set(u.page, u);
       for (const p of pages) {
         const u = byPage.get(p.page);
         if (u?.image_id) {
@@ -600,6 +562,7 @@ async function onSubmit(e) {
     els.submitBtn.textContent = "Skapa förhandsvisning";
   }
 }
+
 
 /* --------------------------- Single regenerate --------------------------- */
 async function regenerateOne(page) {
@@ -643,6 +606,48 @@ async function regenerateOne(page) {
         <button class="retry-btn retry" data-page="${page}">🔄 Generera igen</button>
       </div>`;
     wrap.appendChild(fb);
+  }
+}
+
+// Generera omslag i bakgrunden; om det hinner – visa + ladda upp till CF
+async function generateCoverAsync() {
+  try {
+    // hård timeout så vi aldrig blockerar UX
+    const timeoutMs = 12000;
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error("cover-timeout")), timeoutMs));
+
+    const covRes = await Promise.race([
+      fetch(`${API}/api/cover`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          style: state.form.style,
+          ref_image_b64: state.ref_b64,
+          story: state.story,
+        }),
+      }),
+      timeout
+    ]);
+
+    if (!(covRes instanceof Response)) return; // timeout
+    const cov = await covRes.json().catch(() => ({}));
+    if (!covRes.ok || cov?.error) return; // ingen UI-störning
+
+    state.cover_preview_url = cov.image_url || null;
+    if (state.cover_preview_url) fillCard(0, state.cover_preview_url, "Gemini");
+
+    // ladda upp till CF om möjligt
+    const du = await urlToDataURL(state.cover_preview_url);
+    if (!du) return;
+    const uploads = await uploadToCF([{ kind: "cover", data_url: du }]).catch(()=>[]);
+    const u = uploads?.find(x => x.kind === "cover" || x.page === 0);
+    if (u?.image_id) {
+      state.cover_image_id = u.image_id;
+      state.cover_preview_url = u.url || state.cover_preview_url;
+      fillCard(0, state.cover_preview_url, "CF");
+    }
+  } catch {
+    // tyst fail – PDF funkar ändå via sida 1 som omslag
   }
 }
 
