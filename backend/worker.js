@@ -486,6 +486,34 @@ function drawImageContain(page, img, boxX, boxY, boxW, boxH) {
   page.drawImage(img, { x, y, width: w, height: h });
 }
 
+// --- Outlined (white) text helpers ---
+function drawTextWithOutline(page, text, x, y, font, size, align = "center") {
+  // liten "outline" genom flera svarta pass
+  const offsets = [
+    [ 0.9,  0], [-0.9,  0], [0,  0.9], [0, -0.9],
+    [ 0.9, 0.9], [ 0.9,-0.9], [-0.9, 0.9], [-0.9,-0.9]
+  ];
+  for (const [dx, dy] of offsets) {
+    page.drawText(text, { x: x + dx, y: y + dy, size, font, color: rgb(0,0,0), opacity: 0.9 });
+  }
+  page.drawText(text, { x, y, size, font, color: rgb(1,1,1) });
+}
+
+function wrapLinesCentered(text, font, size, maxW) {
+  const words = String(text || "").split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = "";
+  for (const w of words) {
+    const test = line ? line + " " + w : w;
+    const testW = font.widthOfTextAtSize(test, size);
+    if (testW <= maxW) line = test;
+    else { if (line) lines.push(line); line = w; }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+
 // Print grid (mm)
 const GRID = {
   // yttre marginal till trim
@@ -624,79 +652,67 @@ async function buildPdf(
   }
 
   // ------- INTERIOR PAGES -------
-  for (const p of pages) {
-    try {
-      const page = pdfDoc.addPage([pageW, pageH]);
+for (const p of pages) {
+  try {
+    const page = pdfDoc.addPage([pageW, pageH]);
 
-      const outer = mmToPt(GRID.outer_mm);
-      const gap = mmToPt(GRID.gap_mm);
-      const pad = mmToPt(GRID.pad_mm);
-      const textMin = mmToPt(GRID.text_min_mm);
-      const textMax = mmToPt(GRID.text_max_mm);
+    const outer = mmToPt(GRID.outer_mm);
+    const safeLeft   = contentX + outer;
+    const safeRight  = contentX + trimWpt - outer;
+    const safeBottom = contentY + outer;
+    const safeTop    = contentY + trimHpt - outer;
+    const safeW = safeRight - safeLeft;
+    const safeH = safeTop - safeBottom;
 
-      const { size: baseSize, leading } = fontSpecForReadingAge(readingAge);
-      const tlen = (p.text || "").trim().length;
-      // dynamisk textpanel inom [min,max]
-      let panelH =
-        tlen <= 140 ? textMin : tlen <= 320 ? Math.min((textMin + textMax) / 1.2, textMax) : textMax;
+    // Bildyta: kvadrat som ryms inom säkra ytan (ingen panel; bilden fyller kvadraten)
+    const imgSide = Math.min(safeW, safeH);
+    const imgBoxW = imgSide, imgBoxH = imgSide;
+    const imgBoxX = safeLeft + (safeW - imgBoxW) / 2;
+    const imgBoxY = safeBottom + (safeH - imgBoxH) / 2;
 
-      // Bildyta överst, kvadratisk, inom säkert område
-      const usableH = trimHpt - outer * 2 - gap - panelH;
-      const imgSide = Math.max(Math.min(trimWpt - outer * 2, usableH), mmToPt(90));
-      const imgBoxW = imgSide,
-        imgBoxH = imgSide;
-      const imgBoxX = contentX + (trimWpt - imgBoxW) / 2;
-      const imgBoxY = contentY + trimHpt - outer - imgBoxH;
-
-      // Bild
-      const src = imgByPage.get(p.page);
-      let imgObj = null;
-      if (src) {
-        const bytes = await getImageBytes(env, src);
-        imgObj = await embedImage(pdfDoc, bytes);
-      }
-      if (imgObj) {
-        drawImageCover(page, imgObj, imgBoxX, imgBoxY, imgBoxW, imgBoxH);
-      }
-
-      // Textpanel under bilden (ingen färgad panel i print, bara luft)
-      const panelW = trimWpt - outer * 2;
-      const panelX = contentX + outer;
-      const panelY = imgBoxY - gap - panelH;
-
-      const textBoxW = panelW - pad * 2;
-      const textBoxH = panelH - pad * 2;
-      const textX = panelX + pad;
-      const textY = panelY + pad;
-
-      drawWrappedTextFit(
-        page,
-        p.text || "",
-        textX,
-        textY,
-        textBoxW,
-        textBoxH,
-        nunito,
-        baseSize,
-        1.35,
-        12,
-        "center"
-      );
-
-      if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
-    } catch (e) {
-      log("PAGE ERR p=", p?.page, e?.message);
-      const fallback = pdfDoc.addPage([pageW, pageH]);
-      fallback.drawText(`Sida ${p?.page || "?"}: kunde inte rendera.`, {
-        x: mmToPt(15),
-        y: mmToPt(15),
-        size: 12,
-        font: nunito,
-        color: rgb(0.8, 0.1, 0.1),
-      });
-      if (mode === "preview" && watermark_text) drawWatermark(fallback, watermark_text);
+    // Rita bild (cover-fit i rutan)
+    const src = imgByPage.get(p.page);
+    let imgObj = null;
+    if (src) {
+      const bytes = await getImageBytes(env, src);
+      imgObj = await embedImage(pdfDoc, bytes);
     }
+    if (imgObj) {
+      drawImageCover(page, imgObj, imgBoxX, imgBoxY, imgBoxW, imgBoxH);
+    }
+
+    // --- VIT TEXT MED SVART KONTUR ovanpå bilden, centrerad, nära bildens nederkant ---
+    const { size: baseSize } = fontSpecForReadingAge(readingAge);
+    const text = (p.text || "").trim();
+    if (text) {
+      const maxTextW = imgBoxW - mmToPt(16);    // lite sidomarginal i bilden
+      const lineSize = Math.max(14, Math.round(baseSize * 0.95));
+      const lineH = lineSize * 1.35;
+      const lines = wrapLinesCentered(text, nunito, lineSize, maxTextW);
+
+      // starta ca 12 mm ovanför bildens nederkant
+      const bottomMargin = mmToPt(12);
+      let y = imgBoxY + bottomMargin + (lines.length - 1) * lineH;
+
+      for (const ln of lines) {
+        const w = nunito.widthOfTextAtSize(ln, lineSize);
+        const x = imgBoxX + (imgBoxW - w) / 2;
+        drawTextWithOutline(page, ln, x, y, nunito, lineSize, "center");
+        y -= lineH;
+      }
+    }
+
+    if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
+  } catch (e) {
+    log("PAGE ERR p=", p?.page, e?.message);
+    const fallback = pdfDoc.addPage([pageW, pageH]);
+    fallback.drawText(`Sida ${p?.page || "?"}: kunde inte rendera.`, {
+      x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1)
+    });
+    if (mode === "preview" && watermark_text) drawWatermark(fallback, watermark_text);
   }
+}
+
 
   // ------- BACK COVER -------
   try {
