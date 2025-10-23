@@ -1,6 +1,6 @@
 // ============================================================================
-// BokPiloten – Worker v16 "Print-ready PDF + Rounded Font + CORS"
-// Endpoints: story, ref-image, images, image/regenerate, images/upload, pdf
+// BokPiloten – Worker v16 "Print Layout + Round Fonts + CORS"
+// Endpoints: story, ref-image, images, image/regenerate, images/upload, cover, pdf
 // Requires env: API_KEY, GEMINI_API_KEY, IMAGES_API_TOKEN, CF_ACCOUNT_ID,
 //               CF_IMAGES_ACCOUNT_HASH, (CF_IMAGES_VARIANT)
 // ============================================================================
@@ -9,7 +9,7 @@ import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
 
 /* ------------------------------- CORS ---------------------------------- */
 const CORS = {
-  "access-control-allow-origin": "*",              // tip: set your Pages origin in prod
+  "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, OPTIONS",
   "access-control-allow-headers": "*",
   "access-control-max-age": "600",
@@ -19,11 +19,7 @@ const CORS = {
 const JSONH = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...CORS };
 const ok  = (data, init={}) => new Response(JSON.stringify(data), { status: init.status || 200, headers: { ...JSONH, ...(init.headers||{}) } });
 const err = (msg, code=400, extra={}) => ok({ error: msg, ...extra }, { status: code });
-const withCORS = (resp) => {
-  const h = new Headers(resp.headers);
-  Object.entries(CORS).forEach(([k,v]) => h.set(k,v));
-  return new Response(resp.body, { status: resp.status, headers: h });
-};
+const withCORS = (resp) => { const h=new Headers(resp.headers); for (const [k,v] of Object.entries(CORS)) h.set(k,v); return new Response(resp.body,{status:resp.status,headers:h}); };
 const log = (...a) => { try { console.log(...a); } catch {} };
 const OPENAI_MODEL = "gpt-4o-mini";
 
@@ -58,7 +54,6 @@ function findGeminiImagePart(json) {
   if (p) return { url: p.text };
   return null;
 }
-
 async function geminiImage(env, item, timeoutMs=75000, attempts=3) {
   const key = env.GEMINI_API_KEY; if (!key) throw new Error("GEMINI_API_KEY missing");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(key)}`;
@@ -200,12 +195,11 @@ async function uploadOneToCFImages(env, { data_url, id }) {
 const MM_PER_INCH = 25.4; const PT_PER_INCH = 72; const PT_PER_MM = PT_PER_INCH / MM_PER_INCH;
 const TRIMS = { square210: { w_mm: 210, h_mm: 210, default_bleed_mm: 3 } };
 function mmToPt(mm){ return mm * PT_PER_MM; }
-function fontSpecForReadingAge(ra=6){
-  if (ra <= 5)  return { size: 22, leading: 1.42 };
-  if (ra <= 8)  return { size: 18, leading: 1.42 };
-  if (ra <= 12) return { size: 16, leading: 1.40 };
-  return { size: 16, leading: 1.40 };
-}
+function fontSpecForReadingAge(ra=6){ if (ra <= 5) return { size: 24, leading: 1.4 }; if (ra <= 8) return { size: 20, leading: 1.4 }; if (ra <= 12) return { size: 18, leading: 1.36 }; return { size: 18, leading: 1.36 }; }
+
+const FONT_NUNITO_REG = "https://raw.githubusercontent.com/google/fonts/main/ofl/nunito/Nunito-Regular.ttf";
+const FONT_NUNITO_BOLD = "https://raw.githubusercontent.com/google/fonts/main/ofl/nunito/Nunito-Bold.ttf";
+const FONT_BALOO2_EXB  = "https://raw.githubusercontent.com/google/fonts/main/ofl/baloo2/Baloo2-ExtraBold.ttf";
 
 async function tryEmbedTtf(pdfDoc, url) {
   try {
@@ -217,51 +211,55 @@ async function tryEmbedTtf(pdfDoc, url) {
 }
 
 function drawWatermark(page, text="FÖRHANDSVISNING", color=rgb(0.2,0.2,0.2)){
-  const { width, height } = page.getSize(); const fontSize = Math.min(width, height) * 0.08; const angleRad = Math.atan2(height, width); const angleDeg = (angleRad * 180) / Math.PI;
-  page.drawText(text, { x: width*0.1, y: height*0.3, size: fontSize, color, opacity: 0.12, rotate: degrees(angleDeg) });
+  const { width, height } = page.getSize(); const fontSize = Math.min(width, height) * 0.07;
+  const angleRad = Math.atan2(height, width); const angleDeg = (angleRad * 180) / Math.PI;
+  page.drawText(text, { x: width*0.08, y: height*0.32, size: fontSize, color, opacity: 0.10, rotate: degrees(angleDeg) });
 }
 
-// draw multi-line to fit
-function drawWrappedTextFit(page, text, boxX, boxY, boxW, boxH, font, baseSize, baseLeading, minSize=12) {
+function drawWrappedTextCentered(page, text, boxX, boxY, boxW, boxH, font, baseSize, leading, minSize=12){
   let size = baseSize;
   for (; size >= minSize; size -= 1) {
-    const lineH = size * baseLeading;
-    const words = String(text || "").split(/\s+/);
-    const lines = [];
-    let line = "";
-    for (const w of words) {
-      const test = line ? line + " " + w : w;
-      const testWidth = font.widthOfTextAtSize(test, size);
-      if (testWidth <= boxW) line = test;
-      else { if (line) lines.push(line); line = w; }
+    const lineH = size * leading;
+    const words = String(text||"").split(/\s+/);
+    const lines=[]; let line="";
+    for (const w of words){
+      const test = line ? line+" "+w : w;
+      const wTest = font.widthOfTextAtSize(test, size);
+      if (wTest <= boxW) line = test; else { if (line) lines.push(line); line = w; }
     }
     if (line) lines.push(line);
-    const totalH = lines.length * lineH;
-    if (totalH <= boxH) {
-      let y = boxY + boxH - lineH;
-      for (const ln of lines) {
-        page.drawText(ln, { x: boxX, y, size, font, color: rgb(0.1,0.1,0.1) });
+    const totalH = lines.length*lineH;
+    if (totalH <= boxH){
+      // vertically center within the box a bit closer to top (optical)
+      let y = boxY + boxH - lineH*0.9;
+      for (const ln of lines){
+        const w = font.widthOfTextAtSize(ln, size);
+        const x = boxX + (boxW - w)/2;
+        page.drawText(ln, { x, y, size, font, color: rgb(0.08,0.08,0.08) });
         y -= lineH;
       }
       return { size, lines };
     }
   }
-  // truncate
-  const size2 = minSize, lineH2 = size2 * baseLeading;
-  const words2 = String(text || "").split(/\s+/);
-  const lines2 = [];
-  let line2 = "";
-  for (const w of words2) {
-    const test = line2 ? line2 + " " + w : w;
-    const testWidth = font.widthOfTextAtSize(test, size2);
-    if (testWidth <= boxW) line2 = test;
-    else { if (line2) lines2.push(line2); line2 = w; }
-    if ((lines2.length + 1) * lineH2 >= boxH) break;
+  // fallback truncate
+  const size2 = minSize, lineH2=size2*leading;
+  const words2 = String(text||"").split(/\s+/);
+  const lines2=[]; let line2="";
+  for(const w of words2){
+    const test=line2? line2+" "+w : w;
+    if (font.widthOfTextAtSize(test, size2) <= boxW) line2=test;
+    else { if (line2) lines2.push(line2); line2=w; }
+    if ((lines2.length+1)*lineH2 >= boxH) break;
   }
-  if (line2 && (lines2.length * lineH2) < boxH) lines2.push(line2 + " …");
-  let y2 = boxY + boxH - lineH2;
-  for (const ln of lines2) { page.drawText(ln, { x: boxX, y: y2, size: size2, font, color: rgb(0.1,0.1,0.1) }); y2 -= lineH2; }
-  return { size: size2, lines: lines2, truncated: true };
+  if (line2 && (lines2.length*lineH2) < boxH) lines2.push(line2+" …");
+  let y2 = boxY + boxH - lineH2*0.9;
+  for (const ln of lines2){
+    const w = font.widthOfTextAtSize(ln, size2);
+    const x = boxX + (boxW - w)/2;
+    page.drawText(ln, { x, y: y2, size: size2, font, color: rgb(0.08,0.08,0.08) });
+    y2 -= lineH2;
+  }
+  return { size:size2, lines:lines2, truncated:true };
 }
 
 async function getImageBytes(env, row) {
@@ -292,9 +290,7 @@ function drawImageCover(page, img, boxX, boxY, boxW, boxH) {
   const iw = img.width, ih = img.height; const scale = Math.max(boxW / iw, boxH / ih);
   const w = iw * scale, h = ih * scale; const x = boxX + (boxW - w) / 2; const y = boxY + (boxH - h) / 2; page.drawImage(img, { x, y, width: w, height: h });
 }
-
-// Aningen större innermarginaler och luft
-const GRID = { inner_mm: 16, gap_mm: 10, pad_mm: 14 };
+const GRID = { inner_mm: 16, gap_mm: 10, pad_mm: 10 };
 
 /* --------------------------- Build PDF --------------------------------- */
 async function buildPdf({ story, images, mode="preview", trim="square210", bleed_mm, watermark_text }, env) {
@@ -310,59 +306,63 @@ async function buildPdf({ story, images, mode="preview", trim="square210", bleed
 
   const pdfDoc = await PDFDocument.create();
 
-  // Typografi: Nunito (rounded, OFL) -> Atkinson -> Times/Helvetica
-  const NUNITO_REG  = "https://raw.githubusercontent.com/google/fonts/main/ofl/nunito/Nunito-Regular.ttf";
-  const NUNITO_BOLD = "https://raw.githubusercontent.com/google/fonts/main/ofl/nunito/Nunito-Bold.ttf";
-  const nunito = await tryEmbedTtf(pdfDoc, NUNITO_REG);
-  const nunitoBold = await tryEmbedTtf(pdfDoc, NUNITO_BOLD);
-  const atkinson = nunito ? null : await tryEmbedTtf(pdfDoc, "https://raw.githubusercontent.com/google/fonts/main/ofl/atkinsonhyperlegible/AtkinsonHyperlegible-Regular.ttf");
-  const atkinsonBold = nunitoBold ? null : await tryEmbedTtf(pdfDoc, "https://raw.githubusercontent.com/google/fonts/main/ofl/atkinsonhyperlegible/AtkinsonHyperlegible-Bold.ttf");
-  const fontBody  = nunito || atkinson || await pdfDoc.embedFont(StandardFonts.TimesRoman);
-  const fontTitle = nunitoBold || atkinsonBold || await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  // Fonts: Nunito (body) + Baloo 2 (titles), graceful fallback
+  const nunitoReg  = await tryEmbedTtf(pdfDoc, FONT_NUNITO_REG);
+  const nunitoBold = await tryEmbedTtf(pdfDoc, FONT_NUNITO_BOLD);
+  const balooExB   = await tryEmbedTtf(pdfDoc,   FONT_BALOO2_EXB);
+
+  const fontBody  = nunitoReg  || await pdfDoc.embedFont(StandardFonts.TimesRoman);
+  const fontTitle = balooExB   || nunitoBold || await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
   const pages = story?.book?.pages || [];
   const readingAge = story?.book?.reading_age || 6;
+  const { size: baseSize, leading } = fontSpecForReadingAge(readingAge);
 
   const title = story?.book?.title || "Min bok";
   const heroName = story?.book?.bible?.main_character?.name || "";
   const theme = story?.book?.theme || "";
 
-  // Indexera bilder: både cover (kind:"cover" eller page:0) och per sida
+  // Indexera bilder (tillåter cover via kind:"cover" eller page 0)
   let coverSrc = images?.find(x => x?.kind === "cover" || x?.page === 0) || null;
   const imgByPage = new Map();
   (images || []).forEach(row => { if (Number.isFinite(row?.page) && row.page > 0 && (row.image_id || row.url || row.data_url)) imgByPage.set(row.page, row); });
 
-  // ---- Cover (om saknas: använd sida 1) ----
+  // ---- Cover: vit toppmarginal med titel, kvadratisk bild under ----
   try {
     const page = pdfDoc.addPage([pageW, pageH]);
+    const inner = mmToPt(GRID.inner_mm);
+
+    const titleArea = Math.min(mmToPt(38), trimHpt * 0.22); // ren vit toppmarginal
+    const titleY = contentY + trimHpt - inner - (titleArea * 0.65);
+
+    const titleSize = Math.min(trimWpt, trimHpt) * 0.11;
+    const subtitleSize = Math.max(12, titleSize * 0.40);
+
+    // Titel (centrerad, ingen panel)
+    const tWidth = fontTitle.widthOfTextAtSize(title, titleSize);
+    const tX = contentX + (trimWpt - tWidth)/2;
+    page.drawText(title, { x:tX, y:titleY, size:titleSize, font:fontTitle, color: rgb(0.06,0.06,0.06) });
+
+    const subtitle = theme ? `${theme}` : (heroName ? `Med ${heroName}` : "");
+    if (subtitle) {
+      const sW = fontBody.widthOfTextAtSize(subtitle, subtitleSize);
+      const sX = contentX + (trimWpt - sW)/2;
+      page.drawText(subtitle, { x:sX, y:titleY - subtitleSize - mmToPt(3), size:subtitleSize, font:fontBody, color: rgb(0.22,0.22,0.22) });
+    }
+
+    // Bild under titeln
     if (!coverSrc) coverSrc = imgByPage.get(1) || null;
+    const imgTopSpace = inner + titleArea + mmToPt(6);
+    const boxHAvail = trimHpt - imgTopSpace - inner;
+    const imgSide = Math.min(trimWpt - inner*2, boxHAvail);
+    const imgBoxW = imgSide, imgBoxH = imgSide;
+    const imgBoxX = contentX + (trimWpt - imgBoxW)/2;
+    const imgBoxY = contentY + trimHpt - imgTopSpace - imgBoxH;
 
     if (coverSrc) {
       const bytes = await getImageBytes(env, coverSrc);
       const coverImg = await embedImage(pdfDoc, bytes);
-      if (coverImg) drawImageCover(page, coverImg, 0, 0, pageW, pageH);
-    }
-
-    // Centered white band with title/subtitle (rounded font looks nicer centered)
-    const bandH = Math.min(trimHpt * 0.18, 92);
-    const bandY = contentY + trimHpt - bandH - mmToPt(10);
-    const bandX = contentX + mmToPt(10);
-    const bandW = trimWpt - mmToPt(20);
-    page.drawRectangle({ x: bandX, y: bandY, width: bandW, height: bandH, color: rgb(1,1,1) });
-
-    const titleSize = Math.min(trimWpt, trimHpt) * 0.085;
-    const subSize   = Math.max(12, titleSize * 0.42);
-
-    const tWidth = fontTitle.widthOfTextAtSize(title, titleSize);
-    const tx = bandX + (bandW - tWidth) / 2;
-    const ty = bandY + (bandH - titleSize) / 2 + titleSize * 0.35;
-    page.drawText(title, { x: tx, y: ty, size: titleSize, font: fontTitle, color: rgb(0.1,0.1,0.1) });
-
-    const subtitle = theme ? `${theme}` : (heroName ? `Med ${heroName}` : "");
-    if (subtitle) {
-      const sWidth = fontBody.widthOfTextAtSize(subtitle, subSize);
-      const sx = bandX + (bandW - sWidth) / 2;
-      page.drawText(subtitle, { x: sx, y: ty - subSize - mmToPt(4), size: subSize, font: fontBody, color: rgb(0.25,0.25,0.25) });
+      if (coverImg) drawImageCover(page, coverImg, imgBoxX, imgBoxY, imgBoxW, imgBoxH);
     }
 
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
@@ -372,7 +372,7 @@ async function buildPdf({ story, images, mode="preview", trim="square210", bleed
     page.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8,0.1,0.1) });
   }
 
-  // ---- Inside pages (bild över, krämfärgad textpanel under) ----
+  // ---- Inside pages: kvadratisk bild överst, centrerad text under – ingen panel ----
   for (const p of pages) {
     try {
       const page = pdfDoc.addPage([pageW, pageH]);
@@ -381,55 +381,40 @@ async function buildPdf({ story, images, mode="preview", trim="square210", bleed
       const gap   = mmToPt(GRID.gap_mm);
       const pad   = mmToPt(GRID.pad_mm);
 
-      // bestäm textpanelhöjd (snäll heuristik)
-      const { size: baseSize, leading } = fontSpecForReadingAge(readingAge);
+      // Textpanelhöjd efter längd (utan bakgrund)
       const tlen = (p.text || "").trim().length;
-      const PANEL_MIN = 100;
-      const PANEL_MAX = 240;
-      let panelH = tlen <= 140 ? PANEL_MIN : tlen <= 320 ? Math.min(180, PANEL_MAX) : PANEL_MAX;
+      const PANEL_MIN = 100, PANEL_MAX = 200;
+      let textAreaH = tlen <= 140 ? PANEL_MIN : tlen <= 320 ? Math.min(160, PANEL_MAX) : PANEL_MAX;
 
-      // bildyta tar resten
-      const usableH = (trimHpt - inner*2) - panelH - gap;
-      const imgSide = Math.max(Math.min(trimWpt - inner*2, usableH), 120);
+      // Bildyta tar resten
+      const usableH = (trimHpt - inner*2) - textAreaH - gap;
+      const imgSide = Math.max(Math.min(trimWpt - inner*2, usableH), 140);
       const imgBoxW = imgSide, imgBoxH = imgSide;
       const imgBoxX = contentX + (trimWpt - imgBoxW) / 2;
       const imgBoxY = contentY + trimHpt - inner - imgBoxH;
 
-      // bild (cover i rutan)
       const src = imgByPage.get(p.page);
       let imgObj = null;
-      if (src) {
-        const bytes = await getImageBytes(env, src);
-        imgObj = await embedImage(pdfDoc, bytes);
-      }
-      if (imgObj) {
-        // liten vit botten så bilder aldrig "smälter" in i papperston
-        page.drawRectangle({ x: imgBoxX, y: imgBoxY, width: imgBoxW, height: imgBoxH, color: rgb(1,1,1) });
-        drawImageCover(page, imgObj, imgBoxX, imgBoxY, imgBoxW, imgBoxH);
-      }
+      if (src) { const bytes = await getImageBytes(env, src); imgObj = await embedImage(pdfDoc, bytes); }
+      if (imgObj) drawImageCover(page, imgObj, imgBoxX, imgBoxY, imgBoxW, imgBoxH);
 
-      // Textpanel (krämfärgad, rundat intryck via luft/padding)
+      // Text under bilden (centrerad, ingen färgpanel)
       const panelW = trimWpt - inner*2;
       const panelX = contentX + inner;
-      const panelY = imgBoxY - gap - panelH;
-
-      const cream = rgb(1.0, 0.99, 0.97);
-      page.drawRectangle({ x: panelX, y: panelY, width: panelW, height: panelH, color: cream });
+      const panelY = imgBoxY - gap - textAreaH;
 
       const textBoxW = panelW - pad*2;
-      const textBoxH = panelH - pad*2;
+      const textBoxH = textAreaH - pad*2;
       const textX = panelX + pad;
       const textY = panelY + pad;
 
-      drawWrappedTextFit(page, p.text || "", textX, textY, textBoxW, textBoxH, fontBody, baseSize, leading, 12);
+      drawWrappedTextCentered(page, p.text || "", textX, textY, textBoxW, textBoxH, fontBody, baseSize, 1.40, 12);
 
       if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
     } catch (e) {
       log("PDF PAGE ERROR p=", p?.page, e?.message);
       const fallback = pdfDoc.addPage([pageW, pageH]);
-      fallback.drawText(`Sida ${p?.page || "?"}: kunde inte rendera.`, {
-        x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1)
-      });
+      fallback.drawText(`Sida ${p?.page || "?"}: kunde inte rendera.`, { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8, 0.1, 0.1) });
       if (mode === "preview" && watermark_text) drawWatermark(fallback, watermark_text);
     }
   }
@@ -438,17 +423,14 @@ async function buildPdf({ story, images, mode="preview", trim="square210", bleed
   try {
     const page = pdfDoc.addPage([pageW, pageH]);
     const inner = mmToPt(GRID.inner_mm);
-    if (mode === "preview") page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.98,0.98,0.98) });
-
-    const blurb = story?.book?.lesson ? `Lärdom: ${story.book.lesson}` : `En berättelse skapad med BokPiloten.`;
-    const head = "Om boken"; const headSize = 18; const bodySize = 12; const lh = bodySize * 1.4;
+    const head = "Om boken"; const headSize = 20; const bodySize = 13; const lh = bodySize * 1.45;
 
     const startX = contentX + inner; let cursorY = contentY + trimHpt - inner - headSize;
     page.drawText(head, { x: startX, y: cursorY, size: headSize, font: fontTitle, color: rgb(0.1,0.1,0.1) });
-    cursorY -= (headSize + mmToPt(4));
+    cursorY -= (headSize + mmToPt(6));
 
-    const maxW = (trimWpt - inner*2);
-    const words = blurb.split(/\s+/); let line="";
+    const blurb = story?.book?.lesson ? `Lärdom: ${story.book.lesson}` : `En berättelse skapad med BokPiloten.`;
+    const words = blurb.split(/\s+/); let line=""; const maxW = (trimWpt - inner*2);
     for (const w of words) {
       const test = line ? line+" "+w : w;
       if (fontBody.widthOfTextAtSize(test, bodySize) <= maxW) line = test;
@@ -492,26 +474,20 @@ async function handleUploadRequest(req, env) {
   } catch (e) { return err(e?.message || "Upload failed", 500); }
 }
 
-/* ---------------------------- PDF handler ------------------------------- */
+/* ------------------------- PDF request wrapper ------------------------- */
 async function handlePdfRequest(req, env) {
-  const body = await req.json().catch(()=> ({}));
+  const body = await req.json();
   const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
   if (!story?.book) return err("Missing story", 400);
   if (!Array.isArray(images) || images.length === 0) return err("Missing images[]", 400);
 
-  // validate rows
-  for (const row of images) {
-    const okRow = (row && (row.image_id || row.url || row.data_url || row.kind === "cover"));
-    if (!okRow) return err("images[] row must include image_id or url or data_url (or kind:'cover')", 400);
-  }
-
-  const bytes = await buildPdf({
+  const pdfBytes = await buildPdf({
     story,
     images,
     mode: mode === "print" ? "print" : "preview",
     trim: trim || "square210",
     bleed_mm,
-    watermark_text: mode === "preview" ? (watermark_text || "FÖRHANDSVISNING") : null
+    watermark_text: watermark_text || (mode === "preview" ? "FÖRHANDSVISNING" : null),
   }, env);
 
   const headers = new Headers({
@@ -520,7 +496,7 @@ async function handlePdfRequest(req, env) {
     "content-disposition": `inline; filename="bokpiloten-${Date.now()}.pdf"`,
     ...CORS
   });
-  return new Response(bytes, { status: 200, headers });
+  return new Response(pdfBytes, { status: 200, headers });
 }
 
 /* -------------------------------- API ---------------------------------- */
@@ -595,7 +571,7 @@ Returnera enbart json.`.trim();
         } catch (e) { return err("Ref generation failed", 500); }
       }
 
-      // IMAGES (pages)
+      // IMAGES
       if (req.method === "POST" && url.pathname === "/api/images") {
         try {
           const { style="cartoon", ref_image_b64, story, plan, concurrency=4 } = await req.json();
@@ -627,10 +603,20 @@ Returnera enbart json.`.trim();
         } catch (e) { return err(e.message || "Images failed", 500); }
       }
 
+      // COVER (optional async route used by frontend)
+      if (req.method === "POST" && url.pathname === "/api/cover") {
+        try {
+          const { style="cartoon", ref_image_b64, story } = await req.json();
+          const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
+          const prompt = buildCoverPrompt({ style, story, characterName: heroName });
+          const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 70000, 3);
+          return ok({ image_url: g.image_url, provider: g.provider || "google" });
+        } catch (e) { return err(e?.message || "Cover failed", 500); }
+      }
+
       // UPLOADS -> CF Images
       if (req.method === "POST" && url.pathname === "/api/images/upload") {
-        const resp = await handleUploadRequest(req, env);
-        return withCORS(resp);
+        return withCORS(await handleUploadRequest(req, env));
       }
 
       // REGENERATE single
@@ -660,10 +646,7 @@ Returnera enbart json.`.trim();
         status: 404, headers: { "content-type": "application/json; charset=utf-8", ...CORS }
       });
     } catch (e) {
-      // Global airbag: still include CORS on unexpected errors
-      return new Response(JSON.stringify({ error: String(e?.message || e) }), {
-        status: 500, headers: JSONH
-      });
+      return new Response(JSON.stringify({ error: String(e?.message || e) }), { status: 500, headers: JSONH });
     }
   }
 };
