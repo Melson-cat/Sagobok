@@ -1,5 +1,5 @@
 // ============================================================================
-// BokPiloten – Worker v15 "PDF Layout Fix + CORS"
+// BokPiloten – Worker v16 "Print-ready PDF + Rounded Font + CORS"
 // Endpoints: story, ref-image, images, image/regenerate, images/upload, pdf
 // Requires env: API_KEY, GEMINI_API_KEY, IMAGES_API_TOKEN, CF_ACCOUNT_ID,
 //               CF_IMAGES_ACCOUNT_HASH, (CF_IMAGES_VARIANT)
@@ -9,7 +9,7 @@ import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
 
 /* ------------------------------- CORS ---------------------------------- */
 const CORS = {
-  "access-control-allow-origin": "*",
+  "access-control-allow-origin": "*",              // tip: set your Pages origin in prod
   "access-control-allow-methods": "GET, POST, OPTIONS",
   "access-control-allow-headers": "*",
   "access-control-max-age": "600",
@@ -20,7 +20,8 @@ const JSONH = { "content-type": "application/json; charset=utf-8", "cache-contro
 const ok  = (data, init={}) => new Response(JSON.stringify(data), { status: init.status || 200, headers: { ...JSONH, ...(init.headers||{}) } });
 const err = (msg, code=400, extra={}) => ok({ error: msg, ...extra }, { status: code });
 const withCORS = (resp) => {
-  const h = new Headers(resp.headers); for (const [k,v] of Object.entries(CORS)) h.set(k,v);
+  const h = new Headers(resp.headers);
+  Object.entries(CORS).forEach(([k,v]) => h.set(k,v));
   return new Response(resp.body, { status: resp.status, headers: h });
 };
 const log = (...a) => { try { console.log(...a); } catch {} };
@@ -57,6 +58,7 @@ function findGeminiImagePart(json) {
   if (p) return { url: p.text };
   return null;
 }
+
 async function geminiImage(env, item, timeoutMs=75000, attempts=3) {
   const key = env.GEMINI_API_KEY; if (!key) throw new Error("GEMINI_API_KEY missing");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(key)}`;
@@ -198,7 +200,12 @@ async function uploadOneToCFImages(env, { data_url, id }) {
 const MM_PER_INCH = 25.4; const PT_PER_INCH = 72; const PT_PER_MM = PT_PER_INCH / MM_PER_INCH;
 const TRIMS = { square210: { w_mm: 210, h_mm: 210, default_bleed_mm: 3 } };
 function mmToPt(mm){ return mm * PT_PER_MM; }
-function fontSpecForReadingAge(ra=6){ if (ra <= 5) return { size: 22, leading: 1.35 }; if (ra <= 8) return { size: 18, leading: 1.35 }; if (ra <= 12) return { size: 16, leading: 1.32 }; return { size: 16, leading: 1.32 }; }
+function fontSpecForReadingAge(ra=6){
+  if (ra <= 5)  return { size: 22, leading: 1.42 };
+  if (ra <= 8)  return { size: 18, leading: 1.42 };
+  if (ra <= 12) return { size: 16, leading: 1.40 };
+  return { size: 16, leading: 1.40 };
+}
 
 async function tryEmbedTtf(pdfDoc, url) {
   try {
@@ -214,6 +221,7 @@ function drawWatermark(page, text="FÖRHANDSVISNING", color=rgb(0.2,0.2,0.2)){
   page.drawText(text, { x: width*0.1, y: height*0.3, size: fontSize, color, opacity: 0.12, rotate: degrees(angleDeg) });
 }
 
+// draw multi-line to fit
 function drawWrappedTextFit(page, text, boxX, boxY, boxW, boxH, font, baseSize, baseLeading, minSize=12) {
   let size = baseSize;
   for (; size >= minSize; size -= 1) {
@@ -238,6 +246,7 @@ function drawWrappedTextFit(page, text, boxX, boxY, boxW, boxH, font, baseSize, 
       return { size, lines };
     }
   }
+  // truncate
   const size2 = minSize, lineH2 = size2 * baseLeading;
   const words2 = String(text || "").split(/\s+/);
   const lines2 = [];
@@ -283,7 +292,9 @@ function drawImageCover(page, img, boxX, boxY, boxW, boxH) {
   const iw = img.width, ih = img.height; const scale = Math.max(boxW / iw, boxH / ih);
   const w = iw * scale, h = ih * scale; const x = boxX + (boxW - w) / 2; const y = boxY + (boxH - h) / 2; page.drawImage(img, { x, y, width: w, height: h });
 }
-const GRID = { inner_mm: 14, gap_mm: 8, pad_mm: 10 };
+
+// Aningen större innermarginaler och luft
+const GRID = { inner_mm: 16, gap_mm: 10, pad_mm: 14 };
 
 /* --------------------------- Build PDF --------------------------------- */
 async function buildPdf({ story, images, mode="preview", trim="square210", bleed_mm, watermark_text }, env) {
@@ -299,11 +310,15 @@ async function buildPdf({ story, images, mode="preview", trim="square210", bleed
 
   const pdfDoc = await PDFDocument.create();
 
-  // Typografi: Atkinson Hyperlegible -> Times -> Helvetica
-  const atkinson = await tryEmbedTtf(pdfDoc, "https://raw.githubusercontent.com/google/fonts/main/ofl/atkinsonhyperlegible/AtkinsonHyperlegible-Regular.ttf");
-  const atkinsonBold = await tryEmbedTtf(pdfDoc, "https://raw.githubusercontent.com/google/fonts/main/ofl/atkinsonhyperlegible/AtkinsonHyperlegible-Bold.ttf");
-  const fontBody = atkinson || await pdfDoc.embedFont(StandardFonts.TimesRoman);
-  const fontTitle = atkinsonBold || await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  // Typografi: Nunito (rounded, OFL) -> Atkinson -> Times/Helvetica
+  const NUNITO_REG  = "https://raw.githubusercontent.com/google/fonts/main/ofl/nunito/Nunito-Regular.ttf";
+  const NUNITO_BOLD = "https://raw.githubusercontent.com/google/fonts/main/ofl/nunito/Nunito-Bold.ttf";
+  const nunito = await tryEmbedTtf(pdfDoc, NUNITO_REG);
+  const nunitoBold = await tryEmbedTtf(pdfDoc, NUNITO_BOLD);
+  const atkinson = nunito ? null : await tryEmbedTtf(pdfDoc, "https://raw.githubusercontent.com/google/fonts/main/ofl/atkinsonhyperlegible/AtkinsonHyperlegible-Regular.ttf");
+  const atkinsonBold = nunitoBold ? null : await tryEmbedTtf(pdfDoc, "https://raw.githubusercontent.com/google/fonts/main/ofl/atkinsonhyperlegible/AtkinsonHyperlegible-Bold.ttf");
+  const fontBody  = nunito || atkinson || await pdfDoc.embedFont(StandardFonts.TimesRoman);
+  const fontTitle = nunitoBold || atkinsonBold || await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
   const pages = story?.book?.pages || [];
   const readingAge = story?.book?.reading_age || 6;
@@ -320,8 +335,6 @@ async function buildPdf({ story, images, mode="preview", trim="square210", bleed
   // ---- Cover (om saknas: använd sida 1) ----
   try {
     const page = pdfDoc.addPage([pageW, pageH]);
-    const inner = mmToPt(GRID.inner_mm);
-
     if (!coverSrc) coverSrc = imgByPage.get(1) || null;
 
     if (coverSrc) {
@@ -330,16 +343,27 @@ async function buildPdf({ story, images, mode="preview", trim="square210", bleed
       if (coverImg) drawImageCover(page, coverImg, 0, 0, pageW, pageH);
     }
 
-    const bandH = Math.min(trimHpt * 0.18, 90);
+    // Centered white band with title/subtitle (rounded font looks nicer centered)
+    const bandH = Math.min(trimHpt * 0.18, 92);
     const bandY = contentY + trimHpt - bandH - mmToPt(10);
-    page.drawRectangle({ x: contentX + mmToPt(10), y: bandY, width: trimWpt - mmToPt(20), height: bandH, color: rgb(1,1,1), opacity: 1 });
-    const titleSize = Math.min(trimWpt, trimHpt) * 0.08;
-    const subSize = Math.max(12, titleSize * 0.42);
-    const tx = contentX + mmToPt(18);
-    const ty = bandY + bandH - titleSize - mmToPt(6);
+    const bandX = contentX + mmToPt(10);
+    const bandW = trimWpt - mmToPt(20);
+    page.drawRectangle({ x: bandX, y: bandY, width: bandW, height: bandH, color: rgb(1,1,1) });
+
+    const titleSize = Math.min(trimWpt, trimHpt) * 0.085;
+    const subSize   = Math.max(12, titleSize * 0.42);
+
+    const tWidth = fontTitle.widthOfTextAtSize(title, titleSize);
+    const tx = bandX + (bandW - tWidth) / 2;
+    const ty = bandY + (bandH - titleSize) / 2 + titleSize * 0.35;
     page.drawText(title, { x: tx, y: ty, size: titleSize, font: fontTitle, color: rgb(0.1,0.1,0.1) });
+
     const subtitle = theme ? `${theme}` : (heroName ? `Med ${heroName}` : "");
-    if (subtitle) page.drawText(subtitle, { x: tx, y: ty - subSize - mmToPt(4), size: subSize, font: fontBody, color: rgb(0.25,0.25,0.25) });
+    if (subtitle) {
+      const sWidth = fontBody.widthOfTextAtSize(subtitle, subSize);
+      const sx = bandX + (bandW - sWidth) / 2;
+      page.drawText(subtitle, { x: sx, y: ty - subSize - mmToPt(4), size: subSize, font: fontBody, color: rgb(0.25,0.25,0.25) });
+    }
 
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   } catch (e) {
@@ -348,7 +372,7 @@ async function buildPdf({ story, images, mode="preview", trim="square210", bleed
     page.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: fontBody, color: rgb(0.8,0.1,0.1) });
   }
 
-  // ---- Inside pages (textpanel först, bild fyller resten) ----
+  // ---- Inside pages (bild över, krämfärgad textpanel under) ----
   for (const p of pages) {
     try {
       const page = pdfDoc.addPage([pageW, pageH]);
@@ -357,21 +381,21 @@ async function buildPdf({ story, images, mode="preview", trim="square210", bleed
       const gap   = mmToPt(GRID.gap_mm);
       const pad   = mmToPt(GRID.pad_mm);
 
-      // 1) bestäm textpanelhöjd
+      // bestäm textpanelhöjd (snäll heuristik)
       const { size: baseSize, leading } = fontSpecForReadingAge(readingAge);
       const tlen = (p.text || "").trim().length;
-      const PANEL_MIN = 95;
+      const PANEL_MIN = 100;
       const PANEL_MAX = 240;
       let panelH = tlen <= 140 ? PANEL_MIN : tlen <= 320 ? Math.min(180, PANEL_MAX) : PANEL_MAX;
 
-      // 2) bildyta tar resten
+      // bildyta tar resten
       const usableH = (trimHpt - inner*2) - panelH - gap;
       const imgSide = Math.max(Math.min(trimWpt - inner*2, usableH), 120);
       const imgBoxW = imgSide, imgBoxH = imgSide;
       const imgBoxX = contentX + (trimWpt - imgBoxW) / 2;
       const imgBoxY = contentY + trimHpt - inner - imgBoxH;
 
-      // 3) bild (cover i rutan)
+      // bild (cover i rutan)
       const src = imgByPage.get(p.page);
       let imgObj = null;
       if (src) {
@@ -379,25 +403,25 @@ async function buildPdf({ story, images, mode="preview", trim="square210", bleed
         imgObj = await embedImage(pdfDoc, bytes);
       }
       if (imgObj) {
+        // liten vit botten så bilder aldrig "smälter" in i papperston
         page.drawRectangle({ x: imgBoxX, y: imgBoxY, width: imgBoxW, height: imgBoxH, color: rgb(1,1,1) });
         drawImageCover(page, imgObj, imgBoxX, imgBoxY, imgBoxW, imgBoxH);
       }
 
-      // 4) textpanel (under bilden)
+      // Textpanel (krämfärgad, rundat intryck via luft/padding)
       const panelW = trimWpt - inner*2;
       const panelX = contentX + inner;
       const panelY = imgBoxY - gap - panelH;
 
-      if (mode === "preview") {
-        page.drawRectangle({ x: panelX, y: panelY, width: panelW, height: panelH, color: rgb(0.99,0.99,0.99) });
-      }
+      const cream = rgb(1.0, 0.99, 0.97);
+      page.drawRectangle({ x: panelX, y: panelY, width: panelW, height: panelH, color: cream });
 
       const textBoxW = panelW - pad*2;
       const textBoxH = panelH - pad*2;
       const textX = panelX + pad;
       const textY = panelY + pad;
 
-      drawWrappedTextFit(page, p.text || "", textX, textY, textBoxW, textBoxH, fontBody, baseSize, 1.35, 12);
+      drawWrappedTextFit(page, p.text || "", textX, textY, textBoxW, textBoxH, fontBody, baseSize, leading, 12);
 
       if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
     } catch (e) {
@@ -423,8 +447,8 @@ async function buildPdf({ story, images, mode="preview", trim="square210", bleed
     page.drawText(head, { x: startX, y: cursorY, size: headSize, font: fontTitle, color: rgb(0.1,0.1,0.1) });
     cursorY -= (headSize + mmToPt(4));
 
-    // enkel wrap
-    const words = blurb.split(/\s+/); let line=""; const maxW = (trimWpt - inner*2);
+    const maxW = (trimWpt - inner*2);
+    const words = blurb.split(/\s+/); let line="";
     for (const w of words) {
       const test = line ? line+" "+w : w;
       if (fontBody.widthOfTextAtSize(test, bodySize) <= maxW) line = test;
@@ -468,6 +492,37 @@ async function handleUploadRequest(req, env) {
   } catch (e) { return err(e?.message || "Upload failed", 500); }
 }
 
+/* ---------------------------- PDF handler ------------------------------- */
+async function handlePdfRequest(req, env) {
+  const body = await req.json().catch(()=> ({}));
+  const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
+  if (!story?.book) return err("Missing story", 400);
+  if (!Array.isArray(images) || images.length === 0) return err("Missing images[]", 400);
+
+  // validate rows
+  for (const row of images) {
+    const okRow = (row && (row.image_id || row.url || row.data_url || row.kind === "cover"));
+    if (!okRow) return err("images[] row must include image_id or url or data_url (or kind:'cover')", 400);
+  }
+
+  const bytes = await buildPdf({
+    story,
+    images,
+    mode: mode === "print" ? "print" : "preview",
+    trim: trim || "square210",
+    bleed_mm,
+    watermark_text: mode === "preview" ? (watermark_text || "FÖRHANDSVISNING") : null
+  }, env);
+
+  const headers = new Headers({
+    "content-type": "application/pdf",
+    "cache-control": mode === "preview" ? "no-store" : "public, max-age=31536000, immutable",
+    "content-disposition": `inline; filename="bokpiloten-${Date.now()}.pdf"`,
+    ...CORS
+  });
+  return new Response(bytes, { status: 200, headers });
+}
+
 /* -------------------------------- API ---------------------------------- */
 export default {
   async fetch(req, env) {
@@ -476,14 +531,12 @@ export default {
     try {
       const url = new URL(req.url);
 
-      // --- Health ---
-      if (req.method === "GET" && url.pathname === "/") {
-        return withCORS(ok({ ok: true, ts: Date.now() }));
-      }
+      // Health
+      if (req.method === "GET" && url.pathname === "/") return ok({ ok: true, ts: Date.now() });
 
-      // --- Debug env (optional) ---
+      // Env debug
       if (req.method === "GET" && url.pathname === "/api/images/env") {
-        return withCORS(ok({
+        return ok({
           has: {
             CF_ACCOUNT_ID: !!env.CF_ACCOUNT_ID,
             IMAGES_API_TOKEN: !!env.IMAGES_API_TOKEN,
@@ -492,18 +545,15 @@ export default {
             API_KEY: !!env.API_KEY,
             GEMINI_API_KEY: !!env.GEMINI_API_KEY,
           }
-        }));
+        });
       }
 
-      // --- STORY ---
+      // STORY
       if (req.method === "POST" && url.pathname === "/api/story") {
         try {
           const body = await req.json();
           const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
-
-          const targetAge = Number.isFinite(parseInt(reading_age, 10))
-            ? parseInt(reading_age, 10)
-            : ((category || "kids") === "pets" ? 8 : parseInt(age || 6, 10));
+          const targetAge = Number.isFinite(parseInt(reading_age, 10)) ? parseInt(reading_age, 10) : ((category || "kids") === "pets" ? 8 : parseInt(age || 6, 10));
 
           const outlineUser = `
 ${heroDescriptor({ category, name, age, traits })}
@@ -526,55 +576,45 @@ Returnera enbart json.`.trim();
 
           const story = await openaiJSON(env, STORY_SYS, storyUser);
           const plan  = normalizePlan(story?.book?.pages || []);
-          return withCORS(ok({ story, plan, previewVisible: 4 }));
-        } catch (e) {
-          return withCORS(err(e?.message || "Story failed", 500));
-        }
+          return ok({ story, plan, previewVisible: 4 });
+        } catch (e) { return err(e.message || "Story failed", 500); }
       }
 
-      // --- REF IMAGE ---
+      // REF IMAGE
       if (req.method === "POST" && url.pathname === "/api/ref-image") {
         try {
           const { style="cartoon", photo_b64, bible, traits="" } = await req.json();
           if (photo_b64) {
             const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
-            return withCORS(ok({ ref_image_b64: b64 }));
+            return ok({ ref_image_b64: b64 });
           }
           const prompt = characterCardPrompt({ style, bible, traits });
           const g = await geminiImage(env, { prompt }, 70000, 2);
-          if (!g?.b64) return withCORS(ok({ ref_image_b64: null }));
-          return withCORS(ok({ ref_image_b64: g.b64 }));
-        } catch (e) {
-          return withCORS(err("Ref generation failed", 500));
-        }
+          if (!g?.b64) return ok({ ref_image_b64: null });
+          return ok({ ref_image_b64: g.b64 });
+        } catch (e) { return err("Ref generation failed", 500); }
       }
 
-      // --- IMAGES (pages) ---
+      // IMAGES (pages)
       if (req.method === "POST" && url.pathname === "/api/images") {
         try {
-          const { style="cartoon", ref_image_b64, story, plan, concurrency=4, guidance } = await req.json();
+          const { style="cartoon", ref_image_b64, story, plan, concurrency=4 } = await req.json();
           const pages = story?.book?.pages || [];
-          if (!pages.length) return withCORS(err("No pages", 400));
-          if (!ref_image_b64) return withCORS(err("Missing reference image", 400));
+          if (!pages.length) return err("No pages", 400);
+          if (!ref_image_b64) return err("Missing reference image", 400);
 
-          const frames = plan?.plan || [];
-          const pageCount = pages.length;
+          const frames = plan?.plan || []; const pageCount = pages.length;
           const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
-
-          const jobs = pages.map(pg => {
-            const f = frames.find(x => x.page === pg.page) || {};
+          const jobs = pages.map(pg => { const f = frames.find(x => x.page === pg.page) || {};
             const prompt = buildFramePrompt({ style, story, page: pg, pageCount, frame: f, characterName: heroName });
-            return { page: pg.page, prompt };
-          });
+            return { page: pg.page, prompt }; });
 
-          const out = [];
-          const CONC = Math.min(Math.max(parseInt(concurrency || 3, 10), 1), 8);
-          let idx = 0;
+          const out = []; const CONC = Math.min(Math.max(parseInt(concurrency || 3, 10), 1), 8); let idx = 0;
           async function worker() {
             while (idx < jobs.length) {
               const i = idx++; const item = jobs[i];
               try {
-                const g = await geminiImage(env, { prompt: item.prompt, character_ref_b64: ref_image_b64, guidance }, 75000, 3);
+                const g = await geminiImage(env, { prompt: item.prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
                 out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
               } catch (e) {
                 out.push({ page: item.page, error: String(e?.message || e) });
@@ -583,94 +623,47 @@ Returnera enbart json.`.trim();
           }
           await Promise.all(Array.from({ length: CONC }, worker));
           out.sort((a,b)=>(a.page||0)-(b.page||0));
-          return withCORS(ok({ images: out }));
-        } catch (e) {
-          return withCORS(err(e?.message || "Images failed", 500));
-        }
+          return ok({ images: out });
+        } catch (e) { return err(e.message || "Images failed", 500); }
       }
 
-      // --- COVER (optional; used by frontend async strategy) ---
-      if (req.method === "POST" && url.pathname === "/api/cover") {
-        try {
-          const { style="cartoon", ref_image_b64, story } = await req.json();
-          const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
-          const prompt = buildCoverPrompt({ style, story, characterName: heroName });
-          const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 60000, 2);
-          return withCORS(ok({ image_url: g.image_url, provider: g.provider || "google" }));
-        } catch (e) {
-          return withCORS(err(e?.message || "Cover failed", 500));
-        }
+      // UPLOADS -> CF Images
+      if (req.method === "POST" && url.pathname === "/api/images/upload") {
+        const resp = await handleUploadRequest(req, env);
+        return withCORS(resp);
       }
 
-      // --- SINGLE REGENERATE ---
+      // REGENERATE single
       if (req.method === "POST" && url.pathname === "/api/image/regenerate") {
         try {
           const { style="cartoon", ref_image_b64, page_text, scene_text, frame, story } = await req.json();
-          if (!ref_image_b64) return withCORS(err("Missing reference image", 400));
+          if (!ref_image_b64) return err("Missing reference image", 400);
           const fakeStory = story || { book: { pages: [{ page: 1, scene: scene_text, text: page_text }] } };
           const pg = { page: 1, scene: scene_text, text: page_text };
           const f  = { shot_type: frame?.shot_type || "M", lens_mm: frame?.lens_mm || 50, subject_size_percent: frame?.subject_size_percent || 60 };
           const prompt = buildFramePrompt({ style, story: fakeStory, page: pg, pageCount: 1, frame: f, characterName: (fakeStory.book?.bible?.main_character?.name || "Hjälten") });
           const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
-          return withCORS(ok({ image_url: g.image_url, provider: g.provider || "google" }));
-        } catch (e) {
-          return withCORS(err(e?.message || "Regenerate failed", 500));
-        }
+          return ok({ image_url: g.image_url, provider: g.provider || "google" });
+        } catch (e) { return err(e.message || "Regenerate failed", 500); }
       }
 
-      // --- UPLOADS -> Cloudflare Images ---
-      if (req.method === "POST" && url.pathname === "/api/images/upload") {
-        return withCORS(await handleUploadRequest(req, env));
-      }
-
-      // --- PDF ---
+      // PDF
       if (req.method === "POST" && url.pathname === "/api/pdf") {
         try {
-          const body = await req.json();
-          const { story, images, mode, trim, bleed_mm, watermark_text } = body || {};
-          if (!story?.book) return withCORS(err("Missing story", 400));
-          if (!Array.isArray(images) || !images.length) return withCORS(err("Missing images[]", 400));
-
-          // validate rows
-          for (const row of images) {
-            const hasId = (row?.kind === "cover") || Number.isFinite(row?.page);
-            if (!hasId) return withCORS(err("images[] must include page or kind:'cover'", 400));
-            if (!(row.image_id || row.url || row.data_url)) return withCORS(err("images[] row must include image_id or url or data_url", 400));
-          }
-
-          const pdfBytes = await buildPdf({
-            story,
-            images,
-            mode: mode === "print" ? "print" : "preview",
-            trim: trim || "square210",
-            bleed_mm,
-            watermark_text: watermark_text || (mode === "preview" ? "FÖRHANDSVISNING" : null),
-          }, env);
-
-          const headers = new Headers({
-            "content-type": "application/pdf",
-            "cache-control": mode === "print" ? "public, max-age=31536000, immutable" : "no-store",
-            "content-disposition": `inline; filename="bokpiloten-${Date.now()}.pdf"`,
-            ...CORS
-          });
-          return new Response(pdfBytes, { status: 200, headers });
-        } catch (e) {
-          return withCORS(err(e?.message || "PDF failed", 500));
-        }
+          const resp = await handlePdfRequest(req, env);
+          return withCORS(resp);
+        } catch (e) { return err(e?.message || "PDF failed", 500); }
       }
 
-      // --- 404 ---
-      return withCORS(new Response(JSON.stringify({ error: "Not found" }), {
-        status: 404,
-        headers: { "content-type": "application/json; charset=utf-8", ...CORS }
-      }));
+      // 404
+      return new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404, headers: { "content-type": "application/json; charset=utf-8", ...CORS }
+      });
     } catch (e) {
-      // Global airbag (always CORS)
-      return withCORS(new Response(JSON.stringify({ error: String(e?.message || e) }), {
-        status: 500,
-        headers: JSONH
-      }));
+      // Global airbag: still include CORS on unexpected errors
+      return new Response(JSON.stringify({ error: String(e?.message || e) }), {
+        status: 500, headers: JSONH
+      });
     }
   }
 };
-
