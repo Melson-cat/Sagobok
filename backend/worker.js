@@ -361,7 +361,7 @@ function drawTextWithOutline(page, text, x, y, size, font, opts = {}) {
     outline = rgb(0, 0, 0),
     shadow = true,
     shadowOpacity = 0.25,
-    outlineScale = 0.03, // % av font size
+    outlineScale = 0.05, // % av font size
   } = opts;
   const d = Math.max(0.75, size * outlineScale);
 
@@ -564,7 +564,7 @@ const GRID = {
 
 /* --------------------------- Build PDF --------------------------------- */
 async function buildPdf(
-  { story, images, mode = "print", trim = "square210", bleed_mm, watermark_text, text_over_image = false },
+  { story, images, mode = "print", trim = "square210", bleed_mm, watermark_text, text_over_image = true },
   env
 ) {
   const trimSpec = TRIMS[trim] || TRIMS.square210;
@@ -854,7 +854,8 @@ async function handlePdfRequest(req, env, { previewInline = false } = {}) {
   }
 
   const bytes = await buildPdf(
-    { story, images: images || [], mode, trim, bleed_mm, watermark_text, text_over_image: !!text_over_image },
+    { story, images: images || [], mode, trim, bleed_mm, watermark_text, text_over_image: text_over_image !== false },
+
     env
   );
   const filename =
