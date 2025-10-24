@@ -174,8 +174,12 @@ Regler:
 `;
 const STORY_SYS = `
 Du får en outline för en svensk bilderbok. Skriv boken enligt:
-{ "book":{
-  "title": string,"reading_age": number,"style": "cartoon"|"pixar"|"storybook"|"comic"|"painting",
++ { "book":{
+ "title": string,                 // säljbar huvudtitel
+  "tagline": string,               // kort underrubrik för omslaget
+ "back_blurb": string,            // 1–3 meningar för baksidan
+ "reading_age": number,
+ "style": "cartoon"|"pixar"|"storybook"|"comic"|"painting",
   "category": "kids"|"pets",
   "bible":{"main_character": { "name": string, "age": number, "physique": string, "identity_keys": string[] },
            "wardrobe": string[], "palette": string[], "world": string, "tone": string},
@@ -183,6 +187,7 @@ Du får en outline för en svensk bilderbok. Skriv boken enligt:
   "pages":[{ "page": number, "text": string, "scene": string, "time_of_day": "day"|"golden_hour"|"evening"|"night","weather":"clear"|"cloudy"|"rain"|"snow"}]
 }}
 Hårda regler: 12–20 sidor, 2–4 meningar/sida. Konkreta scener i huvudmiljö. Svenskt språk. Endast JSON.
+ Titeln ska vara säljbar. Fyll "tagline" och "back_blurb" (1–3 meningar).
 `;
 function heroDescriptor({ category, name, age, traits }) {
   if ((category || "kids") === "pets")
@@ -394,7 +399,7 @@ function drawMultilineWithOutline(page, lines, boxX, boxY, boxW, lineH, size, fo
   }
 }
 
-function drawPillBackground(page, boxX, boxY, boxW, boxH, radius, opacity=0.18) {
+function drawPillBackground(page, boxX, boxY, boxW, boxH, radius, opacity=0.10) {
   // enkel rundad rektangel genom fyra kvartscirklar (approx via rectangles)
   page.drawRectangle({ x: boxX, y: boxY, width: boxW, height: boxH, color: rgb(0,0,0), opacity });
 }
@@ -649,17 +654,15 @@ async function buildPdf(
     const tx = contentX + safeInset;
     const tw = trimWpt - safeInset * 2;
 
-    // Gradient bakom titelområde (övre 28% av sidan)
-    const barH = trimHpt * 0.28;
-    drawTopGradientBar(page, contentX, contentY + trimHpt - barH, trimWpt, barH);
-
     // Titel shrink-to-fit, upp till 2 rader
     const maxTitle = Math.min(trimWpt, trimHpt) * 0.13;
     const minTitle = 28;
     const titleFit = shrinkToFitLines(title, baloo, maxTitle, minTitle, tw, 2);
     const titleLineH = titleFit.size * 1.08;
 
-    const subtitle = theme ? `${theme}` : heroName ? `Med ${heroName}` : "";
+   const subtitle =
+      story?.book?.tagline
+        || (heroName ? `Med ${heroName}` : "");
     const maxSub = Math.max(14, titleFit.size * 0.42);
     const subFit = subtitle
       ? shrinkToFitLines(subtitle, nunitoSemi, maxSub, 12, tw, 2)
@@ -794,9 +797,10 @@ async function buildPdf(
       });
     }
 
-    const blurb = story?.book?.lesson
-      ? `Lärdom: ${story.book.lesson}`
-      : `En berättelse skapad med BokPiloten.`;
+   const blurb =
+     story?.book?.back_blurb
+     || (story?.book?.lesson ? `Lärdom: ${story.book.lesson}.` : "")
+     || `En berättelse skapad med BokPiloten.`;
     const head = "Om boken";
     const headSize = 18;
     const bodySize = 12;
