@@ -512,6 +512,12 @@ async function getImageBytes(env, row) {
       if (!r.ok) return null;
       return new Uint8Array(await r.arrayBuffer());
     }
+    if (row.image_url && /^https?:\/\//i.test(row.image_url)) {
+  const r = await fetch(row.image_url, { cf: { cacheTtl: 3600, cacheEverything: true } });
+  if (!r.ok) return null;
+  return new Uint8Array(await r.arrayBuffer());
+}
+
     if (row.data_url && row.data_url.startsWith("data:image/")) {
       const m = row.data_url.match(/^data:([^;]+);base64,(.+)$/i);
       if (!m) return null;
@@ -603,10 +609,15 @@ async function buildPdf(
   // Indexera bilder
   let coverSrc = images?.find((x) => x?.kind === "cover" || x?.page === 0) || null;
   const imgByPage = new Map();
-  (images || []).forEach((row) => {
-    if (Number.isFinite(row?.page) && row.page > 0 && (row.image_id || row.url || row.data_url))
-      imgByPage.set(row.page, row);
-  });
+(images || []).forEach((row) => {
+  if (
+    Number.isFinite(row?.page) && row.page > 0 &&
+    (row.image_id || row.url || row.image_url || row.data_url)
+  ) {
+    imgByPage.set(row.page, row);
+  }
+});
+
 
   /* ------- FRONT COVER (full bleed + shrink-to-fit title) ------- */
   try {
