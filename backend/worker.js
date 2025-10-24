@@ -417,6 +417,64 @@ function drawTopGradientBar(page, x, y, w, h) {
   }
 }
 
+function drawWrappedCenterColor(
+  page, text, centerX, centerY, maxW, maxH, font,
+  baseSize, baseLeading, minSize = 12, color = rgb(1,1,1), align = "center"
+) {
+  // prova storlek → krymp tills det får plats i rutan
+  for (let size = baseSize; size >= minSize; size--) {
+    const lineH = size * baseLeading;
+    const words = String(text || "").split(/\s+/);
+    const lines = [];
+    let line = "";
+    for (const w of words) {
+      const t = line ? line + " " + w : w;
+      const wpx = font.widthOfTextAtSize(t, size);
+      if (wpx <= maxW) line = t;
+      else { if (line) lines.push(line); line = w; }
+    }
+    if (line) lines.push(line);
+
+    const blockH = lines.length * lineH;
+    if (blockH <= maxH) {
+      // ritning: vänster baserat på align, vertikalt centrerad kring centerY
+      let y = centerY + (blockH / 2) - lineH;
+      for (const ln of lines) {
+        const wpx = font.widthOfTextAtSize(ln, size);
+        const x =
+          align === "center" ? centerX - wpx / 2 :
+          align === "right"  ? centerX + maxW/2 - wpx :
+                               centerX - maxW/2;
+        page.drawText(ln, { x, y, size, font, color });
+        y -= lineH;
+      }
+      return { size, lines };
+    }
+  }
+  // fallback: minSize, beskär
+  const size = minSize, lineH = size * baseLeading;
+  const words = String(text || "").split(/\s+/);
+  const lines = [];
+  let line = "";
+  for (const w of words) {
+    const t = line ? line + " " + w : w;
+    const wpx = font.widthOfTextAtSize(t, size);
+    if (wpx <= maxW) line = t;
+    else { if (line) lines.push(line); line = w; }
+    if ((lines.length + 1) * lineH > maxH) break;
+  }
+  if (line) lines.push(line + " …");
+  let y = centerY + (lines.length * lineH)/2 - lineH;
+  for (const ln of lines) {
+    const wpx = font.widthOfTextAtSize(ln, size);
+    const x = centerX - wpx/2;
+    page.drawText(ln, { x, y, size, font, color });
+    y -= lineH;
+  }
+  return { size, lines, truncated: true };
+}
+
+
 function shrinkToFitLines(text, font, maxSize, minSize, maxWidth, maxLines) {
   // prova 1 rad, sedan 2 rader (om tillåtet) – minska storlek tills det passar
   function fits(lines, size) {
@@ -782,48 +840,39 @@ async function buildPdf(
     }
   }
 
-  /* ------- BACK COVER ------- */
+  
+    /* ------- BACK COVER ------- */
   try {
     const page = pdfDoc.addPage([pageW, pageH]);
-    const outer = mmToPt(GRID.outer_mm);
 
-    if (mode === "preview") {
-      page.drawRectangle({
-        x: contentX,
-        y: contentY,
-        width: trimWpt,
-        height: trimHpt,
-        color: rgb(0.98, 0.98, 0.98),
-      });
-    }
+    // --- Bakgrundsfärg (lavender). Vill du hellre ha grön: rgb(0.60, 0.78, 0.66) ---
+    const bg = rgb(0.58, 0.54, 0.86); // mjuk lila
+    page.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: bg,
+    });
 
-   const blurb =
-     story?.book?.back_blurb
-     || (story?.book?.lesson ? `Lärdom: ${story.book.lesson}.` : "")
-     || `En berättelse skapad med BokPiloten.`;
-    const head = "Om boken";
-    const headSize = 18;
-    const bodySize = 12;
-    const lh = bodySize * 1.4;
+    // Text som ska visas
+    const blurb =
+      story?.book?.back_blurb
+      || (story?.book?.lesson ? `Lärdom: ${story.book.lesson}.` : "")
+      || `En berättelse skapad med BokPiloten.`;
 
-    const startX = contentX + outer;
-    let cursorY = contentY + trimHpt - outer - headSize;
-    page.drawText(head, { x: startX, y: cursorY, size: headSize, font: baloo, color: rgb(0.1, 0.1, 0.1) });
-    cursorY -= headSize + mmToPt(4);
+    // Centrera i mitten
+    const centerX = contentX + trimWpt / 2;
+    const centerY = contentY + trimHpt / 2;
 
-    const words = blurb.split(/\s+/);
-    let line = "";
-    const maxW = trimWpt - outer * 2;
-    for (const w of words) {
-      const test = line ? line + " " + w : w;
-      if (nunito.widthOfTextAtSize(test, bodySize) <= maxW) line = test;
-      else {
-        page.drawText(line, { x: startX, y: cursorY, size: bodySize, font: nunito, color: rgb(0.1, 0.1, 0.1) });
-        cursorY -= lh;
-        line = w;
-      }
-    }
-    if (line) page.drawText(line, { x: startX, y: cursorY, size: bodySize, font: nunito, color: rgb(0.1, 0.1, 0.1) });
+    // Max textyta (behåll lite marginal):
+    const maxW = trimWpt * 0.72;
+    const maxH = trimHpt * 0.36;
+
+    // Vit text på färgad bakgrund
+    const bodySize = 14;              // utgångsstorlek
+    const leading  = 1.42;            // radavstånd
+    drawWrappedCenterColor(page, blurb, centerX, centerY, maxW, maxH, nunito, bodySize, leading, 12, rgb(1,1,1), "center");
 
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   } catch (e) {
