@@ -283,12 +283,14 @@ function dataUrlToBlob(dataUrl) {
   for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
   return { blob: new Blob([u8], { type: mime }), mime };
 }
-function cfImagesDeliveryURL(env, image_id, variant) {
+function cfImagesDeliveryURL(env, image_id, variant, forceFormat = "jpeg") {
   const hash = env.CF_IMAGES_ACCOUNT_HASH;
   if (!hash) return null;
   const v = variant || env.CF_IMAGES_VARIANT || "public";
-  return `https://imagedelivery.net/${hash}/${image_id}/${v}`;
+  const base = `https://imagedelivery.net/${hash}/${image_id}/${v}`;
+  return forceFormat ? `${base}?format=${encodeURIComponent(forceFormat)}` : base;
 }
+
 async function uploadOneToCFImages(env, { data_url, id }) {
   const miss = [];
   if (!env.IMAGES_API_TOKEN) miss.push("IMAGES_API_TOKEN");
@@ -500,24 +502,33 @@ function drawWrappedTextFit(
 /* ---- Image helpers ---- */
 async function getImageBytes(env, row) {
   try {
+    // A) CF Images by ID (force JPEG)
     if (row.image_id) {
-      const url = cfImagesDeliveryURL(env, row.image_id);
+      const url = cfImagesDeliveryURL(env, row.image_id, undefined, "jpeg");
       if (!url) return null;
       const r = await fetch(url, { cf: { cacheTtl: 3600, cacheEverything: true } });
       if (!r.ok) return null;
       return new Uint8Array(await r.arrayBuffer());
     }
-    if (row.url && /^https?:\/\//i.test(row.url)) {
-      const r = await fetch(row.url, { cf: { cacheTtl: 3600, cacheEverything: true } });
+
+    // B) Explicit URL from our code (try to force jpeg if possible)
+    const pickUrl = row.url || row.image_url;
+    if (pickUrl && /^https?:\/\//i.test(pickUrl)) {
+      // If this is a Cloudflare Images delivery URL, append ?format=jpeg
+      const isCFI = /imagedelivery\.net/i.test(pickUrl);
+      const forced = isCFI
+        ? (pickUrl.includes("?") ? pickUrl + "&format=jpeg" : pickUrl + "?format=jpeg")
+        : pickUrl;
+
+      // Ask Cloudflare to transcode to JPEG for any origin (handles webp/avif)
+      const r = await fetch(forced, {
+        cf: { cacheTtl: 3600, cacheEverything: true, image: { format: "jpeg", quality: 90 } },
+      });
       if (!r.ok) return null;
       return new Uint8Array(await r.arrayBuffer());
     }
-    if (row.image_url && /^https?:\/\//i.test(row.image_url)) {
-  const r = await fetch(row.image_url, { cf: { cacheTtl: 3600, cacheEverything: true } });
-  if (!r.ok) return null;
-  return new Uint8Array(await r.arrayBuffer());
-}
 
+    // C) Data URL (PNG/JPEG expected)
     if (row.data_url && row.data_url.startsWith("data:image/")) {
       const m = row.data_url.match(/^data:([^;]+);base64,(.+)$/i);
       if (!m) return null;
@@ -527,11 +538,13 @@ async function getImageBytes(env, row) {
       for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
       return u8;
     }
+
     return null;
   } catch {
     return null;
   }
 }
+
 async function embedImage(pdfDoc, bytes) {
   if (!bytes) return null;
   try {
