@@ -452,9 +452,9 @@ async function buildPdf(
   // -------- FONTS (lokal → CDN → fallback) --------
   const base = (env.FONT_BASE_URL || "").replace(/\/+$/, "");
   const LOCAL = base ? [
-    `${base}/frontend/fonts/Baloo-bold.ttf`,
-    `${base}/frontend/fonts/Nunito-regular.ttf`,
-    `${base}/frontend/fonts/Nunito-semibold.ttf`,
+    `${base}/fonts/Baloo-bold.ttf`,
+    `${base}/fonts/Nunito-regular.ttf`,
+    `${base}/fonts/Nunito-semibold.ttf`,
   ] : [];
   const baloo =
     (await tryEmbedTtfList(pdfDoc, [
