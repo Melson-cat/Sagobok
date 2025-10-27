@@ -511,19 +511,27 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
 
     // simple shrink-to-fit (1–2 lines)
     function splitFit(text, font, maxSize, minSize, maxWidth, maxLines) {
-      const safe = String(text ?? "");
-      for (let s = maxSize; s >= minSize; s--) {
-        const words = safe.split(/\s+/);
-        const lines = [];
-        let line = "";
-        for (const w of words) {
-          const t = line ? line + " " + w : w;
-          if (font.widthOfTextAtSize(t, s) <= maxWidth) line = t; else { if (line) lines.push(line); line = w; }
-        }
-        if (line) lines.push(line);
-        const ok = lines.length <= maxLines && lines.every(l => font.widthOfTextAtSize(l, s) <= maxWidth);
-        if (ok) return { size: s, lines };
-      }
+  const safe = String(text ?? "");
+for (let s = maxSize; s >= minSize; s--) {
+  const words = safe.replace(/\s+/g, " ").trim().split(" ");
+  const lines = [];
+  let line = "";
+  for (const w of words) {
+    const t = line ? line + " " + w : w;
+    const wWidth = font.widthOfTextAtSize(t, s);
+    if (wWidth <= maxWidth) line = t;
+    else {
+      if (line) lines.push(line.trim());
+      line = w;
+    }
+  }
+  if (line) lines.push(line.trim());
+  if (lines.length <= maxLines) {
+    return { size: s, lines };
+  }
+}
+return { size: minSize, lines: [safe] };
+
       return { size: minSize, lines: [String(text ?? "")] };
     }
 
