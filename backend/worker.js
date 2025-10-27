@@ -39,6 +39,39 @@ const OPENAI_MODEL = "gpt-4o-mini";
 // UI-justeringar
 const ICON_BOTTOM_MM = 10; // säkert avstånd från trim
 
+async function fetchTtfBytes(url) {
+  const r = await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
+  if (!r.ok) return null;
+  const ct = (r.headers.get("content-type") || "").toLowerCase();
+  if (!/font|octet-stream|application\/binary|application\/x-font-ttf/.test(ct)) return null;
+  return new Uint8Array(await r.arrayBuffer());
+}
+
+async function tryEmbedFont(pdfDoc, urls) {
+  for (const u of urls) {
+    try {
+      const bytes = await fetchTtfBytes(u);
+      if (!bytes) continue;
+      return await pdfDoc.embedFont(bytes, { subset: true });
+    } catch {}
+  }
+  return null;
+}
+
+
+function makeFontCandidates(base, filename) {
+  // Tolerant mot hur du har mappat filer i Pages
+  const b = (base || "").replace(/\/+$/, "");
+  const names = [filename, `frontend/${filename}`, `fonts/${filename}`];
+  const out = [];
+  for (const n of names) {
+    out.push(`${b}/${n}`);             // https://…/Nunito-Regular.ttf
+    out.push(`${b}/${n}`.replace(/\/{2,}/g, "/")); // försiktighet
+  }
+  return Array.from(new Set(out));
+}
+
+
 /* --------------------------- OpenAI (JSON) ----------------------------- */
 async function openaiJSON(env, system, user) {
   const sys = system.toLowerCase().includes("json") ? system : system + "\nSvara endast som giltig json.";
@@ -448,28 +481,24 @@ async function tryAny(pdfDoc, env, paths) {
   }
   return null;
 }
+  const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(/\/+$/,"");
 
-const baloo =
-  (await tryAny(pdfDoc, env, [
-    "/fonts/Baloo-bold.ttf",
-    "/frontend/fonts/Baloo-bold.ttf",
-  ])) || (await pdfDoc.embedFont(StandardFonts.HelveticaBold));
+const baloo = await tryEmbedFont(pdfDoc, [
+  `${base}/Baloo-bold.ttf`,
+  "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/baloo2/Baloo2-Bold.ttf"
+]) || await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
-const nunito =
-  (await tryAny(pdfDoc, env, [
-    "/fonts/Nunito-Regular.ttf",
-    "/frontend/fonts/Nunito-Regular.ttf",
-    "/fonts/Nunito-regular.ttf",
-    "/frontend/fonts/Nunito-regular.ttf",
-  ])) || (await pdfDoc.embedFont(StandardFonts.TimesRoman));
+const nunito = await tryEmbedFont(pdfDoc, [
+  `${base}/Nunito-Regular.ttf`,
+  "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/nunito/Nunito-Regular.ttf"
+]) || await pdfDoc.embedFont(StandardFonts.TimesRoman);
 
-const nunitoSemi =
-  (await tryAny(pdfDoc, env, [
-    "/fonts/Nunito-Semibold.ttf",
-    "/frontend/fonts/Nunito-Semibold.ttf",
-    "/fonts/Nunito-semibold.ttf",
-    "/frontend/fonts/Nunito-semibold.ttf",
-  ])) || (await pdfDoc.embedFont(StandardFonts.Helvetica));
+const nunitoSemi = await tryEmbedFont(pdfDoc, [
+  `${base}/Nunito-Semibold.ttf`,
+  "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/nunito/Nunito-SemiBold.ttf"
+]) || await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+
 
 
   const readingAge = story?.book?.reading_age || 6;
