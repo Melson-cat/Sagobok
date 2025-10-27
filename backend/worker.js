@@ -440,16 +440,37 @@ async function buildPdf(
 
   const pdfDoc = await PDFDocument.create();
 
-  // FONTS: försök Pages -> fallback
-  const baloo =
-    (await tryEmbedTtfFromFrontend(pdfDoc, env, "/frontend/fonts/Baloo-bold.ttf")) ||
-    (await pdfDoc.embedFont(StandardFonts.HelveticaBold));
-  const nunito =
-    (await tryEmbedTtfFromFrontend(pdfDoc, env, "/frontend/fonts/Nunito-regular.ttf")) ||
-    (await pdfDoc.embedFont(StandardFonts.TimesRoman));
-  const nunitoSemi =
-    (await tryEmbedTtfFromFrontend(pdfDoc, env, "/frontend/fonts/Nunito-semibold.ttf")) ||
-    (await pdfDoc.embedFont(StandardFonts.Helvetica));
+ // FONTS: try multiple candidate URLs on your Pages site, then fall back
+async function tryAny(pdfDoc, env, paths) {
+  for (const p of paths) {
+    const f = await tryEmbedTtfFromFrontend(pdfDoc, env, p);
+    if (f) return f;
+  }
+  return null;
+}
+
+const baloo =
+  (await tryAny(pdfDoc, env, [
+    "/fonts/Baloo-bold.ttf",
+    "/frontend/fonts/Baloo-bold.ttf",
+  ])) || (await pdfDoc.embedFont(StandardFonts.HelveticaBold));
+
+const nunito =
+  (await tryAny(pdfDoc, env, [
+    "/fonts/Nunito-Regular.ttf",
+    "/frontend/fonts/Nunito-Regular.ttf",
+    "/fonts/Nunito-regular.ttf",
+    "/frontend/fonts/Nunito-regular.ttf",
+  ])) || (await pdfDoc.embedFont(StandardFonts.TimesRoman));
+
+const nunitoSemi =
+  (await tryAny(pdfDoc, env, [
+    "/fonts/Nunito-Semibold.ttf",
+    "/frontend/fonts/Nunito-Semibold.ttf",
+    "/fonts/Nunito-semibold.ttf",
+    "/frontend/fonts/Nunito-semibold.ttf",
+  ])) || (await pdfDoc.embedFont(StandardFonts.Helvetica));
+
 
   const readingAge = story?.book?.reading_age || 6;
   const { size: baseTextSize, leading: baseLeading } = fontSpecForReadingAge(readingAge);
