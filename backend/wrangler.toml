@@ -7,9 +7,8 @@ enabled = false
 head_sampling_rate = 1
 invocation_logs = true
 persist = true
-
 [vars]
 CF_ACCOUNT_ID = "54ac54fed54dbb3692953f74fb7a3498"
 CF_IMAGES_ACCOUNT_HASH = "JHrhPeCvgX2JnGnpk89sUA"
 CF_IMAGES_VARIANT = "public"
-FONT_BASE_URL = "https://sagobok.pages.dev/frontend"
+FONT_BASE_URL = "https://sagobok.pages.dev"
