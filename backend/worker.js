@@ -1,10 +1,13 @@
 // ============================================================================
-// BokPiloten – Worker v22 "Fontkit Optional + Vine + Spårbarhet"
+// BokPiloten – Worker v23 "fontkit per-request + vine fix + robust fonts"
 // Endpoints: story, ref-image, images, image/regenerate, images/upload, cover, pdf, diag
 // Env: API_KEY, GEMINI_API_KEY, IMAGES_API_TOKEN, CF_ACCOUNT_ID,
 //      CF_IMAGES_ACCOUNT_HASH, (CF_IMAGES_VARIANT), FONT_BASE_URL
 // ============================================================================
+
+/* eslint-disable no-unused-vars */
 import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit"; // single, canonical import
 
 /* ------------------------------ Globals ------------------------------ */
 const OPENAI_MODEL = "gpt-4o-mini";
@@ -32,16 +35,6 @@ const log = (...a) => { try { console.log(...a); } catch {} };
 const traceStart = () => [];
 const tr = (trace, step, extra = {}) => trace.push({ t: new Date().toISOString(), step, ...extra });
 
-/* ----------------------------- Fontkit ------------------------------- */
-let fontkit = null;
-try {
-  // dynamisk import funkar bättre i CF Workers bundling
-  const fk = await import("fontkit");
-  fontkit = (fk && (fk.default || fk)) || null;
-} catch (_) {
-  fontkit = null;
-}
-
 /* ----------------------- Utility / Constants ------------------------- */
 const MM_PER_INCH = 25.4;
 const PT_PER_INCH = 72;
@@ -66,6 +59,12 @@ async function fetchJSON(url, opts) {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`${url} ${r.status} ${JSON.stringify(j)}`);
   return j;
+}
+
+async function fetchBytesWithCache(url) {
+  const r = await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
+  if (!r.ok) throw new Error(`fetch ${r.status} for ${url}`);
+  return new Uint8Array(await r.arrayBuffer());
 }
 
 /* --------------------- OpenAI JSON-only helper ----------------------- */
@@ -239,7 +238,11 @@ function characterCardPrompt({ style, bible, traits }) {
   const mc = bible?.main_character || {};
   const name = mc.name || "Nova";
   const phys = mc.physique || traits || "fluffy gray cat with curious eyes";
-  return [`Character reference in ${styleHint(style)}.`,`One hero only, full body, neutral background.`,`Hero: ${name}, ${phys}. No text.`].join(" ");
+  return [
+    `Character reference in ${styleHint(style)}.`,
+    `One hero only, full body, neutral background.`,
+    `Hero: ${name}, ${phys}. No text.`,
+  ].join(" ");
 }
 function buildCoverPrompt({ style, story, characterName }) {
   const styleLine = styleHint(style);
@@ -379,7 +382,7 @@ function drawWrappedCenterColor(page, text, centerX, centerY, maxW, maxH, font, 
   return { size: minSize, lines: [] };
 }
 
-/* ----------------------------- Vine safe ------------------------------ */
+/* ----------------------------- Vine (safe) --------------------------- */
 function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.35,0.4,0.55), opacity = 0.22, trace) {
   try {
     const path = `
@@ -394,14 +397,14 @@ function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.35,0.4,0.55), opa
     const baseW = 360;
     const scale = widthPt / baseW;
     page.drawSvgPath(path, { x: centerX - widthPt/2, y, scale, color, opacity });
-    tr(trace, "vine:drawn", { widthPt });
+    if (trace) tr(trace, "vine:drawn", { widthPt });
   } catch (e) {
-    tr(trace, "vine:error", { error: String(e?.message || e) });
+    if (trace) tr(trace, "vine:error", { error: String(e?.message || e) });
   }
 }
 
-/* ------------------------- Fonts embedding ---------------------------- */
-async function fetchBytes(trace, url) {
+/* ------------------------- Fonts embedding --------------------------- */
+async function fetchFontBytes(trace, url) {
   tr(trace, "font:fetch", { url });
   const r = await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
   tr(trace, "font:fetch:done", { url, status: r.status, ct: r.headers.get("content-type"), cl: r.headers.get("content-length") });
@@ -411,20 +414,16 @@ async function fetchBytes(trace, url) {
   return bytes;
 }
 async function embedCustomFont(trace, pdfDoc, url) {
-  if (!fontkit) throw new Error("fontkit-not-available");
   try { PDFDocument.registerFontkit(fontkit); } catch (_) {}
-  const bytes = await fetchBytes(trace, url);
+  const bytes = await fetchFontBytes(trace, url);
   const font = await pdfDoc.embedFont(bytes, { subset: true });
   tr(trace, "font:embedded", { url });
   return font;
 }
 async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
   for (const url of urls) {
-    try {
-      return await embedCustomFont(trace, pdfDoc, url);
-    } catch (e) {
-      tr(trace, "font:embed-error", { url, error: String(e?.message || e) });
-    }
+    try { return await embedCustomFont(trace, pdfDoc, url); }
+    catch (e) { tr(trace, "font:embed-error", { url, error: String(e?.message || e) }); }
   }
   tr(trace, "font:fallback", { label, standard: standardName });
   return await pdfDoc.embedFont(standardName);
@@ -444,6 +443,8 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   const contentY = mmToPt(bleed);
 
   const pdfDoc = await PDFDocument.create();
+  // register fontkit PER REQUEST
+  try { pdfDoc.registerFontkit(fontkit); } catch {}
   tr(trace, "pdf:doc-created");
 
   // Fonts
@@ -474,7 +475,6 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     }
   });
 
-  // normalisera 14 scener (28 inlaga-sidor)
   function mapTo14ScenePages() {
     const want = 14;
     if (pagesStory.length === want) return pagesStory;
@@ -499,7 +499,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
       coverPage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.94,0.96,1) });
     }
 
-    // topp-gradient för läsbarhet
+    // top gradient for readability
     const safeInset = mmToPt(GRID.outer_mm + 2);
     const tx = contentX + safeInset;
     const tw = trimWpt - safeInset * 2;
@@ -509,7 +509,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
       coverPage.drawRectangle({ x: contentX, y: contentY + trimHpt - h + (h/steps)*i, width: trimWpt, height: h/steps, color: rgb(0,0,0), opacity: 0.22 * t });
     }
 
-    // enkel shrink-to-fit (1–2 rader)
+    // simple shrink-to-fit (1–2 lines)
     function splitFit(text, font, maxSize, minSize, maxWidth, maxLines) {
       const safe = String(text ?? "");
       for (let s = maxSize; s >= minSize; s--) {
@@ -604,7 +604,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
       nunito, Math.round(baseTextSize * TEXT_SCALE), baseLeading, 12, rgb(0.08,0.08,0.1), "center"
     );
 
-    // Vine
+    // Vine (now safely in-scope)
     drawVineSafe(right, cx, contentY + trimHpt * 0.28, trimWpt * 0.50, rgb(0.35,0.4,0.55), 0.22, trace);
 
     // Sidnummer
