@@ -5,7 +5,11 @@
 //               CF_IMAGES_ACCOUNT_HASH, (CF_IMAGES_VARIANT), FONT_BASE_URL
 // ============================================================================
 
+import fontkit from "fontkit";
 import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
+
+PDFDocument.registerFontkit(fontkit);
+
 
 /* --------------------------------- CORS --------------------------------- */
 const CORS = {
