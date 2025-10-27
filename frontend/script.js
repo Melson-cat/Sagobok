@@ -360,28 +360,22 @@ async function uploadToCF(items) {
 }
 
 /* --------------------------- PDF --------------------------- */
+// in script.js (your onCreatePdf)
 async function onCreatePdf() {
   try {
     if (!state.story) throw new Error("Ingen story i minnet.");
 
-    // Bygg images-array: cover först
     const images = [];
-    if (state.cover_image_id)
-      images.push({ kind: "cover", image_id: state.cover_image_id });
-    else if (state.cover_preview_url)
-      images.push({ kind: "cover", data_url: state.cover_preview_url });
-
-    // Sidor
+    if (state.cover_image_id) images.push({ kind: "cover", image_id: state.cover_image_id });
+    else if (state.cover_preview_url) images.push({ kind: "cover", data_url: state.cover_preview_url });
     const pages = state.story?.book?.pages || [];
     for (const p of pages) {
       const row = state.images_by_page.get(p.page);
       if (!row) continue;
-      if (row.image_id) images.push({ page: p.page, image_id: row.image_id });
-      else if (row.data_url) images.push({ page: p.page, data_url: row.data_url });
-      else if (row.image_url) images.push({ page: p.page, url: row.image_url });
+      images.push(row.image_id ? { page: p.page, image_id: row.image_id }
+        : row.data_url ? { page: p.page, data_url: row.data_url }
+        : row.image_url ? { page: p.page, url: row.image_url } : null);
     }
-
-    if (!images.length) throw new Error("Hittade inga illustrationer till PDF.");
 
     setStatus("📕 Bygger PDF…", 100);
     const res = await fetch(`${API}/api/pdf`, {
@@ -395,7 +389,12 @@ async function onCreatePdf() {
         watermark_text: "FÖRHANDSVISNING",
       }),
     });
-    if (!res.ok) throw new Error(`PDF misslyckades (HTTP ${res.status})`);
+
+    if (!res.ok) {
+      const body = await res.text().catch(()=>"");
+      console.error("PDF backend error:", body);
+      throw new Error(`PDF misslyckades (HTTP ${res.status})\n${body}`);
+    }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     window.open(url, "_blank");
@@ -406,6 +405,7 @@ async function onCreatePdf() {
     alert(e?.message || "Kunde inte skapa PDF.");
   }
 }
+
 
 async function onSubmit(e) {
   e.preventDefault();
