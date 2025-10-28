@@ -1,5 +1,5 @@
 // ============================================================================
-// BokPiloten – Worker v24 "Stabil PDF, Fontkit, Vine, Unik prompt, CORS"
+// BokPiloten – Worker v25 "Stabil PDF, Fontkit, Vine, Unik prompt, CORS"
 // Endpoints: story, ref-image, images, image/regenerate, images/upload, cover, pdf, diag
 // Env: API_KEY, GEMINI_API_KEY, IMAGES_API_TOKEN, CF_ACCOUNT_ID,
 //      CF_IMAGES_ACCOUNT_HASH, CF_IMAGES_VARIANT, FONT_BASE_URL
@@ -19,7 +19,7 @@ const CORS = {
   "access-control-expose-headers": "Content-Disposition, X-Request-Id",
   "vary": "Origin",
 };
-const jsonHeaders = {
+const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
   ...CORS,
@@ -33,7 +33,7 @@ const ok = (data, init = {}) =>
   withCORS(
     new Response(JSON.stringify(data), {
       status: init.status || 200,
-      headers: new Headers({ ...jsonHeaders, ...(init.headers || {}) }),
+      headers: new Headers({ ...JSON_HEADERS, ...(init.headers || {}) }),
     }),
   );
 const err = (message, code = 500, extra = {}) =>
@@ -288,8 +288,7 @@ function buildCoverPrompt({ style, story, characterName }) {
 function dataUrlToBlob(dataUrl) {
   const m = dataUrl?.match?.(/^data:([^;]+);base64,(.+)$/i);
   if (!m) return null;
-  const mime = m[1],
-    b64 = m[2];
+  const mime = m[1], b64 = m[2];
   const bin = atob(b64);
   const u8 = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
@@ -357,20 +356,14 @@ async function getImageBytes(env, row) {
 }
 async function embedImage(pdfDoc, bytes) {
   if (!bytes) return null;
-  try {
-    return await pdfDoc.embedPng(bytes);
-  } catch {}
-  try {
-    return await pdfDoc.embedJpg(bytes);
-  } catch {}
+  try { return await pdfDoc.embedPng(bytes); } catch {}
+  try { return await pdfDoc.embedJpg(bytes); } catch {}
   return null;
 }
 function drawImageCover(page, img, boxX, boxY, boxW, boxH) {
-  const iw = img.width,
-    ih = img.height;
+  const iw = img.width, ih = img.height;
   const scale = Math.max(boxW / iw, boxH / ih);
-  const w = iw * scale,
-    h = ih * scale;
+  const w = iw * scale, h = ih * scale;
   const x = boxX + (boxW - w) / 2;
   const y = boxY + (boxH - h) / 2;
   page.drawImage(img, { x, y, width: w, height: h });
@@ -390,40 +383,9 @@ function drawWatermark(page, text = "FÖRHANDSVISNING", color = rgb(0.5, 0.5, 0.
     rotate: degrees(angleDeg),
   });
 }
-function drawTextWithOutline(page, text, x, y, size, font, opts = {}) {
-  const { fill = rgb(1, 1, 1), outline = rgb(0, 0, 0), shadow = true, shadowOpacity = 0.25, outlineScale = 0.06 } = opts;
-  const safeText = String(text ?? "");
-  const s = clamp(size || 12, 4, 200);
-  const d = Math.max(0.8, s * outlineScale);
-  if (shadow)
-    page.drawText(safeText, { x: x + d * 0.6, y: y - d * 0.6, size: s, font, color: rgb(0, 0, 0), opacity: shadowOpacity });
-  const offs = [
-    [d, 0],
-    [-d, 0],
-    [0, d],
-    [0, -d],
-    [d, d],
-    [d, -d],
-    [-d, d],
-    [-d, -d],
-  ];
-  for (const [ox, oy] of offs)
-    page.drawText(safeText, { x: x + ox, y: y + oy, size: s, font, color: outline });
-  page.drawText(safeText, { x, y, size: s, font, color: fill });
-}
 function drawWrappedCenterColor(
-  page,
-  text,
-  centerX,
-  centerY,
-  maxW,
-  maxH,
-  font,
-  baseSize,
-  baseLeading,
-  minSize = 12,
-  color = rgb(0.08, 0.08, 0.08),
-  align = "center",
+  page, text, centerX, centerY, maxW, maxH, font,
+  baseSize, baseLeading, minSize = 12, color = rgb(0.08, 0.08, 0.08), align = "center",
 ) {
   const safe = String(text ?? "");
   for (let size = baseSize; size >= minSize; size--) {
@@ -434,10 +396,7 @@ function drawWrappedCenterColor(
     for (const w of words) {
       const t = line ? line + " " + w : w;
       if (font.widthOfTextAtSize(t, size) <= maxW) line = t;
-      else {
-        if (line) lines.push(line);
-        line = w;
-      }
+      else { if (line) lines.push(line); line = w; }
     }
     if (line) lines.push(line);
     const blockH = lines.length * lineH;
@@ -445,12 +404,7 @@ function drawWrappedCenterColor(
       let y = centerY + blockH / 2 - lineH;
       for (const ln of lines) {
         const w = font.widthOfTextAtSize(ln, size);
-        const x =
-          align === "center"
-            ? centerX - w / 2
-            : align === "right"
-            ? centerX + maxW / 2 - w
-            : centerX - maxW / 2;
+        const x = align === "center" ? centerX - w / 2 : align === "right" ? centerX + maxW / 2 - w : centerX - maxW / 2;
         page.drawText(ln, { x, y, size, font, color });
         y -= lineH;
       }
@@ -460,68 +414,80 @@ function drawWrappedCenterColor(
   return { size: minSize, lines: [] };
 }
 
-function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.35,0.4,0.55), opacity = 0.28, trace){
-  const path = `
-    M 0 0
-    C 30 14, 60 -14, 90 0
-    C 120 14, 150 -14, 180 0
-    C 210 14, 240 -14, 270 0
-    C 300 14, 330 -14, 360 0
-    M 60 0 c 6 8, 10 12, 12 18 c -8 -2, -12 -6, -18 -12 z
-    M 300 0 c -6 -8, -10 -12, -12 -18 c 8 2, 12 6, 18 12 z
-  `;
-  const baseW = 360;
-  const scale = widthPt / baseW;
+/* ----------------------------- Vine (stroke) ------------------------- */
+function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.35, 0.4, 0.55), opacity = 0.55, trace) {
+  try {
+    const path = `
+      M 0 0
+      C 30 14, 60 -14, 90 0
+      C 120 14, 150 -14, 180 0
+      C 210 14, 240 -14, 270 0
+      C 300 14, 330 -14, 360 0
+      M 60 0 c 6 8, 10 12, 12 18 c -8 -2, -12 -6, -18 -12 z
+      M 300 0 c -6 -8, -10 -12, -12 -18 c 8 2, 12 6, 18 12 z
+    `;
+    const baseW = 360;
+    const scale = widthPt / baseW;
 
-  // Säkrare: använd borderOpacity, lineCap/Join och kasta vidare fel
-  page.drawSvgPath(path, {
-    x: centerX - widthPt/2,
-    y,
-    scale,
-   borderColor: color,
- borderWidth: 1.8,
- opacity: Math.min(0.6, Math.max(0.2, opacity)),
-  });
+    page.drawSvgPath(path, {
+      x: centerX - widthPt / 2,
+      y,
+      scale,
+      borderColor: color,
+      borderWidth: 2.2,
+      opacity,
+    });
 
-  // valfritt: tunn extra highlight
-  page.drawSvgPath("M 0 0 C 30 14, 60 -14, 90 0 C 120 14, 150 -14, 180 0",{
-    x: centerX - widthPt/2,
-    y: y + 0.8,
-    scale,
-    borderColor: rgb(1,1,1),
-    borderWidth: 0.6,
-    borderOpacity: Math.min(opacity*0.45, 0.25),
-    lineCap: 'round',
-    lineJoin: 'round'
-  });
+    // Liten highlight för kontrast
+    page.drawSvgPath(
+      "M 0 0 C 30 14, 60 -14, 90 0 C 120 14, 150 -14, 180 0",
+      {
+        x: centerX - widthPt / 2,
+        y: y + 0.8,
+        scale,
+        borderColor: rgb(1, 1, 1),
+        borderWidth: 0.6,
+        opacity: Math.min(opacity * 0.45, 0.25),
+      },
+    );
 
-  tr?.(trace, "vine:drawn", { y, widthPt });
+    tr(trace, "vine:drawn", { y, widthPt });
+  } catch (e) {
+    tr(trace, "vine:error", { error: String(e?.message || e) });
+  }
 }
 
-
 /* ------------------------- Fonts embedding --------------------------- */
-// 1) Ta bort den felaktiga register-raden i embedCustomFont (vi registrerar redan i buildPdf)
+// Viktigt: fetchBytes måste finnas innan embedCustomFont
+async function fetchBytes(trace, url) {
+  tr(trace, "font:fetch", { url });
+  const r = await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
+  tr(trace, "font:fetch:done", {
+    url,
+    status: r.status,
+    ct: r.headers.get("content-type"),
+    cl: r.headers.get("content-length"),
+  });
+  if (!r.ok) throw new Error(`fetch ${r.status}`);
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  tr(trace, "font:bytes", { url, bytes: bytes.length });
+  return bytes;
+}
 async function embedCustomFont(trace, pdfDoc, url) {
-   // Fontkit ska redan vara registrerat en gång i buildPdf:
-   // pdfDoc.registerFontkit(fontkit)
-   const bytes = await fetchBytes(trace, url);   // den funktionen finns redan
-   const font = await pdfDoc.embedFont(bytes, { subset: true });
-   tr(trace, "font:embedded", { url });
-   return font;
- }
-
-async function getFontOrFallback(trace, pdfDoc, label, urls, standardName, subset = true) {
+  try { if (typeof pdfDoc.registerFontkit === "function") pdfDoc.registerFontkit(fontkit); } catch {}
+  const bytes = await fetchBytes(trace, url);
+  const font = await pdfDoc.embedFont(bytes, { subset: true });
+  tr(trace, "font:embedded", { url });
+  return font;
+}
+async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
   for (const url of urls) {
-    try {
-      return await embedCustomFont(trace, pdfDoc, url, { subset });
-    } catch (e) {
-      tr(trace, "font:embed-error", { url, error: String(e?.message || e) });
-    }
+    try { return await embedCustomFont(trace, pdfDoc, url); }
+    catch (e) { tr(trace, "font:embed-error", { url, error: String(e?.message || e) }); }
   }
   tr(trace, "font:fallback", { label, standard: standardName });
   return await pdfDoc.embedFont(standardName);
 }
-
 
 /* ---------------------------- Build PDF ------------------------------ */
 async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }, env, trace) {
@@ -559,7 +525,8 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     story?.book?.tagline ||
     (story?.book?.bible?.main_character?.name ? `Med ${story.book.bible.main_character.name}` : "");
   const blurb =
-    story?.book?.back_blurb || (story?.book?.lesson ? `Lärdom: ${story.book.lesson}.` : "En berättelse skapad med BokPiloten.");
+    story?.book?.back_blurb ||
+    (story?.book?.lesson ? `Lärdom: ${story.book.lesson}.` : "En berättelse skapad med BokPiloten.");
   const pagesStory = [...(story?.book?.pages || [])];
 
   // Indexera inkomna bilder
@@ -578,13 +545,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     if (pagesStory.length > want) return pagesStory.slice(0, want);
     const out = [...pagesStory];
     while (out.length < want)
-      out.push(
-        pagesStory[pagesStory.length - 1] || {
-          page: out.length + 1,
-          text: "",
-          scene: "",
-        },
-      );
+      out.push(pagesStory[pagesStory.length - 1] || { page: out.length + 1, text: "", scene: "" });
     return out;
   }
   const scenePages = mapTo14ScenePages();
@@ -607,8 +568,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     const safeInset = mmToPt(GRID.outer_mm + 2);
     const tx = contentX + safeInset;
     const tw = trimWpt - safeInset * 2;
-    const steps = 8,
-      h = mmToPt(20);
+    const steps = 8, h = mmToPt(20);
     for (let i = 0; i < steps; i++) {
       const t = (steps - i) / steps;
       coverPage.drawRectangle({
@@ -621,7 +581,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
       });
     }
 
-    // Stabil shrink-to-fit
+    // Stabil shrink-to-fit (utan outline)
     function splitFit(text, font, maxSize, minSize, maxWidth, maxLines) {
       const safe = String(text ?? "").replace(/\s+/g, " ").trim();
       for (let s = maxSize; s >= minSize; s--) {
@@ -631,10 +591,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
         for (const w of words) {
           const t = line ? line + " " + w : w;
           if (font.widthOfTextAtSize(t, s) <= maxWidth) line = t;
-          else {
-            if (line) lines.push(line);
-            line = w;
-          }
+          else { if (line) lines.push(line); line = w; }
         }
         if (line) lines.push(line);
         if (lines.length <= maxLines) return { size: s, lines };
@@ -652,53 +609,36 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     let y = contentY + trimHpt - mmToPt(GRID.outer_mm + 6) - blockH;
 
     for (const ln of fitT.lines) {
-  const w = baloo.widthOfTextAtSize(ln, fitT.size);
-  const x = tx + (tw - w) / 2;
-  coverPage.drawText(ln, {
-    x, y, size: fitT.size, font: baloo, color: rgb(0.05,0.05,0.08)
-  });
-  y += titleLH;
-}
-  if (fitS) {
-  y += mmToPt(4);
-  for (const ln of fitS.lines) {
-    const w = nunitoSemi.widthOfTextAtSize(ln, fitS.size);
-    const x = tx + (tw - w) / 2;
-    coverPage.drawText(ln, {
-      x, y, size: fitS.size, font: nunitoSemi, color: rgb(0.12,0.12,0.12)
-    });
-    y += subLH;
-  }
-}
+      const w = baloo.widthOfTextAtSize(ln, fitT.size);
+      const x = tx + (tw - w) / 2;
+      coverPage.drawText(ln, { x, y, size: fitT.size, font: baloo, color: rgb(0.05, 0.05, 0.08) });
+      y += titleLH;
+    }
+    if (fitS) {
+      y += mmToPt(4);
+      for (const ln of fitS.lines) {
+        const w = nunitoSemi.widthOfTextAtSize(ln, fitS.size);
+        const x = tx + (tw - w) / 2;
+        coverPage.drawText(ln, { x, y, size: fitS.size, font: nunitoSemi, color: rgb(0.12, 0.12, 0.12) });
+        y += subLH;
+      }
+    }
 
     if (mode === "preview" && watermark_text) drawWatermark(coverPage, watermark_text);
   } catch (e) {
     tr(trace, "cover:error", { error: String(e?.message || e) });
     const p = pdfDoc.addPage([pageW, pageH]);
-    p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
+    p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: StandardFonts.Helvetica, color: rgb(0.8, 0.1, 0.1) });
   }
 
   /* -------- [1] TITELBLAD -------- */
   {
     const page = pdfDoc.addPage([pageW, pageH]);
     page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
-    const cx = contentX + trimWpt / 2,
-      cy = contentY + trimHpt * 0.62;
+    const cx = contentX + trimWpt / 2, cy = contentY + trimHpt * 0.62;
     drawWrappedCenterColor(page, title, cx, cy, trimWpt * 0.76, trimHpt * 0.22, baloo, Math.min(trimWpt, trimHpt) * 0.12, 1.08, 20, rgb(0.1, 0.1, 0.1));
     if (subtitle)
-      drawWrappedCenterColor(
-        page,
-        subtitle,
-        cx,
-        cy - mmToPt(14),
-        trimWpt * 0.7,
-        trimHpt * 0.12,
-        nunitoSemi,
-        Math.max(14, 22),
-        1.12,
-        12,
-        rgb(0.15, 0.15, 0.15),
-      );
+      drawWrappedCenterColor(page, subtitle, cx, cy - mmToPt(14), trimWpt * 0.7, trimHpt * 0.12, nunitoSemi, Math.max(14, 22), 1.12, 12, rgb(0.15, 0.15, 0.15));
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   }
 
@@ -730,25 +670,14 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     const right = pdfDoc.addPage([pageW, pageH]);
     right.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
 
-    const cx = contentX + trimWpt / 2,
-      cy = contentY + trimHpt / 2 + mmToPt(6);
+    const cx = contentX + trimWpt / 2, cy = contentY + trimHpt / 2 + mmToPt(6);
     drawWrappedCenterColor(
-      right,
-      text,
-      cx,
-      cy,
-      trimWpt * 0.76,
-      trimHpt * 0.46,
-      nunito,
-      Math.round(baseTextSize * TEXT_SCALE),
-      baseLeading,
-      12,
-      rgb(0.08, 0.08, 0.1),
-      "center",
+      right, text, cx, cy, trimWpt * 0.76, trimHpt * 0.46, nunito,
+      Math.round(baseTextSize * TEXT_SCALE), baseLeading, 12, rgb(0.08, 0.08, 0.1), "center",
     );
 
-    // Vine
-    drawVineSafe(right, cx, contentY + trimHpt * 0.28, trimWpt * 0.5, rgb(0.35, 0.4, 0.55), 0.28, trace);
+    // Vine (nu synlig)
+    drawVineSafe(right, cx, contentY + trimHpt * 0.28, trimWpt * 0.56, rgb(0.25, 0.32, 0.55), 0.55, trace);
 
     // Sidnummer
     const pageNum = 2 + i * 2 + 1;
@@ -763,8 +692,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   {
     const page = pdfDoc.addPage([pageW, pageH]);
     page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
-    const cx = contentX + trimWpt / 2,
-      cy = contentY + trimHpt / 2;
+    const cx = contentX + trimWpt / 2, cy = contentY + trimHpt / 2;
     drawWrappedCenterColor(page, "SLUT", cx, cy, trimWpt * 0.5, trimHpt * 0.2, baloo, Math.min(trimWpt, trimHpt) * 0.12, 1.06, 24, rgb(0.1, 0.1, 0.1));
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   }
@@ -799,13 +727,9 @@ async function handleUploadRequest(req, env) {
     const uploads = [];
     for (const it of items) {
       const hasIdentity = Number.isFinite(it?.page) || it?.kind === "cover";
-      if (!hasIdentity) {
-        uploads.push({ page: it?.page ?? null, error: "missing page/kind" });
-        continue;
-      }
+      if (!hasIdentity) { uploads.push({ page: it?.page ?? null, error: "missing page/kind" }); continue; }
       if (typeof it?.data_url !== "string" || !it.data_url.startsWith("data:image/")) {
-        uploads.push({ page: it.page ?? it.kind, error: "invalid data_url" });
-        continue;
+        uploads.push({ page: it.page ?? it.kind, error: "invalid data_url" }); continue;
       }
       try {
         const idHint = it.kind === "cover" ? "cover" : `page-${it.page}`;
@@ -836,7 +760,7 @@ async function handlePdfRequest(req, env) {
   if (!story || !Array.isArray(story?.book?.pages)) {
     return new Response(JSON.stringify({ error: "Missing story" }), {
       status: 400,
-      headers: { ...jsonHeaders, "x-request-id": reqId },
+      headers: { ...JSON_HEADERS, "x-request-id": reqId },
     });
   }
 
@@ -874,7 +798,7 @@ async function handleDiagRequest(_req, env) {
       checks.push({ url: u, error: String(e?.message || e) });
     }
   }
-  return ok({ font_base: base, has_fontkit: true, checks });
+  return ok({ font_base: base, has_fontkit: !!fontkit, checks });
 }
 
 /* --------------------------- Story endpoints ------------------------- */
@@ -1051,7 +975,7 @@ Returnera enbart json.`.trim();
       }
 
       // Default 404
-      return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: jsonHeaders });
+      return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: JSON_HEADERS });
     } catch (e) {
       // Fångar ALLT så att CORS alltid följer med på fel
       return err(e?.message || "internal-error", 500);
