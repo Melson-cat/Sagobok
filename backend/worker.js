@@ -415,38 +415,52 @@ function drawWrappedCenterColor(
 }
 
 /* ----------------------------- Vine (fill) --------------------------- */
-function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.29,0.34,0.55), opacity = 0.55, trace){
-  try{
-    const band = `
-      M 0 -2
-      C 30 12, 60 -16, 90 -2
-      C 120 12, 150 -16, 180 -2
-      C 210 12, 240 -16, 270 -2
-      C 300 12, 330 -16, 360 -2
-      L 360 2
-      C 330 18, 300 -10, 270 2
-      C 240 18, 210 -10, 180 2
-      C 150 18, 120 -10, 90 2
-      C 60 18, 30 -10, 0 2
-      Z
-    `;
-    const leaves = `
-      M 60 0 c 7 8, 11 14, 12 20 c -10 -3, -16 -7, -22 -13 Z
-      M 300 0 c -7 -8, -11 -14, -12 -20 c 10 3, 16 7, 22 13 Z
-    `;
-    const baseW = 360;
-    const scale = widthPt / baseW;
-    const x = centerX - widthPt/2;
+function drawVine(page, centerX, y, widthPt, color = rgb(0.25,0.32,0.55), stroke = 2) {
+  const half = widthPt / 2;
+  const x0 = centerX - half;
 
-    page.drawSvgPath(band, { x, y, scale, color, opacity: Math.min(0.8, Math.max(0.2, opacity)) });
-    page.drawSvgPath(band, { x, y: y+0.8, scale, color: rgb(1,1,1), opacity: Math.min(opacity*0.25, 0.22) });
-    page.drawSvgPath(leaves, { x, y, scale, color: rgb(0.22,0.26,0.42), opacity: Math.min(0.9, opacity) });
+  // --- 1) Try SVG path (fast path)
+  try {
+    if (typeof page.drawSvgPath === "function") {
+      const baseW = 360;
+      const scale = widthPt / baseW;
+      const path = "M 0 0 C 30 14, 60 -14, 90 0 C 120 14, 150 -14, 180 0 C 210 14, 240 -14, 270 0 C 300 14, 330 -14, 360 0";
+      page.drawSvgPath(path, {
+        x: x0, y,
+        scale,
+        borderColor: color,
+        borderWidth: stroke,
+        lineCap: "round",
+        lineJoin: "round",
+      });
+      return; // success
+    }
+  } catch { /* fall through to polyline */ }
 
-    tr(trace, "vine:drawn", { y, widthPt });
-  }catch(e){
-    tr(trace, "vine:error", { error: String(e?.message || e) });
+  // --- 2) Polyline fallback (always works)
+  const segments = 160;                 // smoothness
+  const amp = 10;                       // amplitude in pt
+  const freq = Math.PI * 4;             // ~2 waves across width
+  let prevX = x0, prevY = y;
+  for (let i = 1; i <= segments; i++) {
+    const t = i / segments;
+    const X = x0 + t * widthPt;
+    const Y = y + Math.sin(t * freq) * amp;
+    page.drawLine({
+      start: { x: prevX, y: prevY },
+      end:   { x: X,     y: Y     },
+      thickness: stroke,
+      color,
+      lineCap: "round",
+    });
+    prevX = X; prevY = Y;
   }
+
+  // two tiny leaves
+  page.drawEllipse({ x: centerX - widthPt*0.25, y: y + amp*0.6, xScale: 6, yScale: 3, color, borderColor: color });
+  page.drawEllipse({ x: centerX + widthPt*0.25, y: y - amp*0.6, xScale: 6, yScale: 3, color, borderColor: color });
 }
+
 
 /* ------------------------- Fonts embedding --------------------------- */
 // fetchBytes måste finnas innan embedCustomFont
