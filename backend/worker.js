@@ -460,51 +460,60 @@ function drawWrappedCenterColor(
   return { size: minSize, lines: [] };
 }
 
-/* ----------------------------- Vine (stroke) ------------------------- */
-function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.35, 0.4, 0.55), opacity = 0.35, trace) {
-  try {
-    const path = `
-      M 0 0
-      C 30 14, 60 -14, 90 0
-      C 120 14, 150 -14, 180 0
-      C 210 14, 240 -14, 270 0
-      C 300 14, 330 -14, 360 0
-      M 60 0 c 6 8, 10 12, 12 18 c -8 -2, -12 -6, -18 -12 z
-      M 300 0 c -6 -8, -10 -12, -12 -18 c 8 2, 12 6, 18 12 z
-    `;
-    const baseW = 360;
-    const scale = widthPt / baseW;
-    page.drawSvgPath(path, { x: centerX - widthPt / 2, y, scale, borderColor: color, borderWidth: 1.4, opacity });
-    tr(trace, "vine:drawn", { widthPt });
-  } catch (e) {
-    tr(trace, "vine:error", { error: String(e?.message || e) });
-  }
+function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.35,0.4,0.55), opacity = 0.28, trace){
+  const path = `
+    M 0 0
+    C 30 14, 60 -14, 90 0
+    C 120 14, 150 -14, 180 0
+    C 210 14, 240 -14, 270 0
+    C 300 14, 330 -14, 360 0
+    M 60 0 c 6 8, 10 12, 12 18 c -8 -2, -12 -6, -18 -12 z
+    M 300 0 c -6 -8, -10 -12, -12 -18 c 8 2, 12 6, 18 12 z
+  `;
+  const baseW = 360;
+  const scale = widthPt / baseW;
+
+  // Säkrare: använd borderOpacity, lineCap/Join och kasta vidare fel
+  page.drawSvgPath(path, {
+    x: centerX - widthPt/2,
+    y,
+    scale,
+    borderColor: color,
+    borderWidth: 1.6,
+    borderOpacity: opacity,     // <— viktig: stroke-opacity
+    lineCap: 'round',
+    lineJoin: 'round'
+  });
+
+  // valfritt: tunn extra highlight
+  page.drawSvgPath("M 0 0 C 30 14, 60 -14, 90 0 C 120 14, 150 -14, 180 0",{
+    x: centerX - widthPt/2,
+    y: y + 0.8,
+    scale,
+    borderColor: rgb(1,1,1),
+    borderWidth: 0.6,
+    borderOpacity: Math.min(opacity*0.45, 0.25),
+    lineCap: 'round',
+    lineJoin: 'round'
+  });
+
+  tr?.(trace, "vine:drawn", { y, widthPt });
 }
 
+
 /* ------------------------- Fonts embedding --------------------------- */
-async function fetchBytes(trace, url) {
-  tr(trace, "font:fetch", { url });
-  const r = await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
-  tr(trace, "font:fetch:done", { url, status: r.status, ct: r.headers.get("content-type"), cl: r.headers.get("content-length") });
-  if (!r.ok) throw new Error(`fetch ${r.status}`);
-  const bytes = new Uint8Array(await r.arrayBuffer());
-  tr(trace, "font:bytes", { url, bytes: bytes.length });
-  return bytes;
-}
-async function embedCustomFont(trace, pdfDoc, url) {
-  // RÄTT: registrera fontkit på *instansen*
-  try {
-    pdfDoc.registerFontkit(fontkit);
-  } catch (_) {}
+// 1) Ta bort den felaktiga register-raden i embedCustomFont (vi registrerar redan i buildPdf)
+async function embedCustomFont(trace, pdfDoc, url, { subset = true } = {}) {
   const bytes = await fetchBytes(trace, url);
-  const font = await pdfDoc.embedFont(bytes, { subset: true });
-  tr(trace, "font:embedded", { url });
+  const font = await pdfDoc.embedFont(bytes, { subset }); // <- styr subsetting här
+  tr(trace, "font:embedded", { url, subset });
   return font;
 }
-async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
+
+async function getFontOrFallback(trace, pdfDoc, label, urls, standardName, subset = true) {
   for (const url of urls) {
     try {
-      return await embedCustomFont(trace, pdfDoc, url);
+      return await embedCustomFont(trace, pdfDoc, url, { subset });
     } catch (e) {
       tr(trace, "font:embed-error", { url, error: String(e?.message || e) });
     }
@@ -512,6 +521,7 @@ async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
   tr(trace, "font:fallback", { label, standard: standardName });
   return await pdfDoc.embedFont(standardName);
 }
+
 
 /* ---------------------------- Build PDF ------------------------------ */
 async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }, env, trace) {
@@ -642,20 +652,24 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     let y = contentY + trimHpt - mmToPt(GRID.outer_mm + 6) - blockH;
 
     for (const ln of fitT.lines) {
-      const w = baloo.widthOfTextAtSize(ln, fitT.size);
-      const x = tx + (tw - w) / 2;
-      coverPage.drawText(ln, { x, y, size: fitT.size, font: baloo, color: rgb(0.05, 0.05, 0.08) });
-      y += titleLH;
-    }
-    if (fitS) {
-      y += mmToPt(4);
-      for (const ln of fitS.lines) {
-        const w = nunitoSemi.widthOfTextAtSize(ln, fitS.size);
-        const x = tx + (tw - w) / 2;
-        drawTextWithOutline(coverPage, ln, x, y, fitS.size, nunitoSemi, { outlineScale: 0.035, shadowOpacity: 0.15 });
-        y += subLH;
-      }
-    }
+  const w = baloo.widthOfTextAtSize(ln, fitT.size);
+  const x = tx + (tw - w) / 2;
+  coverPage.drawText(ln, {
+    x, y, size: fitT.size, font: baloo, color: rgb(0.05,0.05,0.08)
+  });
+  y += titleLH;
+}
+  if (fitS) {
+  y += mmToPt(4);
+  for (const ln of fitS.lines) {
+    const w = nunitoSemi.widthOfTextAtSize(ln, fitS.size);
+    const x = tx + (tw - w) / 2;
+    coverPage.drawText(ln, {
+      x, y, size: fitS.size, font: nunitoSemi, color: rgb(0.12,0.12,0.12)
+    });
+    y += subLH;
+  }
+}
 
     if (mode === "preview" && watermark_text) drawWatermark(coverPage, watermark_text);
   } catch (e) {
