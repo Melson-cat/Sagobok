@@ -478,11 +478,9 @@ function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.35,0.4,0.55), opa
     x: centerX - widthPt/2,
     y,
     scale,
-    borderColor: color,
-    borderWidth: 1.6,
-    borderOpacity: opacity,     // <— viktig: stroke-opacity
-    lineCap: 'round',
-    lineJoin: 'round'
+   borderColor: color,
+ borderWidth: 1.8,
+ opacity: Math.min(0.6, Math.max(0.2, opacity)),
   });
 
   // valfritt: tunn extra highlight
@@ -503,12 +501,14 @@ function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.35,0.4,0.55), opa
 
 /* ------------------------- Fonts embedding --------------------------- */
 // 1) Ta bort den felaktiga register-raden i embedCustomFont (vi registrerar redan i buildPdf)
-async function embedCustomFont(trace, pdfDoc, url, { subset = true } = {}) {
-  const bytes = await fetchBytes(trace, url);
-  const font = await pdfDoc.embedFont(bytes, { subset }); // <- styr subsetting här
-  tr(trace, "font:embedded", { url, subset });
-  return font;
-}
+async function embedCustomFont(trace, pdfDoc, url) {
+   // Fontkit ska redan vara registrerat en gång i buildPdf:
+   // pdfDoc.registerFontkit(fontkit)
+   const bytes = await fetchBytes(trace, url);   // den funktionen finns redan
+   const font = await pdfDoc.embedFont(bytes, { subset: true });
+   tr(trace, "font:embedded", { url });
+   return font;
+ }
 
 async function getFontOrFallback(trace, pdfDoc, label, urls, standardName, subset = true) {
   for (const url of urls) {
