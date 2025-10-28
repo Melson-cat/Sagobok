@@ -1092,7 +1092,6 @@ async function handlePdfRequest(req, env) {
       (mode === "print" ? "_PRINT.pdf" : "_PREVIEW.pdf");
     const headers = new Headers({
       "content-type": "application/pdf",
-      "content-length": String(bytes.length),
       "content-disposition": `inline; filename="${filename}"`,
       "x-request-id": reqId,
       ...CORS,
