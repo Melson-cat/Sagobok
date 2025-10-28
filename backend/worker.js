@@ -1,41 +1,53 @@
 // ============================================================================
-// BokPiloten – Worker v23 "fontkit per-request + vine fix + robust fonts"
+// BokPiloten – Worker v23 "Stabil PDF, Fontkit, Vine-stroke, Unik bildprompt"
 // Endpoints: story, ref-image, images, image/regenerate, images/upload, cover, pdf, diag
 // Env: API_KEY, GEMINI_API_KEY, IMAGES_API_TOKEN, CF_ACCOUNT_ID,
-//      CF_IMAGES_ACCOUNT_HASH, (CF_IMAGES_VARIANT), FONT_BASE_URL
+//      CF_IMAGES_ACCOUNT_HASH, CF_IMAGES_VARIANT, FONT_BASE_URL
 // ============================================================================
-
-/* eslint-disable no-unused-vars */
 import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
-import fontkit from "@pdf-lib/fontkit"; // single, canonical import
+import pdfFontkit from "@pdf-lib/fontkit";
 
 /* ------------------------------ Globals ------------------------------ */
 const OPENAI_MODEL = "gpt-4o-mini";
 
-// CORS
+/* ------------------------------- CORS -------------------------------- */
 const CORS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, OPTIONS",
   "access-control-allow-headers": "*",
   "access-control-max-age": "600",
   "access-control-expose-headers": "Content-Disposition, X-Request-Id",
-  "vary": "Origin",
+  vary: "Origin",
 };
-const JSONH = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...CORS };
-const ok = (data, init = {}) => new Response(JSON.stringify(data), { status: init.status || 200, headers: { ...JSONH, ...(init.headers || {}) } });
-const err = (msg, code = 400, extra = {}) => ok({ error: msg, ...extra }, { status: code });
+const JSONH = {
+  "content-type": "application/json; charset=utf-8",
+  "cache-control": "no-store",
+  ...CORS,
+};
+const ok = (data, init = {}) =>
+  new Response(JSON.stringify(data), {
+    status: init.status || 200,
+    headers: { ...JSONH, ...(init.headers || {}) },
+  });
+const err = (msg, code = 400, extra = {}) =>
+  ok({ error: msg, ...extra }, { status: code });
 const withCORS = (resp) => {
   const h = new Headers(resp.headers);
   for (const [k, v] of Object.entries(CORS)) h.set(k, v);
   return new Response(resp.body, { status: resp.status, headers: h });
 };
-const log = (...a) => { try { console.log(...a); } catch {} };
+const log = (...a) => {
+  try {
+    console.log(...a);
+  } catch {}
+};
 
 /* -------------------------- Trace / Diag log ------------------------- */
 const traceStart = () => [];
-const tr = (trace, step, extra = {}) => trace.push({ t: new Date().toISOString(), step, ...extra });
+const tr = (trace, step, extra = {}) =>
+  trace && trace.push({ t: new Date().toISOString(), step, ...extra });
 
-/* ----------------------- Utility / Constants ------------------------- */
+/* ----------------------- Units / Grid / Fonts ------------------------ */
 const MM_PER_INCH = 25.4;
 const PT_PER_INCH = 72;
 const PT_PER_MM = PT_PER_INCH / MM_PER_INCH;
@@ -44,6 +56,7 @@ const mmToPt = (mm) => mm * PT_PER_MM;
 const TRIMS = { square210: { w_mm: 210, h_mm: 210, default_bleed_mm: 3 } };
 const GRID = { outer_mm: 10, gap_mm: 8, pad_mm: 12, text_min_mm: 30, text_max_mm: 58 };
 const TEXT_SCALE = 1.18;
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 
 function fontSpecForReadingAge(ra = 6) {
   if (ra <= 5) return { size: 22, leading: 1.36 };
@@ -51,7 +64,6 @@ function fontSpecForReadingAge(ra = 6) {
   if (ra <= 12) return { size: 16, leading: 1.34 };
   return { size: 16, leading: 1.34 };
 }
-const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 
 /* ------------------------- HTTP helpers ------------------------------ */
 async function fetchJSON(url, opts) {
@@ -61,27 +73,33 @@ async function fetchJSON(url, opts) {
   return j;
 }
 
-async function fetchBytesWithCache(url) {
-  const r = await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
-  if (!r.ok) throw new Error(`fetch ${r.status} for ${url}`);
-  return new Uint8Array(await r.arrayBuffer());
-}
-
 /* --------------------- OpenAI JSON-only helper ----------------------- */
 async function openaiJSON(env, system, user) {
-  const sys = system.toLowerCase().includes("json") ? system : system + "\nSvara endast som giltig json.";
-  const usr = user.toLowerCase().includes("json") ? user : user + "\n(returnera bara json)";
+  const sys = system.toLowerCase().includes("json")
+    ? system
+    : system + "\nSvara endast som giltig json.";
+  const usr = user.toLowerCase().includes("json")
+    ? user
+    : user + "\n(returnera bara json)";
+
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
-    headers: { authorization: `Bearer ${env.API_KEY}`, "content-type": "application/json" },
+    headers: {
+      authorization: `Bearer ${env.API_KEY}`,
+      "content-type": "application/json",
+    },
     body: JSON.stringify({
       model: OPENAI_MODEL,
       response_format: { type: "json_object" },
       temperature: 0.6,
-      messages: [{ role: "system", content: sys }, { role: "user", content: usr }],
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: usr },
+      ],
     }),
   });
-  if (!r.ok) throw new Error(`OpenAI ${r.status} ${await r.text().catch(() => "")}`);
+  if (!r.ok)
+    throw new Error(`OpenAI ${r.status} ${await r.text().catch(() => "")}`);
   const j = await r.json();
   return JSON.parse(j?.choices?.[0]?.message?.content || "{}");
 }
@@ -90,9 +108,13 @@ async function openaiJSON(env, system, user) {
 function findGeminiImagePart(json) {
   const cand = json?.candidates?.[0];
   const parts = cand?.content?.parts || cand?.content?.[0]?.parts || [];
-  let p = parts.find((x) => x?.inlineData?.mimeType?.startsWith("image/") && x?.inlineData?.data);
+  let p = parts.find(
+    (x) => x?.inlineData?.mimeType?.startsWith("image/") && x?.inlineData?.data
+  );
   if (p) return { mime: p.inlineData.mimeType, b64: p.inlineData.data };
-  p = parts.find((x) => typeof x?.text === "string" && x.text.startsWith("data:image/"));
+  p = parts.find(
+    (x) => typeof x?.text === "string" && x.text.startsWith("data:image/")
+  );
   if (p) {
     const m = p.text.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
     if (m) return { mime: m[1], b64: m[2] };
@@ -104,12 +126,19 @@ function findGeminiImagePart(json) {
 async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
   const key = env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY missing");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(key)}`;
+  const url =
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=" +
+    encodeURIComponent(key);
 
   const parts = [];
-  if (item.character_ref_b64) parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
+  if (item.character_ref_b64)
+    parts.push({
+      inlineData: { mimeType: "image/png", data: item.character_ref_b64 },
+    });
   if (Array.isArray(item.style_refs_b64)) {
-    for (const b64 of item.style_refs_b64.slice(0, 3)) if (typeof b64 === "string" && b64.length > 64) parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
+    for (const b64 of item.style_refs_b64.slice(0, 3))
+      if (typeof b64 === "string" && b64.length > 64)
+        parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
   }
   if (item.guidance) parts.push({ text: item.guidance });
   if (item.coherence_code) parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
@@ -123,14 +152,26 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
       const r = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.9 } }),
+        body: JSON.stringify({
+          contents: [{ role: "user", parts }],
+          generationConfig: {
+            responseModalities: ["IMAGE"],
+            temperature: 0.35,
+            topP: 0.9,
+          },
+        }),
         signal: ctl.signal,
       });
       clearTimeout(t);
       if (!r.ok) throw new Error(`Gemini ${r.status} ${await r.text().catch(() => "")}`);
       const j = await r.json();
       const got = findGeminiImagePart(j);
-      if (got?.b64 && got?.mime) return { image_url: `data:${got.mime};base64,${got.b64}`, provider: "google", b64: got.b64 };
+      if (got?.b64 && got?.mime)
+        return {
+          image_url: `data:${got.mime};base64,${got.b64}`,
+          provider: "google",
+          b64: got.b64,
+        };
       if (got?.url) return { image_url: got.url, provider: "google" };
       throw new Error("No image in response");
     } catch (e) {
@@ -145,8 +186,10 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
 /* ------------------------------ Styles ------------------------------- */
 function styleHint(style = "cartoon") {
   const s = (style || "cartoon").toLowerCase();
-  if (s === "storybook") return "storybook watercolor, soft edges, paper texture, warm and cozy";
-  if (s === "pixar") return "stylized 3D animated film still (not photographic): enlarged eyes, simplified forms, clean gradients";
+  if (s === "storybook")
+    return "storybook watercolor, soft edges, paper texture, warm and cozy";
+  if (s === "pixar")
+    return "stylized 3D animated film still (not photographic): enlarged eyes, simplified forms, clean gradients";
   if (s === "comic") return "bold comic style, inked lines, flat colors";
   if (s === "painting") return "soft painterly illustration, visible brushwork";
   return "expressive 2D cartoon: thick-and-thin outlines, cel shading, vibrant palette";
@@ -188,14 +231,19 @@ Hårda regler: 12–20 sidor, 2–4 meningar/sida. Konkreta scener i huvudmiljö
  Titeln ska vara säljbar. Fyll "tagline" och "back_blurb" (1–3 meningar).
 `;
 function heroDescriptor({ category, name, age, traits }) {
-  if ((category || "kids") === "pets") return `HJÄLTE: ett husdjur vid namn ${name || "Nova"}; egenskaper: ${traits || "nyfiken, lekfull"}.`;
+  if ((category || "kids") === "pets")
+    return `HJÄLTE: ett husdjur vid namn ${name || "Nova"}; egenskaper: ${
+      traits || "nyfiken, lekfull"
+    }.`;
   const a = parseInt(age || 6, 10);
-  return `HJÄLTE: ett barn vid namn ${name || "Nova"} (${a} år), egenskaper: ${traits || "modig, omtänksam"}.`;
+  return `HJÄLTE: ett barn vid namn ${name || "Nova"} (${a} år), egenskaper: ${
+    traits || "modig, omtänksam"
+  }.`;
 }
 function normalizePlan(pages) {
   const out = [];
+  const order = ["EW", "M", "CU", "W"];
   pages.forEach((p, i) => {
-    const order = ["EW", "M", "CU", "W"];
     const t = order[i % order.length];
     const lens = { EW: 28, W: 35, M: 50, CU: 85 }[t] || 35;
     const size = { EW: 30, W: 45, M: 60, CU: 80 }[t] || 60;
@@ -208,19 +256,35 @@ function buildSeriesContext(story) {
   const locs = [];
   const beats = pages.map((p) => {
     const key = (p.scene || p.text || "").replace(/\s+/g, " ").trim();
-    const lkey = key.toLowerCase().match(/(strand|skog|kök|sovrum|park|hav|stad|skola|gård|sjö|berg)/)?.[1] || "plats";
+    const lkey =
+      key
+        .toLowerCase()
+        .match(/(strand|skog|kök|sovrum|park|hav|stad|skola|gård|sjö|berg)/)?.[1] ||
+      "plats";
     if (!locs.includes(lkey)) locs.push(lkey);
     return `p${p.page}: ${key}`;
   });
-  return [`SERIES CONTEXT — title: ${story?.book?.title || "Sagobok"}`, `locations: ${locs.join(", ")}`, `beats: ${beats.join(" | ")}`].join("\n");
+  return [
+    `SERIES CONTEXT — title: ${story?.book?.title || "Sagobok"}`,
+    `locations: ${locs.join(", ")}`,
+    `beats: ${beats.join(" | ")}`,
+  ].join("\n");
 }
 function shotLine(f = {}) {
   const map = { EW: "extra wide", W: "wide", M: "medium", CU: "close-up" };
-  return `${map[f.shot_type || "M"]} shot, ~${f.subject_size_percent || 60}% subject, ≈${f.lens_mm || 35}mm`;
+  return `${map[f.shot_type || "M"]} shot, ~${
+    f.subject_size_percent || 60
+  }% subject, ≈${f.lens_mm || 35}mm`;
 }
 function buildFramePrompt({ style, story, page, pageCount, frame, characterName }) {
   const series = buildSeriesContext(story);
   const styleLine = styleHint(style);
+  // unik salt för att undvika bilddubbletter
+  const salt =
+    "UNIQUE_TOKEN:" +
+    page.page +
+    "-" +
+    ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
   return [
     series,
     `This is page ${page.page} of ${pageCount}.`,
@@ -232,7 +296,11 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName 
     `SCENE: ${page.scene || page.text || ""}`,
     `FRAMING: ${shotLine(frame)}.`,
     `VARIETY: each page unique yet coherent.`,
-  ].filter(Boolean).join("\n");
+    `PAGE_ID: ${page.page}. DO NOT REUSE the same composition as any previous page.`,
+    salt,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 function characterCardPrompt({ style, bible, traits }) {
   const mc = bible?.main_character || {};
@@ -252,14 +320,17 @@ function buildCoverPrompt({ style, story, characterName }) {
     `Square composition (1:1). No text or logos.`,
     `Focus on the main hero (${characterName}) from the reference; perfect identity consistency.`,
     theme ? `Theme cue: ${theme}.` : "",
-  ].filter(Boolean).join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 /* ---------------------- Cloudflare Images utils ---------------------- */
 function dataUrlToBlob(dataUrl) {
   const m = dataUrl?.match?.(/^data:([^;]+);base64,(.+)$/i);
   if (!m) return null;
-  const mime = m[1], b64 = m[2];
+  const mime = m[1],
+    b64 = m[2];
   const bin = atob(b64);
   const u8 = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
@@ -281,11 +352,14 @@ async function uploadOneToCFImages(env, { data_url, id }) {
   if (!file) throw new Error("Bad data_url");
   const form = new FormData();
   form.append("file", file.blob, id || `page-${Date.now()}.png`);
-  const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/images/v1`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${env.IMAGES_API_TOKEN}` },
-    body: form,
-  });
+  const r = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/images/v1`,
+    {
+      method: "POST",
+      headers: { authorization: `Bearer ${env.IMAGES_API_TOKEN}` },
+      body: form,
+    }
+  );
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.success) throw new Error(`CF Images ${r.status} ${JSON.stringify(j)}`);
   const image_id = j?.result?.id;
@@ -307,7 +381,9 @@ async function getImageBytes(env, row) {
     if (pickUrl && /^https?:\/\//i.test(pickUrl)) {
       const r0 = await fetch(pickUrl, { cf: { cacheTtl: 1200, cacheEverything: true } });
       if (r0.ok) return new Uint8Array(await r0.arrayBuffer());
-      const r1 = await fetch(pickUrl, { cf: { cacheTtl: 1200, cacheEverything: true, image: { format: "jpeg", quality: 90 } } });
+      const r1 = await fetch(pickUrl, {
+        cf: { cacheTtl: 1200, cacheEverything: true, image: { format: "jpeg", quality: 90 } },
+      });
       if (r1.ok) return new Uint8Array(await r1.arrayBuffer());
     }
     if (row?.data_url?.startsWith?.("data:image/")) {
@@ -320,18 +396,26 @@ async function getImageBytes(env, row) {
       }
     }
     return null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 async function embedImage(pdfDoc, bytes) {
   if (!bytes) return null;
-  try { return await pdfDoc.embedPng(bytes); } catch {}
-  try { return await pdfDoc.embedJpg(bytes); } catch {}
+  try {
+    return await pdfDoc.embedPng(bytes);
+  } catch {}
+  try {
+    return await pdfDoc.embedJpg(bytes);
+  } catch {}
   return null;
 }
 function drawImageCover(page, img, boxX, boxY, boxW, boxH) {
-  const iw = img.width, ih = img.height;
+  const iw = img.width,
+    ih = img.height;
   const scale = Math.max(boxW / iw, boxH / ih);
-  const w = iw * scale, h = ih * scale;
+  const w = iw * scale,
+    h = ih * scale;
   const x = boxX + (boxW - w) / 2;
   const y = boxY + (boxH - h) / 2;
   page.drawImage(img, { x, y, width: w, height: h });
@@ -342,19 +426,71 @@ function drawWatermark(page, text = "FÖRHANDSVISNING", color = rgb(0.5, 0.5, 0.
   const { width, height } = page.getSize();
   const fontSize = Math.min(width, height) * 0.15;
   const angleDeg = (Math.atan2(height, width) * 180) / Math.PI;
-  page.drawText(String(text ?? ""), { x: width * 0.06, y: height * 0.18, size: fontSize, color, opacity: 0.07, rotate: degrees(angleDeg) });
+  page.drawText(String(text ?? ""), {
+    x: width * 0.06,
+    y: height * 0.18,
+    size: fontSize,
+    color,
+    opacity: 0.07,
+    rotate: degrees(angleDeg),
+  });
 }
-function drawTextWithOutline(page, text, x, y, size, font, opts = {}) {
-  const { fill = rgb(1,1,1), outline = rgb(0,0,0), shadow = true, shadowOpacity = 0.25, outlineScale = 0.06 } = opts;
+function drawTextWithOutline(
+  page,
+  text,
+  x,
+  y,
+  size,
+  font,
+  opts = {}
+) {
+  const {
+    fill = rgb(1, 1, 1),
+    outline = rgb(0, 0, 0),
+    shadow = true,
+    shadowOpacity = 0.25,
+    outlineScale = 0.06,
+  } = opts;
   const safeText = String(text ?? "");
   const s = clamp(size || 12, 4, 200);
   const d = Math.max(0.8, s * outlineScale);
-  if (shadow) page.drawText(safeText, { x: x + d * 0.6, y: y - d * 0.6, size: s, font, color: rgb(0,0,0), opacity: shadowOpacity });
-  const offs = [[d,0],[-d,0],[0,d],[0,-d],[d,d],[d,-d],[-d,d],[-d,-d]];
-  for (const [ox, oy] of offs) page.drawText(safeText, { x: x + ox, y: y + oy, size: s, font, color: outline });
+  if (shadow)
+    page.drawText(safeText, {
+      x: x + d * 0.6,
+      y: y - d * 0.6,
+      size: s,
+      font,
+      color: rgb(0, 0, 0),
+      opacity: shadowOpacity,
+    });
+  const offs = [
+    [d, 0],
+    [-d, 0],
+    [0, d],
+    [0, -d],
+    [d, d],
+    [d, -d],
+    [-d, d],
+    [-d, -d],
+  ];
+  for (const [ox, oy] of offs)
+    page.drawText(safeText, { x: x + ox, y: y + oy, size: s, font, color: outline });
   page.drawText(safeText, { x, y, size: s, font, color: fill });
 }
-function drawWrappedCenterColor(page, text, centerX, centerY, maxW, maxH, font, baseSize, baseLeading, minSize = 12, color = rgb(0.08,0.08,0.08), align = "center") {
+function drawWrappedCenterColor(
+  page,
+  text,
+  centerX,
+  centerY,
+  maxW,
+  maxH,
+  font,
+  baseSize,
+  baseLeading,
+  minSize = 12,
+  color = rgb(0.08, 0.08, 0.08),
+  align = "center"
+) {
   const safe = String(text ?? "");
   for (let size = baseSize; size >= minSize; size--) {
     const lineH = size * baseLeading;
@@ -364,15 +500,23 @@ function drawWrappedCenterColor(page, text, centerX, centerY, maxW, maxH, font, 
     for (const w of words) {
       const t = line ? line + " " + w : w;
       if (font.widthOfTextAtSize(t, size) <= maxW) line = t;
-      else { if (line) lines.push(line); line = w; }
+      else {
+        if (line) lines.push(line);
+        line = w;
+      }
     }
     if (line) lines.push(line);
     const blockH = lines.length * lineH;
     if (blockH <= maxH) {
-      let y = centerY + (blockH / 2) - lineH;
+      let y = centerY + blockH / 2 - lineH;
       for (const ln of lines) {
         const w = font.widthOfTextAtSize(ln, size);
-        const x = align === "center" ? centerX - w / 2 : align === "right" ? centerX + maxW/2 - w : centerX - maxW/2;
+        const x =
+          align === "center"
+            ? centerX - w / 2
+            : align === "right"
+            ? centerX + maxW / 2 - w
+            : centerX - maxW / 2;
         page.drawText(ln, { x, y, size, font, color });
         y -= lineH;
       }
@@ -382,8 +526,16 @@ function drawWrappedCenterColor(page, text, centerX, centerY, maxW, maxH, font, 
   return { size: minSize, lines: [] };
 }
 
-/* ----------------------------- Vine (safe) --------------------------- */
-function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.35,0.4,0.55), opacity = 0.22, trace) {
+/* ----------------------------- Vine (stroke) ------------------------- */
+function drawVineSafe(
+  page,
+  centerX,
+  y,
+  widthPt,
+  color = rgb(0.35, 0.4, 0.55),
+  opacity = 0.35,
+  trace
+) {
   try {
     const path = `
       M 0 0
@@ -396,44 +548,70 @@ function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.35,0.4,0.55), opa
     `;
     const baseW = 360;
     const scale = widthPt / baseW;
-    page.drawSvgPath(path, { x: centerX - widthPt/2, y, scale, color, opacity });
-    if (trace) tr(trace, "vine:drawn", { widthPt });
+    page.drawSvgPath(path, {
+      x: centerX - widthPt / 2,
+      y,
+      scale,
+      borderColor: color,
+      borderWidth: 1.4,
+      opacity,
+    });
+    tr(trace, "vine:drawn", { widthPt });
   } catch (e) {
-    if (trace) tr(trace, "vine:error", { error: String(e?.message || e) });
+    tr(trace, "vine:error", { error: String(e?.message || e) });
   }
 }
 
 /* ------------------------- Fonts embedding --------------------------- */
-async function fetchFontBytes(trace, url) {
+async function fetchBytes(trace, url) {
   tr(trace, "font:fetch", { url });
   const r = await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
-  tr(trace, "font:fetch:done", { url, status: r.status, ct: r.headers.get("content-type"), cl: r.headers.get("content-length") });
+  tr(trace, "font:fetch:done", {
+    url,
+    status: r.status,
+    ct: r.headers.get("content-type"),
+    cl: r.headers.get("content-length"),
+  });
   if (!r.ok) throw new Error(`fetch ${r.status}`);
   const bytes = new Uint8Array(await r.arrayBuffer());
   tr(trace, "font:bytes", { url, bytes: bytes.length });
   return bytes;
 }
 async function embedCustomFont(trace, pdfDoc, url) {
-  try { PDFDocument.registerFontkit(fontkit); } catch (_) {}
-  const bytes = await fetchFontBytes(trace, url);
+  try {
+    PDFDocument.registerFontkit(pdfFontkit);
+  } catch (_) {}
+  const bytes = await fetchBytes(trace, url);
   const font = await pdfDoc.embedFont(bytes, { subset: true });
   tr(trace, "font:embedded", { url });
   return font;
 }
 async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
   for (const url of urls) {
-    try { return await embedCustomFont(trace, pdfDoc, url); }
-    catch (e) { tr(trace, "font:embed-error", { url, error: String(e?.message || e) }); }
+    try {
+      return await embedCustomFont(trace, pdfDoc, url);
+    } catch (e) {
+      tr(trace, "font:embed-error", { url, error: String(e?.message || e) });
+    }
   }
   tr(trace, "font:fallback", { label, standard: standardName });
   return await pdfDoc.embedFont(standardName);
 }
 
-/* ---------------------------- Build PDF ------------------------------- */
-async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }, env, trace) {
+/* ---------------------------- Build PDF ------------------------------ */
+async function buildPdf(
+  { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text },
+  env,
+  trace
+) {
   tr(trace, "pdf:start");
   const trimSpec = TRIMS[trim] || TRIMS.square210;
-  const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
+  const bleed =
+    mode === "print"
+      ? Number.isFinite(bleed_mm)
+        ? bleed_mm
+        : trimSpec.default_bleed_mm
+      : 0;
 
   const trimWpt = mmToPt(trimSpec.w_mm);
   const trimHpt = mmToPt(trimSpec.h_mm);
@@ -443,44 +621,85 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   const contentY = mmToPt(bleed);
 
   const pdfDoc = await PDFDocument.create();
-  // register fontkit PER REQUEST
-  try { pdfDoc.registerFontkit(fontkit); } catch {}
+  PDFDocument.registerFontkit(pdfFontkit);
   tr(trace, "pdf:doc-created");
 
-  // Fonts
-  const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(/\/+$/,"");
+  // Fonts via env base
+  const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(
+    /\/+$/,
+    ""
+  );
   const BALOO = [`${base}/Baloo-bold.ttf`];
   const NUN_R = [`${base}/Nunito-Regular.ttf`];
   const NUN_SB = [`${base}/Nunito-Semibold.ttf`];
 
-  const baloo = await getFontOrFallback(trace, pdfDoc, "baloo", BALOO, StandardFonts.HelveticaBold);
-  const nunito = await getFontOrFallback(trace, pdfDoc, "nunito", NUN_R, StandardFonts.TimesRoman);
-  const nunitoSemi = await getFontOrFallback(trace, pdfDoc, "nunitoSemi", NUN_SB, StandardFonts.Helvetica);
+  const baloo = await getFontOrFallback(
+    trace,
+    pdfDoc,
+    "baloo",
+    BALOO,
+    StandardFonts.HelveticaBold
+  );
+  const nunito = await getFontOrFallback(
+    trace,
+    pdfDoc,
+    "nunito",
+    NUN_R,
+    StandardFonts.TimesRoman
+  );
+  const nunitoSemi = await getFontOrFallback(
+    trace,
+    pdfDoc,
+    "nunitoSemi",
+    NUN_SB,
+    StandardFonts.Helvetica
+  );
   tr(trace, "pdf:fonts-ready");
 
   const readingAge = story?.book?.reading_age || 6;
-  const { size: baseTextSize, leading: baseLeading } = fontSpecForReadingAge(readingAge);
+  const { size: baseTextSize, leading: baseLeading } =
+    fontSpecForReadingAge(readingAge);
 
   const title = story?.book?.title || "Min bok";
-  const subtitle = story?.book?.tagline || (story?.book?.bible?.main_character?.name ? `Med ${story.book.bible.main_character.name}` : "");
-  const blurb = story?.book?.back_blurb || (story?.book?.lesson ? `Lärdom: ${story.book.lesson}.` : "En berättelse skapad med BokPiloten.");
+  const subtitle =
+    story?.book?.tagline ||
+    (story?.book?.bible?.main_character?.name
+      ? `Med ${story.book.bible.main_character.name}`
+      : "");
+  const blurb =
+    story?.book?.back_blurb ||
+    (story?.book?.lesson
+      ? `Lärdom: ${story.book.lesson}.`
+      : "En berättelse skapad med BokPiloten.");
   const pagesStory = [...(story?.book?.pages || [])];
 
-  // indexera inkomna bilder
+  // Indexera inkomna bilder
   let coverSrc = images?.find((x) => x?.kind === "cover" || x?.page === 0) || null;
   const imgByPage = new Map();
   (images || []).forEach((row) => {
-    if (Number.isFinite(row?.page) && row.page > 0 && (row.image_id || row.url || row.image_url || row.data_url)) {
+    if (
+      Number.isFinite(row?.page) &&
+      row.page > 0 &&
+      (row.image_id || row.url || row.image_url || row.data_url)
+    ) {
       imgByPage.set(row.page, row);
     }
   });
 
+  // Normalisera 14 scener (28 inlaga-sidor)
   function mapTo14ScenePages() {
     const want = 14;
     if (pagesStory.length === want) return pagesStory;
     if (pagesStory.length > want) return pagesStory.slice(0, want);
     const out = [...pagesStory];
-    while (out.length < want) out.push(pagesStory[pagesStory.length - 1] || { page: out.length + 1, text: "", scene: "" });
+    while (out.length < want)
+      out.push(
+        pagesStory[pagesStory.length - 1] || {
+          page: out.length + 1,
+          text: "",
+          scene: "",
+        }
+      );
     return out;
   }
   const scenePages = mapTo14ScenePages();
@@ -496,58 +715,83 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
       const coverImg = await embedImage(pdfDoc, bytes);
       if (coverImg) drawImageCover(coverPage, coverImg, 0, 0, pageW, pageH);
     } else {
-      coverPage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.94,0.96,1) });
+      coverPage.drawRectangle({
+        x: contentX,
+        y: contentY,
+        width: trimWpt,
+        height: trimHpt,
+        color: rgb(0.94, 0.96, 1),
+      });
     }
 
-    // top gradient for readability
+    // topp-gradient för läsbarhet
     const safeInset = mmToPt(GRID.outer_mm + 2);
     const tx = contentX + safeInset;
     const tw = trimWpt - safeInset * 2;
-    const steps = 8, h = mmToPt(20);
+    const steps = 8,
+      h = mmToPt(20);
     for (let i = 0; i < steps; i++) {
       const t = (steps - i) / steps;
-      coverPage.drawRectangle({ x: contentX, y: contentY + trimHpt - h + (h/steps)*i, width: trimWpt, height: h/steps, color: rgb(0,0,0), opacity: 0.22 * t });
+      coverPage.drawRectangle({
+        x: contentX,
+        y: contentY + trimHpt - h + (h / steps) * i,
+        width: trimWpt,
+        height: h / steps,
+        color: rgb(0, 0, 0),
+        opacity: 0.22 * t,
+      });
     }
 
-    // simple shrink-to-fit (1–2 lines)
+    // Stabil shrink-to-fit (utan outline för Baloo)
     function splitFit(text, font, maxSize, minSize, maxWidth, maxLines) {
-  const safe = String(text ?? "");
-for (let s = maxSize; s >= minSize; s--) {
-  const words = safe.replace(/\s+/g, " ").trim().split(" ");
-  const lines = [];
-  let line = "";
-  for (const w of words) {
-    const t = line ? line + " " + w : w;
-    const wWidth = font.widthOfTextAtSize(t, s);
-    if (wWidth <= maxWidth) line = t;
-    else {
-      if (line) lines.push(line.trim());
-      line = w;
-    }
-  }
-  if (line) lines.push(line.trim());
-  if (lines.length <= maxLines) {
-    return { size: s, lines };
-  }
-}
-return { size: minSize, lines: [safe] };
-
-      return { size: minSize, lines: [String(text ?? "")] };
+      const safe = String(text ?? "").replace(/\s+/g, " ").trim();
+      for (let s = maxSize; s >= minSize; s--) {
+        const words = safe.split(" ");
+        const lines = [];
+        let line = "";
+        for (const w of words) {
+          const t = line ? line + " " + w : w;
+          if (font.widthOfTextAtSize(t, s) <= maxWidth) line = t;
+          else {
+            if (line) lines.push(line);
+            line = w;
+          }
+        }
+        if (line) lines.push(line);
+        if (lines.length <= maxLines) return { size: s, lines };
+      }
+      return { size: minSize, lines: [safe] };
     }
 
     const maxTitle = Math.min(trimWpt, trimHpt) * 0.16;
     const minTitle = 28;
     const fitT = splitFit(title, baloo, maxTitle, minTitle, tw, 2);
     const titleLH = fitT.size * 1.08;
-    const fitS = subtitle ? splitFit(subtitle, nunitoSemi, Math.max(14, fitT.size * 0.46), 12, tw, 2) : null;
+    const fitS = subtitle
+      ? splitFit(
+          subtitle,
+          nunitoSemi,
+          Math.max(14, fitT.size * 0.46),
+          12,
+          tw,
+          2
+        )
+      : null;
     const subLH = fitS ? fitS.size * 1.12 : 0;
-    const blockH = fitT.lines.length * titleLH + (fitS ? (mmToPt(4) + fitS.lines.length * subLH) : 0);
+    const blockH =
+      fitT.lines.length * titleLH + (fitS ? mmToPt(4) + fitS.lines.length * subLH : 0);
     let y = contentY + trimHpt - mmToPt(GRID.outer_mm + 6) - blockH;
 
     for (const ln of fitT.lines) {
       const w = baloo.widthOfTextAtSize(ln, fitT.size);
       const x = tx + (tw - w) / 2;
-      drawTextWithOutline(coverPage, ln, x, y, fitT.size, baloo);
+      coverPage.drawText(ln, {
+        x,
+        y,
+        size: fitT.size,
+        font: baloo,
+        color: rgb(0.05, 0.05, 0.08),
+      });
       y += titleLH;
     }
     if (fitS) {
@@ -555,25 +799,67 @@ return { size: minSize, lines: [safe] };
       for (const ln of fitS.lines) {
         const w = nunitoSemi.widthOfTextAtSize(ln, fitS.size);
         const x = tx + (tw - w) / 2;
-        drawTextWithOutline(coverPage, ln, x, y, fitS.size, nunitoSemi, { outlineScale: 0.045, shadowOpacity: 0.2 });
+        drawTextWithOutline(coverPage, ln, x, y, fitS.size, nunitoSemi, {
+          outlineScale: 0.035,
+          shadowOpacity: 0.15,
+        });
         y += subLH;
       }
     }
 
-    if (mode === "preview" && watermark_text) drawWatermark(coverPage, watermark_text);
+    if (mode === "preview" && watermark_text)
+      drawWatermark(coverPage, watermark_text);
   } catch (e) {
     tr(trace, "cover:error", { error: String(e?.message || e) });
     const p = pdfDoc.addPage([pageW, pageH]);
-    p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8,0.1,0.1) });
+    p.drawText("Omslag kunde inte renderas.", {
+      x: mmToPt(15),
+      y: mmToPt(15),
+      size: 12,
+      font: nunito,
+      color: rgb(0.8, 0.1, 0.1),
+    });
   }
 
   /* -------- [1] TITELBLAD -------- */
   {
     const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96,0.98,1) });
-    const cx = contentX + trimWpt / 2, cy = contentY + trimHpt * 0.62;
-    drawWrappedCenterColor(page, title, cx, cy, trimWpt*0.76, trimHpt*0.22, baloo, Math.min(trimWpt, trimHpt)*0.12, 1.08, 20, rgb(0.1,0.1,0.1));
-    if (subtitle) drawWrappedCenterColor(page, subtitle, cx, cy - mmToPt(14), trimWpt*0.7, trimHpt*0.12, nunitoSemi, Math.max(14, 22), 1.12, 12, rgb(0.15,0.15,0.15));
+    page.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: rgb(0.96, 0.98, 1),
+    });
+    const cx = contentX + trimWpt / 2,
+      cy = contentY + trimHpt * 0.62;
+    drawWrappedCenterColor(
+      page,
+      title,
+      cx,
+      cy,
+      trimWpt * 0.76,
+      trimHpt * 0.22,
+      baloo,
+      Math.min(trimWpt, trimHpt) * 0.12,
+      1.08,
+      20,
+      rgb(0.1, 0.1, 0.1)
+    );
+    if (subtitle)
+      drawWrappedCenterColor(
+        page,
+        subtitle,
+        cx,
+        cy - mmToPt(14),
+        trimWpt * 0.7,
+        trimHpt * 0.12,
+        nunitoSemi,
+        Math.max(14, 22),
+        1.12,
+        12,
+        rgb(0.15, 0.15, 0.15)
+      );
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   }
 
@@ -585,7 +871,13 @@ return { size: minSize, lines: [safe] };
 
     // Vänster: bild
     const left = pdfDoc.addPage([pageW, pageH]);
-    left.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(1,1,1) });
+    left.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: rgb(1, 1, 1),
+    });
     try {
       const src = imgByPage.get(scene.page);
       let imgObj = null;
@@ -594,32 +886,67 @@ return { size: minSize, lines: [safe] };
         imgObj = await embedImage(pdfDoc, bytes);
       }
       if (imgObj) drawImageCover(left, imgObj, 0, 0, pageW, pageH);
-      else left.drawText("Bild saknas", { x: contentX + mmToPt(4), y: contentY + mmToPt(6), size: 12, font: nunito, color: rgb(0.8,0.1,0.1) });
+      else
+        left.drawText("Bild saknas", {
+          x: contentX + mmToPt(4),
+          y: contentY + mmToPt(6),
+          size: 12,
+          font: nunito,
+          color: rgb(0.8, 0.1, 0.1),
+        });
     } catch (e) {
       tr(trace, "page:image:error", { page: scene?.page, error: String(e?.message || e) });
-      left.drawText("Bildfel", { x: contentX + mmToPt(4), y: contentY + mmToPt(6), size: 12, font: nunito, color: rgb(0.8,0.1,0.1) });
+      left.drawText("Bildfel", {
+        x: contentX + mmToPt(4),
+        y: contentY + mmToPt(6),
+        size: 12,
+        font: nunito,
+        color: rgb(0.8, 0.1, 0.1),
+      });
     }
     if (mode === "preview" && watermark_text) drawWatermark(left, watermark_text);
 
     // Höger: text
     const right = pdfDoc.addPage([pageW, pageH]);
-    right.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96,0.98,1) });
+    right.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: rgb(0.96, 0.98, 1),
+    });
 
-    const cx = contentX + trimWpt/2, cy = contentY + trimHpt/2 + mmToPt(6);
+    const cx = contentX + trimWpt / 2,
+      cy = contentY + trimHpt / 2 + mmToPt(6);
     drawWrappedCenterColor(
-      right, text, cx, cy,
-      trimWpt*0.76, trimHpt*0.46,
-      nunito, Math.round(baseTextSize * TEXT_SCALE), baseLeading, 12, rgb(0.08,0.08,0.1), "center"
+      right,
+      text,
+      cx,
+      cy,
+      trimWpt * 0.76,
+      trimHpt * 0.46,
+      nunito,
+      Math.round(baseTextSize * TEXT_SCALE),
+      baseLeading,
+      12,
+      rgb(0.08, 0.08, 0.1),
+      "center"
     );
 
-    // Vine (now safely in-scope)
-    drawVineSafe(right, cx, contentY + trimHpt * 0.28, trimWpt * 0.50, rgb(0.35,0.4,0.55), 0.22, trace);
+    // Vine (stroke)
+    drawVineSafe(right, cx, contentY + trimHpt * 0.28, trimWpt * 0.5, rgb(0.35, 0.4, 0.55), 0.28, trace);
 
     // Sidnummer
-    const pageNum = 2 + i*2 + 1;
+    const pageNum = 2 + i * 2 + 1;
     const pn = String(pageNum);
     const pnW = nunito.widthOfTextAtSize(pn, 10);
-    right.drawText(pn, { x: contentX + trimWpt - outer - pnW, y: contentY + mmToPt(6), size: 10, font: nunito, color: rgb(0.35,0.35,0.45) });
+    right.drawText(pn, {
+      x: contentX + trimWpt - outer - pnW,
+      y: contentY + mmToPt(6),
+      size: 10,
+      font: nunito,
+      color: rgb(0.35, 0.35, 0.45),
+    });
 
     if (mode === "preview" && watermark_text) drawWatermark(right, watermark_text);
   }
@@ -627,9 +954,28 @@ return { size: minSize, lines: [safe] };
   /* -------- [30] SLUT -------- */
   {
     const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96,0.98,1) });
-    const cx = contentX + trimWpt/2, cy = contentY + trimHpt/2;
-    drawWrappedCenterColor(page, "SLUT", cx, cy, trimWpt*0.5, trimHpt*0.2, baloo, Math.min(trimWpt,trimHpt)*0.12, 1.06, 24, rgb(0.1,0.1,0.1));
+    page.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: rgb(0.96, 0.98, 1),
+    });
+    const cx = contentX + trimWpt / 2,
+      cy = contentY + trimHpt / 2;
+    drawWrappedCenterColor(
+      page,
+      "SLUT",
+      cx,
+      cy,
+      trimWpt * 0.5,
+      trimHpt * 0.2,
+      baloo,
+      Math.min(trimWpt, trimHpt) * 0.12,
+      1.06,
+      24,
+      rgb(0.1, 0.1, 0.1)
+    );
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   }
 
@@ -637,15 +983,40 @@ return { size: minSize, lines: [safe] };
   try {
     const page = pdfDoc.addPage([pageW, pageH]);
     const bg = rgb(0.58, 0.54, 0.86);
-    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: bg });
+    page.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: bg,
+    });
     const centerX = contentX + trimWpt / 2;
     const centerY = contentY + trimHpt / 2;
-    drawWrappedCenterColor(page, blurb, centerX, centerY, trimWpt * 0.72, trimHpt * 0.36, nunito, 14, 1.42, 12, rgb(1,1,1), "center");
+    drawWrappedCenterColor(
+      page,
+      blurb,
+      centerX,
+      centerY,
+      trimWpt * 0.72,
+      trimHpt * 0.36,
+      nunito,
+      14,
+      1.42,
+      12,
+      rgb(1, 1, 1),
+      "center"
+    );
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   } catch (e) {
     tr(trace, "back:error", { error: String(e?.message || e) });
     const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawText("Baksidan kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8,0.1,0.1) });
+    page.drawText("Baksidan kunde inte renderas.", {
+      x: mmToPt(15),
+      y: mmToPt(15),
+      size: 12,
+      font: nunito,
+      color: rgb(0.8, 0.1, 0.1),
+    });
   }
 
   const bytes = await pdfDoc.save();
@@ -653,17 +1024,25 @@ return { size: minSize, lines: [safe] };
   return bytes;
 }
 
-/* ------------------------- Upload handler ----------------------------- */
+/* ------------------------- Upload handler ---------------------------- */
 async function handleUploadRequest(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
-    const items = Array.isArray(body?.items) ? body.items : body?.data_url ? [body] : [];
-    if (!items.length) return err("Body must include items[] or {page|kind,data_url}", 400);
+    const items = Array.isArray(body?.items)
+      ? body.items
+      : body?.data_url
+      ? [body]
+      : [];
+    if (!items.length)
+      return err("Body must include items[] or {page|kind,data_url}", 400);
 
     const uploads = [];
     for (const it of items) {
       const hasIdentity = Number.isFinite(it?.page) || it?.kind === "cover";
-      if (!hasIdentity) { uploads.push({ page: it?.page ?? null, error: "missing page/kind" }); continue; }
+      if (!hasIdentity) {
+        uploads.push({ page: it?.page ?? null, error: "missing page/kind" });
+        continue;
+      }
       if (typeof it?.data_url !== "string" || !it.data_url.startsWith("data:image/")) {
         uploads.push({ page: it.page ?? it.kind, error: "invalid data_url" });
         continue;
@@ -682,7 +1061,7 @@ async function handleUploadRequest(req, env) {
   }
 }
 
-/* --------------------------- /api/pdf --------------------------------- */
+/* --------------------------- /api/pdf -------------------------------- */
 async function handlePdfRequest(req, env) {
   const url = new URL(req.url);
   const debug = url.searchParams.get("debug") === "1";
@@ -693,14 +1072,24 @@ async function handlePdfRequest(req, env) {
   tr(trace, "pdf:entry");
 
   const body = await req.json().catch(() => ({}));
-  const { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text } = body || {};
+  const { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text } =
+    body || {};
   if (!story || !Array.isArray(story?.book?.pages)) {
-    return new Response(JSON.stringify({ error: "Missing story" }), { status: 400, headers: { ...JSONH, "x-request-id": reqId } });
+    return new Response(JSON.stringify({ error: "Missing story" }), {
+      status: 400,
+      headers: { ...JSONH, "x-request-id": reqId },
+    });
   }
 
   try {
-    const bytes = await buildPdf({ story, images: images || [], mode, trim, bleed_mm, watermark_text }, env, trace);
-    const filename = (story?.book?.title || "BokPiloten").replace(/[^\wåäöÅÄÖ\-]+/g, "_") + (mode === "print" ? "_PRINT.pdf" : "_PREVIEW.pdf");
+    const bytes = await buildPdf(
+      { story, images: images || [], mode, trim, bleed_mm, watermark_text },
+      env,
+      trace
+    );
+    const filename =
+      (story?.book?.title || "BokPiloten").replace(/[^\wåäöÅÄÖ\-]+/g, "_") +
+      (mode === "print" ? "_PRINT.pdf" : "_PREVIEW.pdf");
     const headers = new Headers({
       "content-type": "application/pdf",
       "content-length": String(bytes.length),
@@ -711,14 +1100,19 @@ async function handlePdfRequest(req, env) {
     return new Response(bytes, { status: 200, headers });
   } catch (e) {
     tr(trace, "pdf:build-error", { error: String(e?.message || e) });
-    const body = debug ? JSON.stringify({ error: e?.message || String(e), trace }, null, 2) : JSON.stringify({ error: "PDF failed" });
-    return new Response(body, { status: 500, headers: { "content-type": "application/json", "x-request-id": reqId, ...CORS } });
+    const body = debug
+      ? JSON.stringify({ error: e?.message || String(e), trace }, null, 2)
+      : JSON.stringify({ error: "PDF failed" });
+    return new Response(body, {
+      status: 500,
+      headers: { "content-type": "application/json", "x-request-id": reqId, ...CORS },
+    });
   }
 }
 
-/* --------------------------- /api/diag -------------------------------- */
+/* --------------------------- /api/diag ------------------------------- */
 async function handleDiagRequest(_req, env) {
-  const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(/\/+$/,"");
+  const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(/\/+$/, "");
   const candidates = [
     `${base}/Baloo-bold.ttf`,
     `${base}/Nunito-Regular.ttf`,
@@ -728,15 +1122,20 @@ async function handleDiagRequest(_req, env) {
   for (const u of candidates) {
     try {
       const r = await fetch(u, { method: "HEAD" });
-      checks.push({ url: u, status: r.status, ct: r.headers.get("content-type"), cl: r.headers.get("content-length") });
+      checks.push({
+        url: u,
+        status: r.status,
+        ct: r.headers.get("content-type"),
+        cl: r.headers.get("content-length"),
+      });
     } catch (e) {
       checks.push({ url: u, error: String(e?.message || e) });
     }
   }
-  return ok({ font_base: base, has_fontkit: !!fontkit, checks });
+  return ok({ font_base: base, has_fontkit: !!pdfFontkit, checks });
 }
 
-/* --------------------------- Story endpoints -------------------------- */
+/* --------------------------- Story endpoints ------------------------- */
 export default {
   async fetch(req, env) {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
@@ -746,7 +1145,8 @@ export default {
     if (req.method === "GET" && url.pathname === "/") return ok({ ok: true, ts: Date.now() });
 
     // Diag
-    if (req.method === "GET" && url.pathname === "/api/diag") return handleDiagRequest(req, env);
+    if (req.method === "GET" && url.pathname === "/api/diag")
+      return handleDiagRequest(req, env);
 
     // Story
     if (req.method === "POST" && url.pathname === "/api/story") {
@@ -755,7 +1155,9 @@ export default {
         const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
         const targetAge = Number.isFinite(parseInt(reading_age, 10))
           ? parseInt(reading_age, 10)
-          : (category || "kids") === "pets" ? 8 : parseInt(age || 6, 10);
+          : (category || "kids") === "pets"
+          ? 8
+          : parseInt(age || 6, 10);
 
         const outlineUser = `
 ${heroDescriptor({ category, name, age, traits })}
@@ -786,7 +1188,7 @@ Returnera enbart json.`.trim();
     // Ref image
     if (req.method === "POST" && url.pathname === "/api/ref-image") {
       try {
-        const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(()=>({}));
+        const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
         if (photo_b64) {
           const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
           return ok({ ref_image_b64: b64 });
@@ -803,9 +1205,21 @@ Returnera enbart json.`.trim();
     // Generate interior images
     if (req.method === "POST" && url.pathname === "/api/images") {
       try {
-        const { style = "cartoon", ref_image_b64, story, plan, concurrency = 4, pages_subset, style_refs_b64, coherence_code } = await req.json().catch(()=>({}));
+        const {
+          style = "cartoon",
+          ref_image_b64,
+          story,
+          plan,
+          concurrency = 4,
+          pages_subset,
+          style_refs_b64,
+          coherence_code,
+        } = await req.json().catch(() => ({}));
         const allPages = story?.book?.pages || [];
-        const pagesArr = Array.isArray(pages_subset) && pages_subset.length ? allPages.filter(p => pages_subset.includes(p.page)) : allPages;
+        const pagesArr =
+          Array.isArray(pages_subset) && pages_subset.length
+            ? allPages.filter((p) => pages_subset.includes(p.page))
+            : allPages;
         if (!pagesArr.length) return err("No pages", 400);
         if (!ref_image_b64) return err("Missing reference image", 400);
 
@@ -813,9 +1227,16 @@ Returnera enbart json.`.trim();
         const pageCount = pagesArr.length;
         const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
 
-        const jobs = pagesArr.map(pg => {
-          const f = frames.find(x => x.page === pg.page) || {};
-          const prompt = buildFramePrompt({ style, story, page: pg, pageCount, frame: f, characterName: heroName });
+        const jobs = pagesArr.map((pg) => {
+          const f = frames.find((x) => x.page === pg.page) || {};
+          const prompt = buildFramePrompt({
+            style,
+            story,
+            page: pg,
+            pageCount,
+            frame: f,
+            characterName: heroName,
+          });
           return { page: pg.page, prompt };
         });
 
@@ -827,8 +1248,22 @@ Returnera enbart json.`.trim();
             const i = idx++;
             const item = jobs[i];
             try {
-              const g = await geminiImage(env, { prompt: item.prompt, character_ref_b64: ref_image_b64, style_refs_b64, coherence_code }, 75000, 3);
-              out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
+              const g = await geminiImage(
+                env,
+                {
+                  prompt: item.prompt,
+                  character_ref_b64: ref_image_b64,
+                  style_refs_b64,
+                  coherence_code,
+                },
+                75000,
+                3
+              );
+              out.push({
+                page: item.page,
+                image_url: g.image_url,
+                provider: g.provider || "google",
+              });
             } catch (e) {
               out.push({ page: item.page, error: String(e?.message || e) });
             }
@@ -845,12 +1280,25 @@ Returnera enbart json.`.trim();
     // Single regenerate
     if (req.method === "POST" && url.pathname === "/api/image/regenerate") {
       try {
-        const { style = "cartoon", ref_image_b64, page_text, scene_text, frame, story } = await req.json().catch(()=>({}));
+        const { style = "cartoon", ref_image_b64, page_text, scene_text, frame, story } =
+          await req.json().catch(() => ({}));
         if (!ref_image_b64) return err("Missing reference image", 400);
-        const fakeStory = story || { book: { pages: [{ page: 1, scene: scene_text, text: page_text }] } };
+        const fakeStory =
+          story || { book: { pages: [{ page: 1, scene: scene_text, text: page_text }] } };
         const pg = { page: 1, scene: scene_text, text: page_text };
-        const f = { shot_type: frame?.shot_type || "M", lens_mm: frame?.lens_mm || 50, subject_size_percent: frame?.subject_size_percent || 60 };
-        const prompt = buildFramePrompt({ style, story: fakeStory, page: pg, pageCount: 1, frame: f, characterName: (fakeStory.book?.bible?.main_character?.name || "Hjälten") });
+        const f = {
+          shot_type: frame?.shot_type || "M",
+          lens_mm: frame?.lens_mm || 50,
+          subject_size_percent: frame?.subject_size_percent || 60,
+        };
+        const prompt = buildFramePrompt({
+          style,
+          story: fakeStory,
+          page: pg,
+          pageCount: 1,
+          frame: f,
+          characterName: fakeStory.book?.bible?.main_character?.name || "Hjälten",
+        });
         const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
         return ok({ image_url: g.image_url, provider: g.provider || "google" });
       } catch (e) {
@@ -861,7 +1309,7 @@ Returnera enbart json.`.trim();
     // Cover-only
     if (req.method === "POST" && url.pathname === "/api/cover") {
       try {
-        const { style = "cartoon", ref_image_b64, story } = await req.json().catch(()=>({}));
+        const { style = "cartoon", ref_image_b64, story } = await req.json().catch(() => ({}));
         const characterName = story?.book?.bible?.main_character?.name || "Hjälten";
         const prompt = buildCoverPrompt({ style, story, characterName });
         const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 2);
@@ -883,6 +1331,9 @@ Returnera enbart json.`.trim();
     }
 
     // Default 404
-    return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: JSONH });
+    return new Response(JSON.stringify({ error: "Not found" }), {
+      status: 404,
+      headers: JSONH,
+    });
   },
 };
