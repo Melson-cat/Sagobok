@@ -4,8 +4,8 @@
 // Env: API_KEY, GEMINI_API_KEY, IMAGES_API_TOKEN, CF_ACCOUNT_ID,
 //      CF_IMAGES_ACCOUNT_HASH, CF_IMAGES_VARIANT, FONT_BASE_URL
 // ============================================================================
-import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
-import pdfFontkit from "@pdf-lib/fontkit";
+import { PDFDocument, rgb, degrees } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
 
 /* ------------------------------ Globals ------------------------------ */
 const OPENAI_MODEL = "gpt-4o-mini";
@@ -621,7 +621,7 @@ async function buildPdf(
   const contentY = mmToPt(bleed);
 
   const pdfDoc = await PDFDocument.create();
-  PDFDocument.registerFontkit(pdfFontkit);
+  pdfDoc.registerFontkit(fontkit); 
   tr(trace, "pdf:doc-created");
 
   // Fonts via env base
