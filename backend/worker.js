@@ -437,7 +437,7 @@ function drawWrappedCenterColor(
 }
 
 /* ----------------------------- Vine (fill) --------------------------- */
-function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.25,0.32,0.55), stroke = 2.2) {
+function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.25,0.32,0.55), stroke = 2.4) {
   const baseW = 360;
   const scale = widthPt / baseW;
   const x = centerX - widthPt/2;
@@ -618,16 +618,22 @@ try {
   const padY = mmToPt(4), padX = mmToPt(6);
   const badgeH = titleBlockH + (subtitle ? (mmToPt(3) + subtitleBlockH) : 0) + padY * 2;
 
-  // badge-y mittas runt topCenterY
-  const badgeY = topCenterY - badgeH/2 + mmToPt(2);
-  coverPage.drawRectangle({
-    x: contentX + safeInset - padX,
-    y: badgeY,
-    width: tw + padX * 2,
-    height: badgeH,
-    color: rgb(1,1,1),
-    opacity: 0.22
-  });
+  // centrera panelen bättre runt texten
+const badgeY = topCenterY - badgeH / 2 - mmToPt(4); // flytta uppåt lite
+coverPage.drawRectangle({
+  x: contentX + safeInset - padX,
+  y: badgeY,
+  width: tw + padX * 2,
+  height: badgeH,
+  color: rgb(1, 1, 1),
+  opacity: 0.25,
+  borderWidth: 0,
+  borderColor: rgb(1,1,1)
+});
+
+// justera text-Y så att den ligger mitt i panelen
+topCenterY = badgeY + badgeH / 2;
+
 
   // Rita titel igen (över badgen)
   drawWrappedCenterColor(
@@ -735,7 +741,7 @@ try {
 
     // Watermark först, vine ovanpå – och lite närmare texten
     if (mode === "preview" && watermark_text) drawWatermark(right, watermark_text);
-    drawVineSafe(right, cx, contentY + trimHpt * 0.36, trimWpt * 0.60, rgb(0.25,0.32,0.55), 2.2);
+    drawVineSafe(right, cx, contentY + trimHpt * 0.36, trimWpt * 0.80, rgb(0.25,0.32,0.55), 2.4);
   }
 
  /* -------- [30] SLUT -------- */
