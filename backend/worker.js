@@ -413,68 +413,103 @@ function drawWrappedCenterColor(
   }
   return { size: minSize, lines: [] };
 }
-
 /* ----------------------------- Vine (fill) --------------------------- */
-function drawVine(page, centerX, y, widthPt, color = rgb(0.25,0.32,0.55), stroke = 2) {
+function drawVineSafe(
+  page,
+  centerX,
+  y,
+  widthPt,
+  color = rgb(0.25, 0.32, 0.55),
+  stroke = 2,
+  trace
+) {
   const half = widthPt / 2;
   const x0 = centerX - half;
 
-  // --- 1) Try SVG path (fast path)
+  // 1) Försök SVG-path (snabbvägen)
   try {
     if (typeof page.drawSvgPath === "function") {
       const baseW = 360;
       const scale = widthPt / baseW;
-      const path = "M 0 0 C 30 14, 60 -14, 90 0 C 120 14, 150 -14, 180 0 C 210 14, 240 -14, 270 0 C 300 14, 330 -14, 360 0";
+      const path =
+        "M 0 0 C 30 14, 60 -14, 90 0 C 120 14, 150 -14, 180 0 C 210 14, 240 -14, 270 0 C 300 14, 330 -14, 360 0";
       page.drawSvgPath(path, {
-        x: x0, y,
+        x: x0,
+        y,
         scale,
         borderColor: color,
         borderWidth: stroke,
         lineCap: "round",
         lineJoin: "round",
       });
-      return; // success
+      if (typeof tr === "function") tr(trace, "vine:svg");
+      return;
     }
-  } catch { /* fall through to polyline */ }
+  } catch (e) {
+    if (typeof tr === "function") tr(trace, "vine:svg:error", { e: String(e) });
+    // fall-through
+  }
 
-  // --- 2) Polyline fallback (always works)
-  const segments = 160;                 // smoothness
-  const amp = 10;                       // amplitude in pt
-  const freq = Math.PI * 4;             // ~2 waves across width
-  let prevX = x0, prevY = y;
+  // 2) Polyline-fallback (fungerar alltid)
+  const segments = 160;
+  const amp = 10;
+  const freq = Math.PI * 4; // ca två vågor över bredden
+  let prevX = x0,
+    prevY = y;
   for (let i = 1; i <= segments; i++) {
     const t = i / segments;
     const X = x0 + t * widthPt;
     const Y = y + Math.sin(t * freq) * amp;
     page.drawLine({
       start: { x: prevX, y: prevY },
-      end:   { x: X,     y: Y     },
+      end: { x: X, y: Y },
       thickness: stroke,
       color,
       lineCap: "round",
     });
-    prevX = X; prevY = Y;
+    prevX = X;
+    prevY = Y;
   }
-
-  // two tiny leaves
-  page.drawEllipse({ x: centerX - widthPt*0.25, y: y + amp*0.6, xScale: 6, yScale: 3, color, borderColor: color });
-  page.drawEllipse({ x: centerX + widthPt*0.25, y: y - amp*0.6, xScale: 6, yScale: 3, color, borderColor: color });
+  // små blad
+  page.drawEllipse({
+    x: centerX - widthPt * 0.25,
+    y: y + amp * 0.6,
+    xScale: 6,
+    yScale: 3,
+    color,
+    borderColor: color,
+  });
+  page.drawEllipse({
+    x: centerX + widthPt * 0.25,
+    y: y - amp * 0.6,
+    xScale: 6,
+    yScale: 3,
+    color,
+    borderColor: color,
+  });
+  if (typeof tr === "function") tr(trace, "vine:polyline");
 }
-
 
 /* ------------------------- Fonts embedding --------------------------- */
 // fetchBytes måste finnas innan embedCustomFont
 async function fetchBytes(trace, url) {
   tr(trace, "font:fetch", { url });
   const r = await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
-  tr(trace, "font:fetch:done", { url, status: r.status, ct: r.headers.get("content-type"), cl: r.headers.get("content-length") });
+  tr(trace, "font:fetch:done", {
+    url,
+    status: r.status,
+    ct: r.headers.get("content-type"),
+    cl: r.headers.get("content-length"),
+  });
   if (!r.ok) throw new Error(`fetch ${r.status}`);
   const bytes = new Uint8Array(await r.arrayBuffer());
   tr(trace, "font:bytes", { url, bytes: bytes.length });
   return bytes;
 }
 async function embedCustomFont(trace, pdfDoc, url) {
-  try { if (typeof pdfDoc.registerFontkit === "function") pdfDoc.registerFontkit(fontkit); } catch {}
+  try {
+    if (typeof pdfDoc.registerFontkit === "function") pdfDoc.registerFontkit(fontkit);
+  } catch {}
   const bytes = await fetchBytes(trace, url);
   const font = await pdfDoc.embedFont(bytes, { subset: true });
   tr(trace, "font:embedded", { url });
@@ -482,18 +517,26 @@ async function embedCustomFont(trace, pdfDoc, url) {
 }
 async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
   for (const url of urls) {
-    try { return await embedCustomFont(trace, pdfDoc, url); }
-    catch (e) { tr(trace, "font:embed-error", { url, error: String(e?.message || e) }); }
+    try {
+      return await embedCustomFont(trace, pdfDoc, url);
+    } catch (e) {
+      tr(trace, "font:embed-error", { url, error: String(e?.message || e) });
+    }
   }
   tr(trace, "font:fallback", { label, standard: standardName });
   return await pdfDoc.embedFont(standardName);
 }
 
 /* ---------------------------- Build PDF ------------------------------ */
-async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }, env, trace) {
+async function buildPdf(
+  { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text },
+  env,
+  trace
+) {
   tr(trace, "pdf:start");
   const trimSpec = TRIMS[trim] || TRIMS.square210;
-  const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
+  const bleed =
+    mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
 
   const trimWpt = mmToPt(trimSpec.w_mm);
   const trimHpt = mmToPt(trimSpec.h_mm);
@@ -514,32 +557,40 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
 
   const baloo = await getFontOrFallback(trace, pdfDoc, "baloo", BALOO, StandardFonts.HelveticaBold);
   const nunito = await getFontOrFallback(trace, pdfDoc, "nunito", NUN_R, StandardFonts.TimesRoman);
-  const nunitoSemi = await getFontOrFallback(trace, pdfDoc, "nunitoSemi", NUN_SB, StandardFonts.Helvetica);
+  const nunitoSemi = await getFontOrFallback(
+    trace,
+    pdfDoc,
+    "nunitoSemi",
+    NUN_SB,
+    StandardFonts.Helvetica
+  );
   tr(trace, "pdf:fonts-ready");
 
   const readingAge = story?.book?.reading_age || 6;
   const { size: baseTextSize, leading: baseLeading } = fontSpecForReadingAge(readingAge);
 
   const title = String(story?.book?.title ?? "Min bok");
-  const subtitle =
-    String(
-      story?.book?.tagline ??
+  const subtitle = String(
+    story?.book?.tagline ??
       (story?.book?.bible?.main_character?.name ? `Med ${story.book.bible.main_character.name}` : "") ??
       ""
-    );
-  const blurb =
-    String(
-      story?.book?.back_blurb ??
+  );
+  const blurb = String(
+    story?.book?.back_blurb ??
       (story?.book?.lesson ? `Lärdom: ${story.book.lesson}.` : "En berättelse skapad med BokPiloten.") ??
       ""
-    );
+  );
   const pagesStory = [...(story?.book?.pages || [])];
 
   // Indexera inkomna bilder
   let coverSrc = images?.find((x) => x?.kind === "cover" || x?.page === 0) || null;
   const imgByPage = new Map();
   (images || []).forEach((row) => {
-    if (Number.isFinite(row?.page) && row.page > 0 && (row.image_id || row.url || row.image_url || row.data_url)) {
+    if (
+      Number.isFinite(row?.page) &&
+      row.page > 0 &&
+      (row.image_id || row.url || row.image_url || row.data_url)
+    ) {
       imgByPage.set(row.page, row);
     }
   });
@@ -567,14 +618,21 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
       const coverImg = await embedImage(pdfDoc, bytes);
       if (coverImg) drawImageCover(coverPage, coverImg, 0, 0, pageW, pageH);
     } else {
-      coverPage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.94, 0.96, 1) });
+      coverPage.drawRectangle({
+        x: contentX,
+        y: contentY,
+        width: trimWpt,
+        height: trimHpt,
+        color: rgb(0.94, 0.96, 1),
+      });
     }
 
     // Topp-gradient för läsbarhet
     const safeInset = mmToPt(GRID.outer_mm + 2);
     const tx = contentX + safeInset;
     const tw = trimWpt - safeInset * 2;
-    const steps = 8, h = mmToPt(20);
+    const steps = 8,
+      h = mmToPt(20);
     for (let i = 0; i < steps; i++) {
       const t = (steps - i) / steps;
       coverPage.drawRectangle({
@@ -587,7 +645,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
       });
     }
 
-    // Titel + tagline med stabil wrapper
+    // Titel + tagline
     const cx = contentX + trimWpt / 2;
     let topCenterY = contentY + trimHpt - mmToPt(GRID.outer_mm + 10);
 
@@ -597,17 +655,16 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
       cx,
       topCenterY,
       tw,
-      mmToPt(26),                               // max två rader typ
+      mmToPt(26),
       baloo,
       Math.min(trimWpt, trimHpt) * 0.16,
       1.08,
       22,
       rgb(0.06, 0.06, 0.09),
-      "center",
+      "center"
     );
 
-    // flytta upp center för taglinen, baserat på faktiskt block som ritades
-    topCenterY -= (fitTitle.lines.length * (fitTitle.size * 1.08)) + mmToPt(6);
+    topCenterY -= fitTitle.lines.length * (fitTitle.size * 1.08) + mmToPt(6);
 
     if (subtitle) {
       drawWrappedCenterColor(
@@ -622,7 +679,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
         1.12,
         12,
         rgb(0.14, 0.14, 0.16),
-        "center",
+        "center"
       );
     }
 
@@ -630,17 +687,54 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   } catch (e) {
     tr(trace, "cover:error", { error: String(e?.message || e) });
     const p = pdfDoc.addPage([pageW, pageH]);
-    p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
+    p.drawText("Omslag kunde inte renderas.", {
+      x: mmToPt(15),
+      y: mmToPt(15),
+      size: 12,
+      font: nunito,
+      color: rgb(0.8, 0.1, 0.1),
+    });
   }
 
   /* -------- [1] TITELBLAD -------- */
   {
     const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
-    const cx = contentX + trimWpt / 2, cy = contentY + trimHpt * 0.62;
-    drawWrappedCenterColor(page, title, cx, cy, trimWpt * 0.76, trimHpt * 0.22, baloo, Math.min(trimWpt, trimHpt) * 0.12, 1.08, 20, rgb(0.1, 0.1, 0.1));
+    page.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: rgb(0.96, 0.98, 1),
+    });
+    const cx = contentX + trimWpt / 2,
+      cy = contentY + trimHpt * 0.62;
+    drawWrappedCenterColor(
+      page,
+      title,
+      cx,
+      cy,
+      trimWpt * 0.76,
+      trimHpt * 0.22,
+      baloo,
+      Math.min(trimWpt, trimHpt) * 0.12,
+      1.08,
+      20,
+      rgb(0.1, 0.1, 0.1)
+    );
     if (subtitle)
-      drawWrappedCenterColor(page, subtitle, cx, cy - mmToPt(14), trimWpt * 0.7, trimHpt * 0.12, nunitoSemi, Math.max(14, 22), 1.12, 12, rgb(0.15, 0.15, 0.15));
+      drawWrappedCenterColor(
+        page,
+        subtitle,
+        cx,
+        cy - mmToPt(14),
+        trimWpt * 0.7,
+        trimHpt * 0.12,
+        nunitoSemi,
+        Math.max(14, 22),
+        1.12,
+        12,
+        rgb(0.15, 0.15, 0.15)
+      );
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   }
 
@@ -652,7 +746,13 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
 
     // Vänster: bild
     const left = pdfDoc.addPage([pageW, pageH]);
-    left.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(1, 1, 1) });
+    left.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: rgb(1, 1, 1),
+    });
     try {
       const src = imgByPage.get(scene.page);
       let imgObj = null;
@@ -661,42 +761,95 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
         imgObj = await embedImage(pdfDoc, bytes);
       }
       if (imgObj) drawImageCover(left, imgObj, 0, 0, pageW, pageH);
-      else left.drawText("Bild saknas", { x: contentX + mmToPt(4), y: contentY + mmToPt(6), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
+      else
+        left.drawText("Bild saknas", {
+          x: contentX + mmToPt(4),
+          y: contentY + mmToPt(6),
+          size: 12,
+          font: nunito,
+          color: rgb(0.8, 0.1, 0.1),
+        });
     } catch (e) {
       tr(trace, "page:image:error", { page: scene?.page, error: String(e?.message || e) });
-      left.drawText("Bildfel", { x: contentX + mmToPt(4), y: contentY + mmToPt(6), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
+      left.drawText("Bildfel", {
+        x: contentX + mmToPt(4),
+        y: contentY + mmToPt(6),
+        size: 12,
+        font: nunito,
+        color: rgb(0.8, 0.1, 0.1),
+      });
     }
     if (mode === "preview" && watermark_text) drawWatermark(left, watermark_text);
 
     // Höger: text
     const right = pdfDoc.addPage([pageW, pageH]);
-    right.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
+    right.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: rgb(0.96, 0.98, 1),
+    });
 
-    const cx = contentX + trimWpt / 2, cy = contentY + trimHpt / 2 + mmToPt(6);
+    const cx = contentX + trimWpt / 2,
+      cy = contentY + trimHpt / 2 + mmToPt(6);
     drawWrappedCenterColor(
-      right, mainText, cx, cy, trimWpt * 0.76, trimHpt * 0.46, nunito,
-      Math.round(baseTextSize * TEXT_SCALE), baseLeading, 12, rgb(0.08, 0.08, 0.1), "center",
+      right,
+      mainText,
+      cx,
+      cy,
+      trimWpt * 0.76,
+      trimHpt * 0.46,
+      nunito,
+      Math.round(baseTextSize * TEXT_SCALE),
+      baseLeading,
+      12,
+      rgb(0.08, 0.08, 0.1),
+      "center"
     );
-
-    // Vine
-    drawVineSafe(right, cx, contentY + trimHpt * 0.28, trimWpt * 0.56, rgb(0.25, 0.32, 0.55), 0.55, trace);
 
     // Sidnummer
     const pageNum = 2 + i * 2 + 1;
     const pn = String(pageNum);
     const pnW = nunito.widthOfTextAtSize(pn, 10);
-    right.drawText(pn, { x: contentX + trimWpt - outer - pnW, y: contentY + mmToPt(6), size: 10, font: nunito, color: rgb(0.35, 0.35, 0.45) });
+    right.drawText(pn, {
+      x: contentX + trimWpt - outer - pnW,
+      y: contentY + mmToPt(6),
+      size: 10,
+      font: nunito,
+      color: rgb(0.35, 0.35, 0.45),
+    });
 
+    // Watermark först, vine ovanpå
     if (mode === "preview" && watermark_text) drawWatermark(right, watermark_text);
-    drawVine(right, cx, contentY + trimHpt * 0.28, trimWpt * 0.56, rgb(0.25,0.32,0.55), 2);
+    drawVineSafe(right, cx, contentY + trimHpt * 0.28, trimWpt * 0.56, rgb(0.25, 0.32, 0.55), 2, trace);
   }
 
   /* -------- [30] SLUT -------- */
   {
     const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
-    const cx = contentX + trimWpt / 2, cy = contentY + trimHpt / 2;
-    drawWrappedCenterColor(page, "SLUT", cx, cy, trimWpt * 0.5, trimHpt * 0.2, baloo, Math.min(trimWpt, trimHpt) * 0.12, 1.06, 24, rgb(0.1, 0.1, 0.1));
+    page.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: rgb(0.96, 0.98, 1),
+    });
+    const cx = contentX + trimWpt / 2,
+      cy = contentY + trimHpt / 2;
+    drawWrappedCenterColor(
+      page,
+      "SLUT",
+      cx,
+      cy,
+      trimWpt * 0.5,
+      trimHpt * 0.2,
+      baloo,
+      Math.min(trimWpt, trimHpt) * 0.12,
+      1.06,
+      24,
+      rgb(0.1, 0.1, 0.1)
+    );
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   }
 
@@ -707,18 +860,38 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: bg });
     const centerX = contentX + trimWpt / 2;
     const centerY = contentY + trimHpt / 2;
-    drawWrappedCenterColor(page, blurb, centerX, centerY, trimWpt * 0.72, trimHpt * 0.36, nunito, 14, 1.42, 12, rgb(1, 1, 1), "center");
+    drawWrappedCenterColor(
+      page,
+      blurb,
+      centerX,
+      centerY,
+      trimWpt * 0.72,
+      trimHpt * 0.36,
+      nunito,
+      14,
+      1.42,
+      12,
+      rgb(1, 1, 1),
+      "center"
+    );
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   } catch (e) {
     tr(trace, "back:error", { error: String(e?.message || e) });
     const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawText("Baksidan kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
+    page.drawText("Baksidan kunde inte renderas.", {
+      x: mmToPt(15),
+      y: mmToPt(15),
+      size: 12,
+      font: nunito,
+      color: rgb(0.8, 0.1, 0.1),
+    });
   }
 
   const bytes = await pdfDoc.save();
   tr(trace, "pdf:done", { bytes: bytes.length });
   return bytes;
 }
+
 
 /* ------------------------- Upload handler ---------------------------- */
 async function handleUploadRequest(req, env) {
