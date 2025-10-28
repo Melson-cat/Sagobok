@@ -583,105 +583,110 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   }
   const scenePages = mapTo14ScenePages();
   tr(trace, "pdf:scene-pages", { count: scenePages.length });
-// === INGEN topp-panel längre ===
-const safeInset = mmToPt(GRID.outer_mm + 2);
-const tw = trimWpt - safeInset * 2;
-const cx = contentX + trimWpt / 2;
-let topCenterY = contentY + trimHpt - mmToPt(GRID.outer_mm + 14);
+/* -------- FRONT COVER (single-draw, no duplicate) -------- */
+try {
+  const coverPage = pdfDoc.addPage([pageW, pageH]);
+  if (!coverSrc) coverSrc = imgByPage.get(1) || null;
 
-// --- inline MEASURE (does NOT draw) ---
-const measure = (text, font, baseSize, leading, minSize, maxW, maxH) => {
-  const s = String(text ?? "");
-  for (let size = baseSize; size >= minSize; size--) {
-    const lineH = size * leading;
-    const words = s.split(/\s+/);
-    const lines = [];
-    let line = "";
-    for (const w of words) {
-      const t = line ? line + " " + w : w;
-      if (font.widthOfTextAtSize(t, size) <= maxW) line = t;
-      else { if (line) lines.push(line); line = w; }
+  if (coverSrc) {
+    const bytes = await getImageBytes(env, coverSrc);
+    const coverImg = await embedImage(pdfDoc, bytes);
+    if (coverImg) drawImageCover(coverPage, coverImg, 0, 0, pageW, pageH);
+  } else {
+    coverPage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.94,0.96,1) });
+  }
+
+  // Geometry
+  const safeInset = mmToPt(GRID.outer_mm + 2);
+  const tw  = trimWpt - safeInset * 2;
+  const cx  = contentX + trimWpt / 2;
+  const topCenterY0 = contentY + trimHpt - mmToPt(GRID.outer_mm + 16);
+
+  // --- local MEASURE: computes lines, never draws
+  const measure = (txt, font, baseSize, leading, minSize, maxW, maxH) => {
+    const s = String(txt ?? "");
+    for (let size = baseSize; size >= minSize; size--) {
+      const lineH = size * leading;
+      const words = s.split(/\s+/);
+      const lines = [];
+      let line = "";
+      for (const w of words) {
+        const t = line ? line + " " + w : w;
+        if (font.widthOfTextAtSize(t, size) <= maxW) line = t;
+        else { if (line) lines.push(line); line = w; }
+      }
+      if (line) lines.push(line);
+      const blockH = lines.length * lineH;
+      if (blockH <= maxH) return { size, lineH, lines, blockH };
     }
-    if (line) lines.push(line);
-    const blockH = lines.length * lineH;
-    if (blockH <= maxH) return { size, lineH, lines, blockH };
+    return { size: 12, lineH: 12 * 1.1, lines: [], blockH: 0 };
+  };
+
+  // Measure title + subtitle (no drawing)
+  const titleM = measure(
+    title,
+    nunitoSemi,
+    Math.min(trimWpt, trimHpt) * 0.16,
+    1.08,
+    22,
+    tw,
+    mmToPt(32)
+  );
+  const subtitleSize = Math.max(14, (titleM.size * 0.48) | 0);
+  const subM = subtitle ? measure(subtitle, nunito, subtitleSize, 1.12, 12, tw, mmToPt(18)) : { blockH: 0 };
+
+  // Soft badge behind both
+  const padY = mmToPt(4), padX = mmToPt(6), gap = mmToPt(4);
+  const badgeH = titleM.blockH + (subtitle ? (gap + subM.blockH) : 0) + padY * 2;
+  const badgeY = topCenterY0 - badgeH / 2;
+
+  coverPage.drawRectangle({
+    x: contentX + safeInset - padX,
+    y: badgeY,
+    width: tw + padX * 2,
+    height: badgeH,
+    color: rgb(1,1,1),
+    opacity: 0.25,
+  });
+
+  // Draw TITLE once
+  {
+    let y = badgeY + badgeH - padY - titleM.lineH / 2;
+    for (const ln of titleM.lines) {
+      const w = nunitoSemi.widthOfTextAtSize(ln, titleM.size);
+      coverPage.drawText(ln, {
+        x: cx - w / 2,
+        y,
+        size: titleM.size,
+        font: nunitoSemi,
+        color: rgb(0.05,0.05,0.05),
+      });
+      y -= titleM.lineH;
+    }
   }
-  return { size: 12, lineH: 12 * 1.1, lines: [], blockH: 0 };
-};
 
-// 1) Measure title + optional subtitle (no drawing)
-const titleM = measure(
-  title, nunitoSemi, Math.min(trimWpt, trimHpt) * 0.16, 1.08, 22, tw, mmToPt(32)
-);
-const subtitleSize = Math.max(14, (titleM.size * 0.48) | 0);
-const subM = subtitle ? measure(subtitle, nunito, subtitleSize, 1.12, 12, tw, mmToPt(18)) : {blockH:0};
-
-// 2) Badge behind both blocks
-const padY = mmToPt(4), padX = mmToPt(6), gap = mmToPt(4);
-const badgeH = titleM.blockH + (subtitle ? (gap + subM.blockH) : 0) + padY * 2;
-const badgeY = topCenterY - badgeH / 2;
-
-coverPage.drawRectangle({
-  x: contentX + safeInset - padX,
-  y: badgeY,
-  width: tw + padX * 2,
-  height: badgeH,
-  color: rgb(1,1,1),
-  opacity: 0.25,
-});
-
-// 3) Draw title ONCE (centered in its own block inside the badge)
-const titleCenterY = badgeY + badgeH - padY - titleM.blockH / 2;
-drawWrappedCenterColor(
-  coverPage, title, cx, titleCenterY, tw, titleM.blockH,
-  nunitoSemi, titleM.size, 1.08, 22, rgb(0.05,0.05,0.05), "center"
-);
-
-// 4) Draw subtitle under title (only if exists)
-if (subtitle) {
-  const subCenterY = titleCenterY - (titleM.blockH / 2) - gap - (subM.blockH / 2);
-  drawWrappedCenterColor(
-    coverPage, subtitle, cx, subCenterY, tw, subM.blockH,
-    nunito, subtitleSize, 1.12, 12, rgb(0.12,0.12,0.12), "center"
-  );
-}
-
-/* -------- [1] TITELBLAD -------- */
-{
-  const page = pdfDoc.addPage([pageW, pageH]);
-  page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
-
-  const cx = contentX + trimWpt / 2;
-  const titleCenterY = contentY + trimHpt * 0.60;
-
-  // Titel
-  const fit = drawWrappedCenterColor(
-    page, title, cx, titleCenterY, trimWpt * 0.76, trimHpt * 0.26,
-    nunitoSemi, Math.min(trimWpt, trimHpt) * 0.12, 1.08, 20, rgb(0.08,0.08,0.1), "center"
-  );
-
-  // --- NY SPACING-LOGIK ---
-  const titleLineH   = fit.size * 1.08;
-  const titleBlockH  = Math.max(titleLineH * Math.max(1, fit.lines.length), mmToPt(12));
-  const gapBelow     = mmToPt(10);                  // extra luft under titeln
-
+  // Draw SUBTITLE once (if present), under title
   if (subtitle) {
-    const subtitleSize    = Math.max(14, (fit.size * 0.50) | 0);
-    const subtitleLineH   = subtitleSize * 1.12;
-    const subtitleBlockH  = subtitleLineH;          // underrubrik brukar bli 1 rad
-    // centerY för underrubriken placeras EN TYDLIG BLOCK-HÖJD under titeln:
-    const subtitleCenterY =
-      (titleCenterY - (titleBlockH / 2))            // nederkant av titelblocket
-      - gapBelow                                    // extra avstånd
-      - (subtitleBlockH / 2);                       // centrera själva underrubriken
-
-    drawWrappedCenterColor(
-      page, subtitle, cx, subtitleCenterY, trimWpt * 0.72, mmToPt(28),
-      nunito, subtitleSize, 1.12, 12, rgb(0.14,0.14,0.16), "center"
-    );
+    const subCenterY = badgeY + padY + subM.blockH / 2; // nicely spaced under title
+    let y = subCenterY + subM.blockH / 2 - subM.lineH;
+    for (const ln of subM.lines) {
+      const w = nunito.widthOfTextAtSize(ln, subtitleSize);
+      coverPage.drawText(ln, {
+        x: cx - w / 2,
+        y,
+        size: subtitleSize,
+        font: nunito,
+        color: rgb(0.12,0.12,0.12),
+      });
+      y -= subM.lineH;
+    }
   }
 
-  if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
+  if (mode === "preview" && watermark_text) drawWatermark(coverPage, watermark_text);
+} catch (e) {
+  tr(trace, "cover:error", { error: String(e?.message || e) });
+  const p = pdfDoc.addPage([pageW, pageH]);
+  p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8,0.1,0.1) });
 }
 
 
