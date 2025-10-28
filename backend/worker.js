@@ -146,7 +146,7 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts }],
-          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.9 },
+          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.6 },
         }),
         signal: ctl.signal,
       });
@@ -244,16 +244,27 @@ function shotLine(f = {}) {
   const map = { EW: "extra wide", W: "wide", M: "medium", CU: "close-up" };
   return `${map[f.shot_type || "M"]} shot, ~${f.subject_size_percent || 60}% subject, ≈${f.lens_mm || 35}mm`;
 }
-function buildFramePrompt({ style, story, page, pageCount, frame, characterName }) {
+
+function buildFramePrompt({ style, story, page, pageCount, frame, characterName, wardrobe_signature, coherence_code }) {
   const series = buildSeriesContext(story);
   const styleLine = styleHint(style);
   const salt = "UNIQUE_TOKEN:" + page.page + "-" + ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
+
+  const wardrobeLine = wardrobe_signature
+    ? `WARDROBE_SIGNATURE: ${wardrobe_signature}. Keep wardrobe consistent across pages.`
+    : "Keep wardrobe consistent across pages.";
+
+  const coh = coherence_code || makeCoherenceCode(story);
+
   return [
     series,
     `This is page ${page.page} of ${pageCount}.`,
     `Render in ${styleLine}. No text or speech bubbles.`,
+    `Match earlier pages’ line work and cel-shading; avoid photoreal textures.`,
+    wardrobeLine,
+    `COHERENCE_CODE:${coh}`,
     `Square composition (1:1), keep limbs fully in frame.`,
-    `Keep the same hero (${characterName}) from reference. Adapt pose, camera, lighting.`,
+    `Keep the same hero (${characterName}) from reference; adapt pose, camera, lighting.`,
     page.time_of_day ? `Time of day: ${page.time_of_day}.` : "",
     page.weather ? `Weather: ${page.weather}.` : "",
     `SCENE: ${page.scene || page.text || ""}`,
@@ -261,28 +272,53 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName 
     `VARIETY: each page unique yet coherent.`,
     `PAGE_ID: ${page.page}. DO NOT REUSE the same composition as any previous page.`,
     salt,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ].filter(Boolean).join("\n");
 }
+
 function characterCardPrompt({ style, bible, traits }) {
   const mc = bible?.main_character || {};
   const name = mc.name || "Nova";
   const phys = mc.physique || traits || "fluffy gray cat with curious eyes";
   return [`Character reference in ${styleHint(style)}.`, `One hero only, full body, neutral background.`, `Hero: ${name}, ${phys}. No text.`].join(" ");
 }
-function buildCoverPrompt({ style, story, characterName }) {
+
+function buildCoverPrompt({ style, story, characterName, wardrobe_signature, coherence_code }) {
   const styleLine = styleHint(style);
   const theme = story?.book?.theme || "";
+  const wardrobeLine = wardrobe_signature
+    ? `WARDROBE_SIGNATURE: ${wardrobe_signature}. Keep wardrobe consistent with interior pages.`
+    : "Keep wardrobe consistent with interior pages.";
+  const coh = coherence_code || makeCoherenceCode(story);
   return [
     `BOOK COVER ILLUSTRATION (front cover), ${styleLine}.`,
     `Square composition (1:1). No text or logos.`,
+    wardrobeLine,
+    `COHERENCE_CODE:${coh}`,
     `Focus on the main hero (${characterName}) from the reference; perfect identity consistency.`,
     theme ? `Theme cue: ${theme}.` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ].filter(Boolean).join("\n");
 }
+
+
+/* ---------------------- Coherence + Wardrobe helpers ---------------------- */
+function makeCoherenceCode(story) {
+  const t = String(story?.book?.title || "sagobok");
+  // enkel stabil hash → 6 tecken
+  let h = 0;
+  for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) >>> 0;
+  return (h.toString(36) + "000000").slice(0, 6).toUpperCase();
+}
+function deriveWardrobeSignature(story) {
+  const wb = story?.book?.bible || {};
+  const arr = Array.isArray(wb?.wardrobe) ? wb.wardrobe : [];
+  const main = arr.join(", ").trim();
+  if (main) return main;
+  // fallback: gissa något vänligt från palette/world/name
+  const palette = (wb?.palette || []).slice(0, 2).join(", ");
+  const name = wb?.main_character?.name ? `for ${wb.main_character.name}` : "";
+  return [palette && `soft palette (${palette})`, "simple top and trousers", name].filter(Boolean).join(" ");
+}
+
 
 /* ---------------------- Cloudflare Images utils ---------------------- */
 function dataUrlToBlob(dataUrl) {
@@ -349,6 +385,17 @@ async function getImageBytes(env, row) {
         return u8;
       }
     }
+        // NEW: cover/interior kan komma som image_url: "data:image/..."
+    if (row?.image_url?.startsWith?.("data:image/")) {
+      const m2 = row.image_url.match(/^data:([^;]+);base64,(.+)$/i);
+      if (m2) {
+        const bin2 = atob(m2[2]);
+        const u82 = new Uint8Array(bin2.length);
+        for (let i = 0; i < bin2.length; i++) u82[i] = bin2.charCodeAt(i);
+        return u82;
+      }
+    }
+
     return null;
   } catch {
     return null;
@@ -907,7 +954,10 @@ Returnera enbart json.`.trim();
 
           const story = await openaiJSON(env, STORY_SYS, storyUser);
           const plan = normalizePlan(story?.book?.pages || []);
-          return ok({ story, plan, previewVisible: 4 });
+          const coherence_code = makeCoherenceCode(story);
+const wardrobe_signature = deriveWardrobeSignature(story);
+return ok({ story, plan, previewVisible: 4, coherence_code, wardrobe_signature });
+
         } catch (e) {
           return err(e?.message || "Story failed", 500);
         }
@@ -942,6 +992,7 @@ Returnera enbart json.`.trim();
             pages_subset,
             style_refs_b64,
             coherence_code,
+             wardrobe_signature,  
           } = await req.json().catch(() => ({}));
           const allPages = story?.book?.pages || [];
           const pagesArr =
@@ -955,11 +1006,23 @@ Returnera enbart json.`.trim();
           const pageCount = pagesArr.length;
           const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
 
-          const jobs = pagesArr.map((pg) => {
-            const f = frames.find((x) => x.page === pg.page) || {};
-            const prompt = buildFramePrompt({ style, story, page: pg, pageCount, frame: f, characterName: heroName });
-            return { page: pg.page, prompt };
-          });
+         const wSig = wardrobe_signature || deriveWardrobeSignature(story);
+const coh = coherence_code || makeCoherenceCode(story);
+
+const jobs = pagesArr.map((pg) => {
+  const f = frames.find((x) => x.page === pg.page) || {};
+  const prompt = buildFramePrompt({
+    style,
+    story,
+    page: pg,
+    pageCount,
+    frame: f,
+    characterName: heroName,
+    wardrobe_signature: wSig,
+    coherence_code: coh,
+  });
+  return { page: pg.page, prompt };
+});
 
           const out = [];
           const CONC = Math.min(Math.max(parseInt(concurrency || 3, 10), 1), 8);
@@ -971,7 +1034,7 @@ Returnera enbart json.`.trim();
               try {
                 const g = await geminiImage(
                   env,
-                  { prompt: item.prompt, character_ref_b64: ref_image_b64, style_refs_b64, coherence_code },
+                  { prompt: item.prompt, character_ref_b64: ref_image_b64, style_refs_b64, coherence_code: coh },
                   75000,
                   3,
                 );
@@ -997,14 +1060,19 @@ Returnera enbart json.`.trim();
           const fakeStory = story || { book: { pages: [{ page: 1, scene: scene_text, text: page_text }] } };
           const pg = { page: 1, scene: scene_text, text: page_text };
           const f = { shot_type: frame?.shot_type || "M", lens_mm: frame?.lens_mm || 50, subject_size_percent: frame?.subject_size_percent || 60 };
-          const prompt = buildFramePrompt({
-            style,
-            story: fakeStory,
-            page: pg,
-            pageCount: 1,
-            frame: f,
-            characterName: fakeStory.book?.bible?.main_character?.name || "Hjälten",
-          });
+          const wSig = deriveWardrobeSignature(fakeStory);
+const coh = makeCoherenceCode(fakeStory);
+const prompt = buildFramePrompt({
+  style,
+  story: fakeStory,
+  page: pg,
+  pageCount: 1,
+  frame: f,
+  characterName: fakeStory.book?.bible?.main_character?.name || "Hjälten",
+  wardrobe_signature: wSig,
+  coherence_code: coh,
+});
+
           const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
           return ok({ image_url: g.image_url, provider: g.provider || "google" });
         } catch (e) {
@@ -1017,7 +1085,10 @@ Returnera enbart json.`.trim();
         try {
           const { style = "cartoon", ref_image_b64, story } = await req.json().catch(() => ({}));
           const characterName = story?.book?.bible?.main_character?.name || "Hjälten";
-          const prompt = buildCoverPrompt({ style, story, characterName });
+          const wSig = deriveWardrobeSignature(story);
+const coh = makeCoherenceCode(story);
+const prompt = buildCoverPrompt({ style, story, characterName, wardrobe_signature: wSig, coherence_code: coh });
+
           const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 2);
           return ok({ image_url: g.image_url, provider: g.provider || "google" });
         } catch (e) {
