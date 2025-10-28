@@ -1,5 +1,5 @@
 // ============================================================================
-// BokPiloten – Worker v25 "Stabil PDF, Fontkit, Vine, Unik prompt, CORS"
+// BokPiloten – Worker v26 "Live"
 // Endpoints: story, ref-image, images, image/regenerate, images/upload, cover, pdf, diag
 // Env: API_KEY, GEMINI_API_KEY, IMAGES_API_TOKEN, CF_ACCOUNT_ID,
 //      CF_IMAGES_ACCOUNT_HASH, CF_IMAGES_VARIANT, FONT_BASE_URL
@@ -37,7 +37,7 @@ const ok = (data, init = {}) =>
     }),
   );
 const err = (message, code = 500, extra = {}) =>
-  ok({ error: message, ...extra }, { status: code });
+  ok({ error: String(message || "error"), ...extra }, { status: code });
 
 /* -------------------------- Trace / Diag log ------------------------- */
 const traceStart = () => [];
@@ -414,60 +414,46 @@ function drawWrappedCenterColor(
   return { size: minSize, lines: [] };
 }
 
-/* ----------------------------- Vine (stroke) ------------------------- */
-function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.35, 0.4, 0.55), opacity = 0.55, trace) {
-  try {
-    const path = `
-      M 0 0
-      C 30 14, 60 -14, 90 0
-      C 120 14, 150 -14, 180 0
-      C 210 14, 240 -14, 270 0
-      C 300 14, 330 -14, 360 0
-      M 60 0 c 6 8, 10 12, 12 18 c -8 -2, -12 -6, -18 -12 z
-      M 300 0 c -6 -8, -10 -12, -12 -18 c 8 2, 12 6, 18 12 z
+/* ----------------------------- Vine (fill) --------------------------- */
+function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.29,0.34,0.55), opacity = 0.55, trace){
+  try{
+    const band = `
+      M 0 -2
+      C 30 12, 60 -16, 90 -2
+      C 120 12, 150 -16, 180 -2
+      C 210 12, 240 -16, 270 -2
+      C 300 12, 330 -16, 360 -2
+      L 360 2
+      C 330 18, 300 -10, 270 2
+      C 240 18, 210 -10, 180 2
+      C 150 18, 120 -10, 90 2
+      C 60 18, 30 -10, 0 2
+      Z
+    `;
+    const leaves = `
+      M 60 0 c 7 8, 11 14, 12 20 c -10 -3, -16 -7, -22 -13 Z
+      M 300 0 c -7 -8, -11 -14, -12 -20 c 10 3, 16 7, 22 13 Z
     `;
     const baseW = 360;
     const scale = widthPt / baseW;
+    const x = centerX - widthPt/2;
 
-    page.drawSvgPath(path, {
-      x: centerX - widthPt / 2,
-      y,
-      scale,
-      borderColor: color,
-      borderWidth: 2.2,
-      opacity,
-    });
-
-    // Liten highlight för kontrast
-    page.drawSvgPath(
-      "M 0 0 C 30 14, 60 -14, 90 0 C 120 14, 150 -14, 180 0",
-      {
-        x: centerX - widthPt / 2,
-        y: y + 0.8,
-        scale,
-        borderColor: rgb(1, 1, 1),
-        borderWidth: 0.6,
-        opacity: Math.min(opacity * 0.45, 0.25),
-      },
-    );
+    page.drawSvgPath(band, { x, y, scale, color, opacity: Math.min(0.8, Math.max(0.2, opacity)) });
+    page.drawSvgPath(band, { x, y: y+0.8, scale, color: rgb(1,1,1), opacity: Math.min(opacity*0.25, 0.22) });
+    page.drawSvgPath(leaves, { x, y, scale, color: rgb(0.22,0.26,0.42), opacity: Math.min(0.9, opacity) });
 
     tr(trace, "vine:drawn", { y, widthPt });
-  } catch (e) {
+  }catch(e){
     tr(trace, "vine:error", { error: String(e?.message || e) });
   }
 }
 
 /* ------------------------- Fonts embedding --------------------------- */
-// Viktigt: fetchBytes måste finnas innan embedCustomFont
+// fetchBytes måste finnas innan embedCustomFont
 async function fetchBytes(trace, url) {
   tr(trace, "font:fetch", { url });
   const r = await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
-  tr(trace, "font:fetch:done", {
-    url,
-    status: r.status,
-    ct: r.headers.get("content-type"),
-    cl: r.headers.get("content-length"),
-  });
+  tr(trace, "font:fetch:done", { url, status: r.status, ct: r.headers.get("content-type"), cl: r.headers.get("content-length") });
   if (!r.ok) throw new Error(`fetch ${r.status}`);
   const bytes = new Uint8Array(await r.arrayBuffer());
   tr(trace, "font:bytes", { url, bytes: bytes.length });
@@ -520,13 +506,19 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   const readingAge = story?.book?.reading_age || 6;
   const { size: baseTextSize, leading: baseLeading } = fontSpecForReadingAge(readingAge);
 
-  const title = story?.book?.title || "Min bok";
+  const title = String(story?.book?.title ?? "Min bok");
   const subtitle =
-    story?.book?.tagline ||
-    (story?.book?.bible?.main_character?.name ? `Med ${story.book.bible.main_character.name}` : "");
+    String(
+      story?.book?.tagline ??
+      (story?.book?.bible?.main_character?.name ? `Med ${story.book.bible.main_character.name}` : "") ??
+      ""
+    );
   const blurb =
-    story?.book?.back_blurb ||
-    (story?.book?.lesson ? `Lärdom: ${story.book.lesson}.` : "En berättelse skapad med BokPiloten.");
+    String(
+      story?.book?.back_blurb ??
+      (story?.book?.lesson ? `Lärdom: ${story.book.lesson}.` : "En berättelse skapad med BokPiloten.") ??
+      ""
+    );
   const pagesStory = [...(story?.book?.pages || [])];
 
   // Indexera inkomna bilder
@@ -581,54 +573,50 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
       });
     }
 
-    // Stabil shrink-to-fit (utan outline)
-    function splitFit(text, font, maxSize, minSize, maxWidth, maxLines) {
-      const safe = String(text ?? "").replace(/\s+/g, " ").trim();
-      for (let s = maxSize; s >= minSize; s--) {
-        const words = safe.split(" ");
-        const lines = [];
-        let line = "";
-        for (const w of words) {
-          const t = line ? line + " " + w : w;
-          if (font.widthOfTextAtSize(t, s) <= maxWidth) line = t;
-          else { if (line) lines.push(line); line = w; }
-        }
-        if (line) lines.push(line);
-        if (lines.length <= maxLines) return { size: s, lines };
-      }
-      return { size: minSize, lines: [safe] };
-    }
+    // Titel + tagline med stabil wrapper
+    const cx = contentX + trimWpt / 2;
+    let topCenterY = contentY + trimHpt - mmToPt(GRID.outer_mm + 10);
 
-    const maxTitle = Math.min(trimWpt, trimHpt) * 0.16;
-    const minTitle = 28;
-    const fitT = splitFit(title, baloo, maxTitle, minTitle, tw, 2);
-    const titleLH = fitT.size * 1.08;
-    const fitS = subtitle ? splitFit(subtitle, nunitoSemi, Math.max(14, fitT.size * 0.46), 12, tw, 2) : null;
-    const subLH = fitS ? fitS.size * 1.12 : 0;
-    const blockH = fitT.lines.length * titleLH + (fitS ? mmToPt(4) + fitS.lines.length * subLH : 0);
-    let y = contentY + trimHpt - mmToPt(GRID.outer_mm + 6) - blockH;
+    const fitTitle = drawWrappedCenterColor(
+      coverPage,
+      title,
+      cx,
+      topCenterY,
+      tw,
+      mmToPt(26),                               // max två rader typ
+      baloo,
+      Math.min(trimWpt, trimHpt) * 0.16,
+      1.08,
+      22,
+      rgb(0.06, 0.06, 0.09),
+      "center",
+    );
 
-    for (const ln of fitT.lines) {
-      const w = baloo.widthOfTextAtSize(ln, fitT.size);
-      const x = tx + (tw - w) / 2;
-      coverPage.drawText(ln, { x, y, size: fitT.size, font: baloo, color: rgb(0.05, 0.05, 0.08) });
-      y += titleLH;
-    }
-    if (fitS) {
-      y += mmToPt(4);
-      for (const ln of fitS.lines) {
-        const w = nunitoSemi.widthOfTextAtSize(ln, fitS.size);
-        const x = tx + (tw - w) / 2;
-        coverPage.drawText(ln, { x, y, size: fitS.size, font: nunitoSemi, color: rgb(0.12, 0.12, 0.12) });
-        y += subLH;
-      }
+    // flytta upp center för taglinen, baserat på faktiskt block som ritades
+    topCenterY -= (fitTitle.lines.length * (fitTitle.size * 1.08)) + mmToPt(6);
+
+    if (subtitle) {
+      drawWrappedCenterColor(
+        coverPage,
+        subtitle,
+        cx,
+        topCenterY,
+        tw,
+        mmToPt(18),
+        nunitoSemi,
+        Math.max(14, (fitTitle.size * 0.48) | 0),
+        1.12,
+        12,
+        rgb(0.14, 0.14, 0.16),
+        "center",
+      );
     }
 
     if (mode === "preview" && watermark_text) drawWatermark(coverPage, watermark_text);
   } catch (e) {
     tr(trace, "cover:error", { error: String(e?.message || e) });
     const p = pdfDoc.addPage([pageW, pageH]);
-    p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: StandardFonts.Helvetica, color: rgb(0.8, 0.1, 0.1) });
+    p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
   }
 
   /* -------- [1] TITELBLAD -------- */
@@ -646,7 +634,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   const outer = mmToPt(GRID.outer_mm);
   for (let i = 0; i < 14; i++) {
     const scene = scenePages[i] || {};
-    const text = String(scene.text || "").trim();
+    const mainText = String(scene.text || "").trim();
 
     // Vänster: bild
     const left = pdfDoc.addPage([pageW, pageH]);
@@ -672,11 +660,11 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
 
     const cx = contentX + trimWpt / 2, cy = contentY + trimHpt / 2 + mmToPt(6);
     drawWrappedCenterColor(
-      right, text, cx, cy, trimWpt * 0.76, trimHpt * 0.46, nunito,
+      right, mainText, cx, cy, trimWpt * 0.76, trimHpt * 0.46, nunito,
       Math.round(baseTextSize * TEXT_SCALE), baseLeading, 12, rgb(0.08, 0.08, 0.1), "center",
     );
 
-    // Vine (nu synlig)
+    // Vine
     drawVineSafe(right, cx, contentY + trimHpt * 0.28, trimWpt * 0.56, rgb(0.25, 0.32, 0.55), 0.55, trace);
 
     // Sidnummer
@@ -767,7 +755,7 @@ async function handlePdfRequest(req, env) {
   try {
     const bytes = await buildPdf({ story, images: images || [], mode, trim, bleed_mm, watermark_text }, env, trace);
     const filename =
-      (story?.book?.title || "BokPiloten").replace(/[^\wåäöÅÄÖ\-]+/g, "_") +
+      (String(story?.book?.title || "BokPiloten").replace(/[^\wåäöÅÄÖ\-]+/g, "_")) +
       (mode === "print" ? "_PRINT.pdf" : "_PREVIEW.pdf");
     const headers = new Headers({
       "content-type": "application/pdf",
@@ -977,7 +965,6 @@ Returnera enbart json.`.trim();
       // Default 404
       return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: JSON_HEADERS });
     } catch (e) {
-      // Fångar ALLT så att CORS alltid följer med på fel
       return err(e?.message || "internal-error", 500);
     }
   },
