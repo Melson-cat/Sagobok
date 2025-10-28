@@ -1,5 +1,5 @@
 // ============================================================================
-// BokPiloten – Worker v26 "Live"
+// BokPiloten – Worker v27 "Helvetica Cover + Vine Fix + Safe Wrap"
 // Endpoints: story, ref-image, images, image/regenerate, images/upload, cover, pdf, diag
 // Env: API_KEY, GEMINI_API_KEY, IMAGES_API_TOKEN, CF_ACCOUNT_ID,
 //      CF_IMAGES_ACCOUNT_HASH, CF_IMAGES_VARIANT, FONT_BASE_URL
@@ -17,7 +17,7 @@ const CORS = {
   "access-control-allow-headers": "*",
   "access-control-max-age": "600",
   "access-control-expose-headers": "Content-Disposition, X-Request-Id",
-  "vary": "Origin",
+  vary: "Origin",
 };
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -383,6 +383,8 @@ function drawWatermark(page, text = "FÖRHANDSVISNING", color = rgb(0.5, 0.5, 0.
     rotate: degrees(angleDeg),
   });
 }
+
+// robust ord/tecken-wrapping så inget försvinner
 function drawWrappedCenterColor(
   page, text, centerX, centerY, maxW, maxH, font,
   baseSize, baseLeading, minSize = 12, color = rgb(0.08, 0.08, 0.08), align = "center",
@@ -393,12 +395,32 @@ function drawWrappedCenterColor(
     const words = safe.split(/\s+/);
     const lines = [];
     let line = "";
+
+    const pushLine = (t) => {
+      if (t == null || t === "") return;
+      lines.push(t);
+    };
+
     for (const w of words) {
+      // om själva ordet är bredare än max → bryt på tecken
+      if (font.widthOfTextAtSize(w, size) > maxW) {
+        // flush förgående rad
+        if (line) { pushLine(line); line = ""; }
+        let cur = "";
+        for (const ch of w.split("")) {
+          const test = cur + ch;
+          if (font.widthOfTextAtSize(test, size) <= maxW) cur = test;
+          else { pushLine(cur); cur = ch; }
+        }
+        if (cur) pushLine(cur);
+        continue;
+      }
       const t = line ? line + " " + w : w;
       if (font.widthOfTextAtSize(t, size) <= maxW) line = t;
-      else { if (line) lines.push(line); line = w; }
+      else { pushLine(line); line = w; }
     }
-    if (line) lines.push(line);
+    if (line) pushLine(line);
+
     const blockH = lines.length * lineH;
     if (blockH <= maxH) {
       let y = centerY + blockH / 2 - lineH;
@@ -413,85 +435,33 @@ function drawWrappedCenterColor(
   }
   return { size: minSize, lines: [] };
 }
+
 /* ----------------------------- Vine (fill) --------------------------- */
-function drawVineSafe(
-  page,
-  centerX,
-  y,
-  widthPt,
-  color = rgb(0.25, 0.32, 0.55),
-  stroke = 2,
-  trace
-) {
-  const half = widthPt / 2;
-  const x0 = centerX - half;
+function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.25,0.32,0.55), stroke = 2.2) {
+  const baseW = 360;
+  const scale = widthPt / baseW;
+  const x = centerX - widthPt/2;
 
-  // 1) Försök SVG-path (snabbvägen)
-  try {
-    if (typeof page.drawSvgPath === "function") {
-      const baseW = 360;
-      const scale = widthPt / baseW;
-      const path =
-        "M 0 0 C 30 14, 60 -14, 90 0 C 120 14, 150 -14, 180 0 C 210 14, 240 -14, 270 0 C 300 14, 330 -14, 360 0";
-      page.drawSvgPath(path, {
-        x: x0,
-        y,
-        scale,
-        borderColor: color,
-        borderWidth: stroke,
-        lineCap: "round",
-        lineJoin: "round",
-      });
-      if (typeof tr === "function") tr(trace, "vine:svg");
-      return;
-    }
-  } catch (e) {
-    if (typeof tr === "function") tr(trace, "vine:svg:error", { e: String(e) });
-    // fall-through
-  }
-
-  // 2) Polyline-fallback (fungerar alltid)
-  const segments = 160;
-  const amp = 10;
-  const freq = Math.PI * 4; // ca två vågor över bredden
-  let prevX = x0,
-    prevY = y;
-  for (let i = 1; i <= segments; i++) {
-    const t = i / segments;
-    const X = x0 + t * widthPt;
-    const Y = y + Math.sin(t * freq) * amp;
-    page.drawLine({
-      start: { x: prevX, y: prevY },
-      end: { x: X, y: Y },
-      thickness: stroke,
-      color,
-      lineCap: "round",
+  if (typeof page.drawSvgPath === "function") {
+    const path = "M 0 0 C 30 14, 60 -14, 90 0 C 120 14, 150 -14, 180 0 C 210 14, 240 -14, 270 0 C 300 14, 330 -14, 360 0";
+    page.drawSvgPath(path, { x, y, scale, borderColor: color, borderWidth: stroke, opacity: 0.95, lineCap: "round", lineJoin: "round" });
+    page.drawSvgPath("M 0 0 C 30 14, 60 -14, 90 0", {
+      x, y: y + 0.9, scale, borderColor: rgb(1,1,1), borderWidth: 0.6, opacity: 0.18, lineCap: "round"
     });
-    prevX = X;
-    prevY = Y;
+    return;
   }
-  // små blad
-  page.drawEllipse({
-    x: centerX - widthPt * 0.25,
-    y: y + amp * 0.6,
-    xScale: 6,
-    yScale: 3,
-    color,
-    borderColor: color,
-  });
-  page.drawEllipse({
-    x: centerX + widthPt * 0.25,
-    y: y - amp * 0.6,
-    xScale: 6,
-    yScale: 3,
-    color,
-    borderColor: color,
-  });
-  if (typeof tr === "function") tr(trace, "vine:polyline");
+
+  // fallback-polyline
+  const segments = 180, amp = 10, freq = Math.PI*4;
+  let px = x, py = y;
+  for (let i=1;i<=segments;i++){
+    const t=i/segments, X=x+t*widthPt, Y=y+Math.sin(t*freq)*amp;
+    page.drawLine({ start:{x:px,y:py}, end:{x:X,y:Y}, thickness: stroke, color, lineCap:"round" });
+    px=X; py=Y;
+  }
 }
 
 /* ------------------------- Fonts embedding --------------------------- */
-// fetchBytes måste finnas innan embedCustomFont
 async function fetchBytes(trace, url) {
   tr(trace, "font:fetch", { url });
   const r = await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
@@ -507,9 +477,7 @@ async function fetchBytes(trace, url) {
   return bytes;
 }
 async function embedCustomFont(trace, pdfDoc, url) {
-  try {
-    if (typeof pdfDoc.registerFontkit === "function") pdfDoc.registerFontkit(fontkit);
-  } catch {}
+  try { if (typeof pdfDoc.registerFontkit === "function") pdfDoc.registerFontkit(fontkit); } catch {}
   const bytes = await fetchBytes(trace, url);
   const font = await pdfDoc.embedFont(bytes, { subset: true });
   tr(trace, "font:embedded", { url });
@@ -517,26 +485,18 @@ async function embedCustomFont(trace, pdfDoc, url) {
 }
 async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
   for (const url of urls) {
-    try {
-      return await embedCustomFont(trace, pdfDoc, url);
-    } catch (e) {
-      tr(trace, "font:embed-error", { url, error: String(e?.message || e) });
-    }
+    try { return await embedCustomFont(trace, pdfDoc, url); }
+    catch (e) { tr(trace, "font:embed-error", { url, error: String(e?.message || e) }); }
   }
   tr(trace, "font:fallback", { label, standard: standardName });
   return await pdfDoc.embedFont(standardName);
 }
 
 /* ---------------------------- Build PDF ------------------------------ */
-async function buildPdf(
-  { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text },
-  env,
-  trace
-) {
+async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }, env, trace) {
   tr(trace, "pdf:start");
   const trimSpec = TRIMS[trim] || TRIMS.square210;
-  const bleed =
-    mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
+  const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
 
   const trimWpt = mmToPt(trimSpec.w_mm);
   const trimHpt = mmToPt(trimSpec.h_mm);
@@ -549,48 +509,42 @@ async function buildPdf(
   pdfDoc.registerFontkit(fontkit);
   tr(trace, "pdf:doc-created");
 
-  // Fonts via env base
-  const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(/\/+$/, "");
-  const BALOO = [`${base}/Baloo-bold.ttf`];
-  const NUN_R = [`${base}/Nunito-Regular.ttf`];
-  const NUN_SB = [`${base}/Nunito-Semibold.ttf`];
+  // Standardfonter (inget externberoende för rubriker)
+  const helv      = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const helvBold  = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const helvIt    = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
 
-  const baloo = await getFontOrFallback(trace, pdfDoc, "baloo", BALOO, StandardFonts.HelveticaBold);
-  const nunito = await getFontOrFallback(trace, pdfDoc, "nunito", NUN_R, StandardFonts.TimesRoman);
-  const nunitoSemi = await getFontOrFallback(
-    trace,
-    pdfDoc,
-    "nunitoSemi",
-    NUN_SB,
-    StandardFonts.Helvetica
-  );
+  // Nunito för brödtext (om saknas → standardfall tillbaka till Times/Helvetica)
+  const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(/\/+$/, "");
+  const NUN_R  = [`${base}/Nunito-Regular.ttf`];
+  const NUN_SB = [`${base}/Nunito-Semibold.ttf`];
+  const nunito     = await getFontOrFallback(trace, pdfDoc, "nunito", NUN_R,  StandardFonts.TimesRoman);
+  const nunitoSemi = await getFontOrFallback(trace, pdfDoc, "nunitoSemi", NUN_SB, StandardFonts.Helvetica);
   tr(trace, "pdf:fonts-ready");
 
   const readingAge = story?.book?.reading_age || 6;
   const { size: baseTextSize, leading: baseLeading } = fontSpecForReadingAge(readingAge);
 
   const title = String(story?.book?.title ?? "Min bok");
-  const subtitle = String(
-    story?.book?.tagline ??
+  const subtitle =
+    String(
+      story?.book?.tagline ??
       (story?.book?.bible?.main_character?.name ? `Med ${story.book.bible.main_character.name}` : "") ??
       ""
-  );
-  const blurb = String(
-    story?.book?.back_blurb ??
+    );
+  const blurb =
+    String(
+      story?.book?.back_blurb ??
       (story?.book?.lesson ? `Lärdom: ${story.book.lesson}.` : "En berättelse skapad med BokPiloten.") ??
       ""
-  );
+    );
   const pagesStory = [...(story?.book?.pages || [])];
 
   // Indexera inkomna bilder
   let coverSrc = images?.find((x) => x?.kind === "cover" || x?.page === 0) || null;
   const imgByPage = new Map();
   (images || []).forEach((row) => {
-    if (
-      Number.isFinite(row?.page) &&
-      row.page > 0 &&
-      (row.image_id || row.url || row.image_url || row.data_url)
-    ) {
+    if (Number.isFinite(row?.page) && row.page > 0 && (row.image_id || row.url || row.image_url || row.data_url)) {
       imgByPage.set(row.page, row);
     }
   });
@@ -618,21 +572,13 @@ async function buildPdf(
       const coverImg = await embedImage(pdfDoc, bytes);
       if (coverImg) drawImageCover(coverPage, coverImg, 0, 0, pageW, pageH);
     } else {
-      coverPage.drawRectangle({
-        x: contentX,
-        y: contentY,
-        width: trimWpt,
-        height: trimHpt,
-        color: rgb(0.94, 0.96, 1),
-      });
+      coverPage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.94, 0.96, 1) });
     }
 
     // Topp-gradient för läsbarhet
     const safeInset = mmToPt(GRID.outer_mm + 2);
-    const tx = contentX + safeInset;
     const tw = trimWpt - safeInset * 2;
-    const steps = 8,
-      h = mmToPt(20);
+    const steps = 8, h = mmToPt(20);
     for (let i = 0; i < steps; i++) {
       const t = (steps - i) / steps;
       coverPage.drawRectangle({
@@ -645,41 +591,21 @@ async function buildPdf(
       });
     }
 
-    // Titel + tagline
+    // Titel + tagline (Helvetica)
     const cx = contentX + trimWpt / 2;
     let topCenterY = contentY + trimHpt - mmToPt(GRID.outer_mm + 10);
 
     const fitTitle = drawWrappedCenterColor(
-      coverPage,
-      title,
-      cx,
-      topCenterY,
-      tw,
-      mmToPt(26),
-      baloo,
-      Math.min(trimWpt, trimHpt) * 0.16,
-      1.08,
-      22,
-      rgb(0.06, 0.06, 0.09),
-      "center"
+      coverPage, title, cx, topCenterY, tw, mmToPt(30),
+      helvBold, Math.min(trimWpt, trimHpt) * 0.15, 1.08, 18, rgb(0.06,0.06,0.09), "center"
     );
 
-    topCenterY -= fitTitle.lines.length * (fitTitle.size * 1.08) + mmToPt(6);
+    topCenterY -= (fitTitle.lines.length * (fitTitle.size * 1.08)) + mmToPt(6);
 
     if (subtitle) {
       drawWrappedCenterColor(
-        coverPage,
-        subtitle,
-        cx,
-        topCenterY,
-        tw,
-        mmToPt(18),
-        nunitoSemi,
-        Math.max(14, (fitTitle.size * 0.48) | 0),
-        1.12,
-        12,
-        rgb(0.14, 0.14, 0.16),
-        "center"
+        coverPage, subtitle, cx, topCenterY, tw, mmToPt(18),
+        helvIt, Math.max(14, (fitTitle.size * 0.46) | 0), 1.12, 12, rgb(0.14,0.14,0.16), "center"
       );
     }
 
@@ -687,53 +613,22 @@ async function buildPdf(
   } catch (e) {
     tr(trace, "cover:error", { error: String(e?.message || e) });
     const p = pdfDoc.addPage([pageW, pageH]);
-    p.drawText("Omslag kunde inte renderas.", {
-      x: mmToPt(15),
-      y: mmToPt(15),
-      size: 12,
-      font: nunito,
-      color: rgb(0.8, 0.1, 0.1),
-    });
+    p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
   }
 
   /* -------- [1] TITELBLAD -------- */
   {
     const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawRectangle({
-      x: contentX,
-      y: contentY,
-      width: trimWpt,
-      height: trimHpt,
-      color: rgb(0.96, 0.98, 1),
-    });
-    const cx = contentX + trimWpt / 2,
-      cy = contentY + trimHpt * 0.62;
+    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
+    const cx = contentX + trimWpt / 2, cy = contentY + trimHpt * 0.62;
     drawWrappedCenterColor(
-      page,
-      title,
-      cx,
-      cy,
-      trimWpt * 0.76,
-      trimHpt * 0.22,
-      baloo,
-      Math.min(trimWpt, trimHpt) * 0.12,
-      1.08,
-      20,
-      rgb(0.1, 0.1, 0.1)
+      page, title, cx, cy, trimWpt * 0.76, trimHpt * 0.26,
+      helvBold, Math.min(trimWpt, trimHpt) * 0.12, 1.08, 18, rgb(0.1,0.1,0.1)
     );
     if (subtitle)
       drawWrappedCenterColor(
-        page,
-        subtitle,
-        cx,
-        cy - mmToPt(14),
-        trimWpt * 0.7,
-        trimHpt * 0.12,
-        nunitoSemi,
-        Math.max(14, 22),
-        1.12,
-        12,
-        rgb(0.15, 0.15, 0.15)
+        page, subtitle, cx, cy - mmToPt(14), trimWpt * 0.7, trimHpt * 0.12,
+        helvIt, Math.max(14, 22), 1.12, 12, rgb(0.15,0.15,0.15)
       );
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   }
@@ -746,13 +641,7 @@ async function buildPdf(
 
     // Vänster: bild
     const left = pdfDoc.addPage([pageW, pageH]);
-    left.drawRectangle({
-      x: contentX,
-      y: contentY,
-      width: trimWpt,
-      height: trimHpt,
-      color: rgb(1, 1, 1),
-    });
+    left.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(1, 1, 1) });
     try {
       const src = imgByPage.get(scene.page);
       let imgObj = null;
@@ -761,94 +650,42 @@ async function buildPdf(
         imgObj = await embedImage(pdfDoc, bytes);
       }
       if (imgObj) drawImageCover(left, imgObj, 0, 0, pageW, pageH);
-      else
-        left.drawText("Bild saknas", {
-          x: contentX + mmToPt(4),
-          y: contentY + mmToPt(6),
-          size: 12,
-          font: nunito,
-          color: rgb(0.8, 0.1, 0.1),
-        });
+      else left.drawText("Bild saknas", { x: contentX + mmToPt(4), y: contentY + mmToPt(6), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
     } catch (e) {
       tr(trace, "page:image:error", { page: scene?.page, error: String(e?.message || e) });
-      left.drawText("Bildfel", {
-        x: contentX + mmToPt(4),
-        y: contentY + mmToPt(6),
-        size: 12,
-        font: nunito,
-        color: rgb(0.8, 0.1, 0.1),
-      });
+      left.drawText("Bildfel", { x: contentX + mmToPt(4), y: contentY + mmToPt(6), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
     }
     if (mode === "preview" && watermark_text) drawWatermark(left, watermark_text);
 
     // Höger: text
     const right = pdfDoc.addPage([pageW, pageH]);
-    right.drawRectangle({
-      x: contentX,
-      y: contentY,
-      width: trimWpt,
-      height: trimHpt,
-      color: rgb(0.96, 0.98, 1),
-    });
+    right.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
 
-    const cx = contentX + trimWpt / 2,
-      cy = contentY + trimHpt / 2 + mmToPt(6);
+    const cx = contentX + trimWpt / 2, cy = contentY + trimHpt / 2 + mmToPt(6);
     drawWrappedCenterColor(
-      right,
-      mainText,
-      cx,
-      cy,
-      trimWpt * 0.76,
-      trimHpt * 0.46,
-      nunito,
-      Math.round(baseTextSize * TEXT_SCALE),
-      baseLeading,
-      12,
-      rgb(0.08, 0.08, 0.1),
-      "center"
+      right, mainText, cx, cy, trimWpt * 0.76, trimHpt * 0.46, nunito,
+      Math.round(baseTextSize * TEXT_SCALE), baseLeading, 12, rgb(0.08, 0.08, 0.1), "center"
     );
 
     // Sidnummer
     const pageNum = 2 + i * 2 + 1;
     const pn = String(pageNum);
     const pnW = nunito.widthOfTextAtSize(pn, 10);
-    right.drawText(pn, {
-      x: contentX + trimWpt - outer - pnW,
-      y: contentY + mmToPt(6),
-      size: 10,
-      font: nunito,
-      color: rgb(0.35, 0.35, 0.45),
-    });
+    right.drawText(pn, { x: contentX + trimWpt - outer - pnW, y: contentY + mmToPt(6), size: 10, font: nunito, color: rgb(0.35, 0.35, 0.45) });
 
-    // Watermark först, vine ovanpå
+    // Watermark först, vine ovanpå – och lite närmare texten
     if (mode === "preview" && watermark_text) drawWatermark(right, watermark_text);
-    drawVineSafe(right, cx, contentY + trimHpt * 0.28, trimWpt * 0.56, rgb(0.25, 0.32, 0.55), 2, trace);
+    drawVineSafe(right, cx, contentY + trimHpt * 0.36, trimWpt * 0.60, rgb(0.25,0.32,0.55), 2.2);
   }
 
   /* -------- [30] SLUT -------- */
   {
     const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawRectangle({
-      x: contentX,
-      y: contentY,
-      width: trimWpt,
-      height: trimHpt,
-      color: rgb(0.96, 0.98, 1),
-    });
-    const cx = contentX + trimWpt / 2,
-      cy = contentY + trimHpt / 2;
+    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
+    const cx = contentX + trimWpt / 2, cy = contentY + trimHpt / 2;
     drawWrappedCenterColor(
-      page,
-      "SLUT",
-      cx,
-      cy,
-      trimWpt * 0.5,
-      trimHpt * 0.2,
-      baloo,
-      Math.min(trimWpt, trimHpt) * 0.12,
-      1.06,
-      24,
-      rgb(0.1, 0.1, 0.1)
+      page, "SLUT", cx, cy, trimWpt * 0.6, trimHpt * 0.3,
+      helvBold, Math.min(trimWpt, trimHpt) * 0.12, 1.08, 16, rgb(0.1,0.1,0.1)
     );
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   }
@@ -860,38 +697,18 @@ async function buildPdf(
     page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: bg });
     const centerX = contentX + trimWpt / 2;
     const centerY = contentY + trimHpt / 2;
-    drawWrappedCenterColor(
-      page,
-      blurb,
-      centerX,
-      centerY,
-      trimWpt * 0.72,
-      trimHpt * 0.36,
-      nunito,
-      14,
-      1.42,
-      12,
-      rgb(1, 1, 1),
-      "center"
-    );
+    drawWrappedCenterColor(page, blurb, centerX, centerY, trimWpt * 0.72, trimHpt * 0.36, nunito, 14, 1.42, 12, rgb(1,1,1), "center");
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   } catch (e) {
     tr(trace, "back:error", { error: String(e?.message || e) });
     const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawText("Baksidan kunde inte renderas.", {
-      x: mmToPt(15),
-      y: mmToPt(15),
-      size: 12,
-      font: nunito,
-      color: rgb(0.8, 0.1, 0.1),
-    });
+    page.drawText("Baksidan kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
   }
 
   const bytes = await pdfDoc.save();
   tr(trace, "pdf:done", { bytes: bytes.length });
   return bytes;
 }
-
 
 /* ------------------------- Upload handler ---------------------------- */
 async function handleUploadRequest(req, env) {
@@ -964,7 +781,7 @@ async function handlePdfRequest(req, env) {
 /* --------------------------- /api/diag ------------------------------- */
 async function handleDiagRequest(_req, env) {
   const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(/\/+$/, "");
-  const candidates = [`${base}/Baloo-bold.ttf`, `${base}/Nunito-Regular.ttf`, `${base}/Nunito-Semibold.ttf`];
+  const candidates = [`${base}/Nunito-Regular.ttf`, `${base}/Nunito-Semibold.ttf`];
   const checks = [];
   for (const u of candidates) {
     try {
