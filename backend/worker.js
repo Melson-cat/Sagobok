@@ -461,6 +461,28 @@ function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.25,0.32,0.55), st
   }
 }
 
+function drawHeart(page, cx, y, sizePt, color = rgb(0.58, 0.30, 0.80)) {
+  const s = sizePt / 100;
+  const path = [
+    "M 50 30",
+    "C 50 20, 40 10, 30 10",
+    "C 15 10, 10 25, 10 30",
+    "C 10 50, 30 65, 50 85",
+    "C 70 65, 90 50, 90 30",
+    "C 90 25, 85 10, 70 10",
+    "C 60 10, 50 20, 50 30",
+    "Z"
+  ].join(" ");
+  if (typeof page.drawSvgPath === "function") {
+    page.drawSvgPath(path, { x: cx - 50*s, y: y - 30*s, scale: s, color, borderColor: color, opacity: 0.9 });
+  } else {
+    // enkel fallback: två cirklar + triangel
+    page.drawEllipse({ x: cx - sizePt*0.18, y, xScale: sizePt*0.18, yScale: sizePt*0.16, color });
+    page.drawEllipse({ x: cx + sizePt*0.18, y, xScale: sizePt*0.18, yScale: sizePt*0.16, color });
+    page.drawRectangle({ x: cx - sizePt*0.18, y: y - sizePt*0.35, width: sizePt*0.36, height: sizePt*0.35, color, opacity: 0.98, rotate: degrees(45) });
+  }
+}
+
 /* ------------------------- Fonts embedding --------------------------- */
 async function fetchBytes(trace, url) {
   tr(trace, "font:fetch", { url });
@@ -562,76 +584,107 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   const scenePages = mapTo14ScenePages();
   tr(trace, "pdf:scene-pages", { count: scenePages.length });
 
-  /* -------- FRONT COVER -------- */
-  try {
-    const coverPage = pdfDoc.addPage([pageW, pageH]);
-    if (!coverSrc) coverSrc = imgByPage.get(1) || null;
+ /* -------- FRONT COVER -------- */
+try {
+  const coverPage = pdfDoc.addPage([pageW, pageH]);
+  if (!coverSrc) coverSrc = imgByPage.get(1) || null;
 
-    if (coverSrc) {
-      const bytes = await getImageBytes(env, coverSrc);
-      const coverImg = await embedImage(pdfDoc, bytes);
-      if (coverImg) drawImageCover(coverPage, coverImg, 0, 0, pageW, pageH);
-    } else {
-      coverPage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.94, 0.96, 1) });
-    }
-
-    // Topp-gradient för läsbarhet
-    const safeInset = mmToPt(GRID.outer_mm + 2);
-    const tw = trimWpt - safeInset * 2;
-    const steps = 8, h = mmToPt(20);
-    for (let i = 0; i < steps; i++) {
-      const t = (steps - i) / steps;
-      coverPage.drawRectangle({
-        x: contentX,
-        y: contentY + trimHpt - h + (h / steps) * i,
-        width: trimWpt,
-        height: h / steps,
-        color: rgb(0, 0, 0),
-        opacity: 0.22 * t,
-      });
-    }
-
-    // Titel + tagline (Helvetica)
-    const cx = contentX + trimWpt / 2;
-    let topCenterY = contentY + trimHpt - mmToPt(GRID.outer_mm + 10);
-
-    const fitTitle = drawWrappedCenterColor(
-      coverPage, title, cx, topCenterY, tw, mmToPt(30),
-      helvBold, Math.min(trimWpt, trimHpt) * 0.15, 1.08, 18, rgb(0.06,0.06,0.09), "center"
-    );
-
-    topCenterY -= (fitTitle.lines.length * (fitTitle.size * 1.08)) + mmToPt(6);
-
-    if (subtitle) {
-      drawWrappedCenterColor(
-        coverPage, subtitle, cx, topCenterY, tw, mmToPt(18),
-        helvIt, Math.max(14, (fitTitle.size * 0.46) | 0), 1.12, 12, rgb(0.14,0.14,0.16), "center"
-      );
-    }
-
-    if (mode === "preview" && watermark_text) drawWatermark(coverPage, watermark_text);
-  } catch (e) {
-    tr(trace, "cover:error", { error: String(e?.message || e) });
-    const p = pdfDoc.addPage([pageW, pageH]);
-    p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
+  if (coverSrc) {
+    const bytes = await getImageBytes(env, coverSrc);
+    const coverImg = await embedImage(pdfDoc, bytes);
+    if (coverImg) drawImageCover(coverPage, coverImg, 0, 0, pageW, pageH);
+  } else {
+    coverPage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.94, 0.96, 1) });
   }
 
-  /* -------- [1] TITELBLAD -------- */
-  {
-    const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
-    const cx = contentX + trimWpt / 2, cy = contentY + trimHpt * 0.62;
+  // === INGEN topp-panel längre ===
+  const safeInset = mmToPt(GRID.outer_mm + 2);
+  const tw = trimWpt - safeInset * 2;
+  const cx = contentX + trimWpt / 2;
+  let topCenterY = contentY + trimHpt - mmToPt(GRID.outer_mm + 14);
+
+  // Först mät titeln (utan att rita) via vår wrapper:
+  const fitTitle = drawWrappedCenterColor(
+    coverPage, title, cx, topCenterY, tw, mmToPt(32),
+    nunitoSemi /* helvetica känsla via StandardFonts.Helvetica i fallback */,
+    Math.min(trimWpt, trimHpt) * 0.16, 1.08, 22, rgb(0,0,0), "center"
+  );
+
+  // Lägg en mjuk glas/badge-bakgrund exakt bakom titel+tagline
+  const lineH = fitTitle.size * 1.08;
+  const titleBlockH = Math.max(lineH * Math.max(1, fitTitle.lines.length), mmToPt(14));
+  const subtitleSize = Math.max(14, (fitTitle.size * 0.48) | 0);
+  const subtitleBlockH = subtitle ? subtitleSize * 1.12 : 0;
+  const padY = mmToPt(4), padX = mmToPt(6);
+  const badgeH = titleBlockH + (subtitle ? (mmToPt(3) + subtitleBlockH) : 0) + padY * 2;
+
+  // badge-y mittas runt topCenterY
+  const badgeY = topCenterY - badgeH/2 + mmToPt(2);
+  coverPage.drawRectangle({
+    x: contentX + safeInset - padX,
+    y: badgeY,
+    width: tw + padX * 2,
+    height: badgeH,
+    color: rgb(1,1,1),
+    opacity: 0.22
+  });
+
+  // Rita titel igen (över badgen)
+  drawWrappedCenterColor(
+    coverPage, title, cx, topCenterY, tw, mmToPt(32),
+    nunitoSemi, fitTitle.size, 1.08, 22, rgb(0.05,0.05,0.05), "center"
+  );
+
+  // Underrubrik under titeln med säker spacing
+  if (subtitle) {
+    const bottomOfTitleCenter = topCenterY - (titleBlockH/2);
+    const subtitleCenterY = bottomOfTitleCenter - mmToPt(5);
     drawWrappedCenterColor(
-      page, title, cx, cy, trimWpt * 0.76, trimHpt * 0.26,
-      helvBold, Math.min(trimWpt, trimHpt) * 0.12, 1.08, 18, rgb(0.1,0.1,0.1)
+      coverPage, subtitle, cx, subtitleCenterY, tw, mmToPt(18),
+      nunito /* lite lättare vikt */,
+      subtitleSize, 1.12, 12, rgb(0.12,0.12,0.12), "center"
     );
-    if (subtitle)
-      drawWrappedCenterColor(
-        page, subtitle, cx, cy - mmToPt(14), trimWpt * 0.7, trimHpt * 0.12,
-        helvIt, Math.max(14, 22), 1.12, 12, rgb(0.15,0.15,0.15)
-      );
-    if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   }
+
+  if (mode === "preview" && watermark_text) drawWatermark(coverPage, watermark_text);
+} catch (e) {
+  tr(trace, "cover:error", { error: String(e?.message || e) });
+  const p = pdfDoc.addPage([pageW, pageH]);
+  p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
+}
+
+
+ /* -------- [1] TITELBLAD -------- */
+{
+  const page = pdfDoc.addPage([pageW, pageH]);
+  page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
+
+  const cx = contentX + trimWpt / 2;
+  const titleCenterY = contentY + trimHpt * 0.60;
+
+  // Rita titel och få ut verklig storlek/antal rader:
+  const fit = drawWrappedCenterColor(
+    page, title, cx, titleCenterY, trimWpt * 0.76, trimHpt * 0.26,
+    nunitoSemi, Math.min(trimWpt, trimHpt) * 0.12, 1.08, 20, rgb(0.08,0.08,0.1), "center"
+  );
+
+  // Räkna fram nederkant av titelblocket och lägg underrubrik nedanför
+  const titleLineH = fit.size * 1.08;
+  const titleBlockH = Math.max(titleLineH * Math.max(1, fit.lines.length), mmToPt(12));
+  const bottomOfTitleCenter = titleCenterY - (titleBlockH / 2);
+
+  if (subtitle) {
+    const subtitleSize = Math.max(14, (fit.size * 0.5) | 0);
+    const subtitleCenterY = bottomOfTitleCenter - mmToPt(6);
+    drawWrappedCenterColor(
+      page, subtitle, cx, subtitleCenterY, trimWpt * 0.72, mmToPt(22),
+      nunito, subtitleSize, 1.12, 12, rgb(0.14,0.14,0.16), "center"
+    );
+  }
+
+  if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
+}
+
 
   /* -------- 14 uppslag: bild vänster, text höger + vine -------- */
   const outer = mmToPt(GRID.outer_mm);
@@ -678,17 +731,29 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     drawVineSafe(right, cx, contentY + trimHpt * 0.36, trimWpt * 0.60, rgb(0.25,0.32,0.55), 2.2);
   }
 
-  /* -------- [30] SLUT -------- */
-  {
-    const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
-    const cx = contentX + trimWpt / 2, cy = contentY + trimHpt / 2;
-    drawWrappedCenterColor(
-      page, "SLUT", cx, cy, trimWpt * 0.6, trimHpt * 0.3,
-      helvBold, Math.min(trimWpt, trimHpt) * 0.12, 1.08, 16, rgb(0.1,0.1,0.1)
-    );
-    if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
-  }
+ /* -------- [30] SLUT -------- */
+{
+  const page = pdfDoc.addPage([pageW, pageH]);
+  page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
+
+  const cx = contentX + trimWpt / 2;
+  const topY = contentY + trimHpt * 0.58;
+
+  // Elegant avslutningstext i samma brödtextfont
+  drawWrappedCenterColor(
+    page,
+    "Snipp snapp snut – så var sagan slut!",
+    cx, topY,
+    trimWpt * 0.76, mmToPt(30),
+    nunito, 22, 1.22, 14, rgb(0.1,0.1,0.12), "center"
+  );
+
+  // Litet hjärta under
+  drawHeart(page, cx, contentY + trimHpt * 0.38, mmToPt(14), rgb(0.50, 0.36, 0.82));
+
+  if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
+}
+
 
   /* -------- [31] BACK COVER -------- */
   try {
