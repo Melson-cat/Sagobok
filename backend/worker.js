@@ -9,37 +9,97 @@ import fontkit from "@pdf-lib/fontkit";
 
 /* ------------------------------ Globals ------------------------------ */
 const OPENAI_MODEL = "gpt-4o-mini";
-
-/* ------------------------------- CORS -------------------------------- */
+// ------------------------------- CORS --------------------------------
 const CORS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, OPTIONS",
   "access-control-allow-headers": "*",
   "access-control-max-age": "600",
   "access-control-expose-headers": "Content-Disposition, X-Request-Id",
-  vary: "Origin",
+  "vary": "Origin",
 };
-const JSONH = {
+const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
   ...CORS,
 };
-const ok = (data, init = {}) =>
-  new Response(JSON.stringify(data), {
-    status: init.status || 200,
-    headers: { ...JSONH, ...(init.headers || {}) },
-  });
-const err = (msg, code = 400, extra = {}) =>
-  ok({ error: msg, ...extra }, { status: code });
 const withCORS = (resp) => {
-  const h = new Headers(resp.headers);
+  const h = new Headers(resp.headers || {});
   for (const [k, v] of Object.entries(CORS)) h.set(k, v);
-  return new Response(resp.body, { status: resp.status, headers: h });
+  return new Response(resp.body, { status: resp.status || 200, headers: h });
 };
-const log = (...a) => {
+const ok = (data, init={}) =>
+  withCORS(new Response(JSON.stringify(data), {
+    status: init.status || 200,
+    headers: new Headers({ ...jsonHeaders, ...(init.headers || {}) }),
+  }));
+const err = (message, code=500, extra={}) =>
+  ok({ error: message, ...extra }, { status: code });
+
+// ------------------------------ HANDLERS ------------------------------
+async function handleDiag(env) {
+  const base = env.FONT_BASE_URL || "";
+  const urls = [
+    `${base}/Baloo-bold.ttf`,
+    `${base}/Nunito-Regular.ttf`,
+    `${base}/Nunito-Semibold.ttf`,
+  ];
+  const checks = [];
+  for (const url of urls) {
+    try {
+      const r = await fetch(url, { method: "HEAD" });
+      checks.push({ url, status: r.status, ct: r.headers.get("content-type"), cl: r.headers.get("content-length") });
+    } catch {
+      checks.push({ url, status: 0, ct: null, cl: null });
+    }
+  }
+  return ok({ has_fontkit: true, font_base: base, checks });
+}
+
+async function handlePdf(req, env) {
+  // OBS: din befintliga PDF-generator här inne
+  // Viktigt: alla returer måste wrappas med withCORS
   try {
-    console.log(...a);
-  } catch {}
+    const body = await req.json();
+    // ... bygg pdfBuffer (Uint8Array)
+    const pdfBuffer = new Uint8Array([/* ... */]); // placeholder
+
+    const h = new Headers({
+      "content-type": "application/pdf",
+      "content-disposition": `inline; filename="bokpiloten-preview.pdf"`,
+      "cache-control": "no-store",
+    });
+    // lägg CORS ovanpå
+    for (const [k, v] of Object.entries(CORS)) h.set(k, v);
+    return new Response(pdfBuffer, { status: 200, headers: h });
+  } catch (e) {
+    return err(e?.message || "pdf-build-failed", 500);
+  }
+}
+
+// ------------------------------ ENTRY ------------------------------
+export default {
+  async fetch(req, env, ctx) {
+    try {
+      // Preflight måste alltid svara med CORS
+      if (req.method === "OPTIONS") {
+        return withCORS(new Response(null, { status: 204 }));
+      }
+
+      const { pathname } = new URL(req.url);
+      if (pathname === "/api/diag" && req.method === "GET") {
+        return await handleDiag(env);
+      }
+      if (pathname === "/api/pdf" && req.method === "POST") {
+        return await handlePdf(req, env);
+      }
+
+      return ok({ ok: true, msg: "alive" });
+    } catch (e) {
+      // Fångar ALLT så att CORS alltid följer med på fel
+      return err(e?.message || "internal-error", 500);
+    }
+  },
 };
 
 /* -------------------------- Trace / Diag log ------------------------- */
