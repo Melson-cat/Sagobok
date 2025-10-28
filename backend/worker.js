@@ -1,15 +1,16 @@
 // ============================================================================
-// BokPiloten – Worker v23 "Stabil PDF, Fontkit, Vine-stroke, Unik bildprompt"
+// BokPiloten – Worker v24 "Stabil PDF, Fontkit, Vine, Unik prompt, CORS"
 // Endpoints: story, ref-image, images, image/regenerate, images/upload, cover, pdf, diag
 // Env: API_KEY, GEMINI_API_KEY, IMAGES_API_TOKEN, CF_ACCOUNT_ID,
 //      CF_IMAGES_ACCOUNT_HASH, CF_IMAGES_VARIANT, FONT_BASE_URL
 // ============================================================================
-import { PDFDocument, rgb, degrees } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 
 /* ------------------------------ Globals ------------------------------ */
 const OPENAI_MODEL = "gpt-4o-mini";
-// ------------------------------- CORS --------------------------------
+
+/* ------------------------------- CORS -------------------------------- */
 const CORS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, OPTIONS",
@@ -28,79 +29,15 @@ const withCORS = (resp) => {
   for (const [k, v] of Object.entries(CORS)) h.set(k, v);
   return new Response(resp.body, { status: resp.status || 200, headers: h });
 };
-const ok = (data, init={}) =>
-  withCORS(new Response(JSON.stringify(data), {
-    status: init.status || 200,
-    headers: new Headers({ ...jsonHeaders, ...(init.headers || {}) }),
-  }));
-const err = (message, code=500, extra={}) =>
+const ok = (data, init = {}) =>
+  withCORS(
+    new Response(JSON.stringify(data), {
+      status: init.status || 200,
+      headers: new Headers({ ...jsonHeaders, ...(init.headers || {}) }),
+    }),
+  );
+const err = (message, code = 500, extra = {}) =>
   ok({ error: message, ...extra }, { status: code });
-
-// ------------------------------ HANDLERS ------------------------------
-async function handleDiag(env) {
-  const base = env.FONT_BASE_URL || "";
-  const urls = [
-    `${base}/Baloo-bold.ttf`,
-    `${base}/Nunito-Regular.ttf`,
-    `${base}/Nunito-Semibold.ttf`,
-  ];
-  const checks = [];
-  for (const url of urls) {
-    try {
-      const r = await fetch(url, { method: "HEAD" });
-      checks.push({ url, status: r.status, ct: r.headers.get("content-type"), cl: r.headers.get("content-length") });
-    } catch {
-      checks.push({ url, status: 0, ct: null, cl: null });
-    }
-  }
-  return ok({ has_fontkit: true, font_base: base, checks });
-}
-
-async function handlePdf(req, env) {
-  // OBS: din befintliga PDF-generator här inne
-  // Viktigt: alla returer måste wrappas med withCORS
-  try {
-    const body = await req.json();
-    // ... bygg pdfBuffer (Uint8Array)
-    const pdfBuffer = new Uint8Array([/* ... */]); // placeholder
-
-    const h = new Headers({
-      "content-type": "application/pdf",
-      "content-disposition": `inline; filename="bokpiloten-preview.pdf"`,
-      "cache-control": "no-store",
-    });
-    // lägg CORS ovanpå
-    for (const [k, v] of Object.entries(CORS)) h.set(k, v);
-    return new Response(pdfBuffer, { status: 200, headers: h });
-  } catch (e) {
-    return err(e?.message || "pdf-build-failed", 500);
-  }
-}
-
-// ------------------------------ ENTRY ------------------------------
-export default {
-  async fetch(req, env, ctx) {
-    try {
-      // Preflight måste alltid svara med CORS
-      if (req.method === "OPTIONS") {
-        return withCORS(new Response(null, { status: 204 }));
-      }
-
-      const { pathname } = new URL(req.url);
-      if (pathname === "/api/diag" && req.method === "GET") {
-        return await handleDiag(env);
-      }
-      if (pathname === "/api/pdf" && req.method === "POST") {
-        return await handlePdf(req, env);
-      }
-
-      return ok({ ok: true, msg: "alive" });
-    } catch (e) {
-      // Fångar ALLT så att CORS alltid följer med på fel
-      return err(e?.message || "internal-error", 500);
-    }
-  },
-};
 
 /* -------------------------- Trace / Diag log ------------------------- */
 const traceStart = () => [];
@@ -158,8 +95,7 @@ async function openaiJSON(env, system, user) {
       ],
     }),
   });
-  if (!r.ok)
-    throw new Error(`OpenAI ${r.status} ${await r.text().catch(() => "")}`);
+  if (!r.ok) throw new Error(`OpenAI ${r.status} ${await r.text().catch(() => "")}`);
   const j = await r.json();
   return JSON.parse(j?.choices?.[0]?.message?.content || "{}");
 }
@@ -169,12 +105,10 @@ function findGeminiImagePart(json) {
   const cand = json?.candidates?.[0];
   const parts = cand?.content?.parts || cand?.content?.[0]?.parts || [];
   let p = parts.find(
-    (x) => x?.inlineData?.mimeType?.startsWith("image/") && x?.inlineData?.data
+    (x) => x?.inlineData?.mimeType?.startsWith("image/") && x?.inlineData?.data,
   );
   if (p) return { mime: p.inlineData.mimeType, b64: p.inlineData.data };
-  p = parts.find(
-    (x) => typeof x?.text === "string" && x.text.startsWith("data:image/")
-  );
+  p = parts.find((x) => typeof x?.text === "string" && x.text.startsWith("data:image/"));
   if (p) {
     const m = p.text.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
     if (m) return { mime: m[1], b64: m[2] };
@@ -192,9 +126,7 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
 
   const parts = [];
   if (item.character_ref_b64)
-    parts.push({
-      inlineData: { mimeType: "image/png", data: item.character_ref_b64 },
-    });
+    parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
   if (Array.isArray(item.style_refs_b64)) {
     for (const b64 of item.style_refs_b64.slice(0, 3))
       if (typeof b64 === "string" && b64.length > 64)
@@ -214,11 +146,7 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts }],
-          generationConfig: {
-            responseModalities: ["IMAGE"],
-            temperature: 0.35,
-            topP: 0.9,
-          },
+          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.9 },
         }),
         signal: ctl.signal,
       });
@@ -227,11 +155,7 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
       const j = await r.json();
       const got = findGeminiImagePart(j);
       if (got?.b64 && got?.mime)
-        return {
-          image_url: `data:${got.mime};base64,${got.b64}`,
-          provider: "google",
-          b64: got.b64,
-        };
+        return { image_url: `data:${got.mime};base64,${got.b64}`, provider: "google", b64: got.b64 };
       if (got?.url) return { image_url: got.url, provider: "google" };
       throw new Error("No image in response");
     } catch (e) {
@@ -246,10 +170,8 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
 /* ------------------------------ Styles ------------------------------- */
 function styleHint(style = "cartoon") {
   const s = (style || "cartoon").toLowerCase();
-  if (s === "storybook")
-    return "storybook watercolor, soft edges, paper texture, warm and cozy";
-  if (s === "pixar")
-    return "stylized 3D animated film still (not photographic): enlarged eyes, simplified forms, clean gradients";
+  if (s === "storybook") return "storybook watercolor, soft edges, paper texture, warm and cozy";
+  if (s === "pixar") return "stylized 3D animated film still (not photographic): enlarged eyes, simplified forms, clean gradients";
   if (s === "comic") return "bold comic style, inked lines, flat colors";
   if (s === "painting") return "soft painterly illustration, visible brushwork";
   return "expressive 2D cartoon: thick-and-thin outlines, cel shading, vibrant palette";
@@ -292,13 +214,9 @@ Hårda regler: 12–20 sidor, 2–4 meningar/sida. Konkreta scener i huvudmiljö
 `;
 function heroDescriptor({ category, name, age, traits }) {
   if ((category || "kids") === "pets")
-    return `HJÄLTE: ett husdjur vid namn ${name || "Nova"}; egenskaper: ${
-      traits || "nyfiken, lekfull"
-    }.`;
+    return `HJÄLTE: ett husdjur vid namn ${name || "Nova"}; egenskaper: ${traits || "nyfiken, lekfull"}.`;
   const a = parseInt(age || 6, 10);
-  return `HJÄLTE: ett barn vid namn ${name || "Nova"} (${a} år), egenskaper: ${
-    traits || "modig, omtänksam"
-  }.`;
+  return `HJÄLTE: ett barn vid namn ${name || "Nova"} (${a} år), egenskaper: ${traits || "modig, omtänksam"}.`;
 }
 function normalizePlan(pages) {
   const out = [];
@@ -316,35 +234,20 @@ function buildSeriesContext(story) {
   const locs = [];
   const beats = pages.map((p) => {
     const key = (p.scene || p.text || "").replace(/\s+/g, " ").trim();
-    const lkey =
-      key
-        .toLowerCase()
-        .match(/(strand|skog|kök|sovrum|park|hav|stad|skola|gård|sjö|berg)/)?.[1] ||
-      "plats";
+    const lkey = key.toLowerCase().match(/(strand|skog|kök|sovrum|park|hav|stad|skola|gård|sjö|berg)/)?.[1] || "plats";
     if (!locs.includes(lkey)) locs.push(lkey);
     return `p${p.page}: ${key}`;
   });
-  return [
-    `SERIES CONTEXT — title: ${story?.book?.title || "Sagobok"}`,
-    `locations: ${locs.join(", ")}`,
-    `beats: ${beats.join(" | ")}`,
-  ].join("\n");
+  return [`SERIES CONTEXT — title: ${story?.book?.title || "Sagobok"}`, `locations: ${locs.join(", ")}`, `beats: ${beats.join(" | ")}`].join("\n");
 }
 function shotLine(f = {}) {
   const map = { EW: "extra wide", W: "wide", M: "medium", CU: "close-up" };
-  return `${map[f.shot_type || "M"]} shot, ~${
-    f.subject_size_percent || 60
-  }% subject, ≈${f.lens_mm || 35}mm`;
+  return `${map[f.shot_type || "M"]} shot, ~${f.subject_size_percent || 60}% subject, ≈${f.lens_mm || 35}mm`;
 }
 function buildFramePrompt({ style, story, page, pageCount, frame, characterName }) {
   const series = buildSeriesContext(story);
   const styleLine = styleHint(style);
-  // unik salt för att undvika bilddubbletter
-  const salt =
-    "UNIQUE_TOKEN:" +
-    page.page +
-    "-" +
-    ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
+  const salt = "UNIQUE_TOKEN:" + page.page + "-" + ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
   return [
     series,
     `This is page ${page.page} of ${pageCount}.`,
@@ -366,11 +269,7 @@ function characterCardPrompt({ style, bible, traits }) {
   const mc = bible?.main_character || {};
   const name = mc.name || "Nova";
   const phys = mc.physique || traits || "fluffy gray cat with curious eyes";
-  return [
-    `Character reference in ${styleHint(style)}.`,
-    `One hero only, full body, neutral background.`,
-    `Hero: ${name}, ${phys}. No text.`,
-  ].join(" ");
+  return [`Character reference in ${styleHint(style)}.`, `One hero only, full body, neutral background.`, `Hero: ${name}, ${phys}. No text.`].join(" ");
 }
 function buildCoverPrompt({ style, story, characterName }) {
   const styleLine = styleHint(style);
@@ -414,11 +313,7 @@ async function uploadOneToCFImages(env, { data_url, id }) {
   form.append("file", file.blob, id || `page-${Date.now()}.png`);
   const r = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/images/v1`,
-    {
-      method: "POST",
-      headers: { authorization: `Bearer ${env.IMAGES_API_TOKEN}` },
-      body: form,
-    }
+    { method: "POST", headers: { authorization: `Bearer ${env.IMAGES_API_TOKEN}` }, body: form },
   );
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.success) throw new Error(`CF Images ${r.status} ${JSON.stringify(j)}`);
@@ -495,34 +390,13 @@ function drawWatermark(page, text = "FÖRHANDSVISNING", color = rgb(0.5, 0.5, 0.
     rotate: degrees(angleDeg),
   });
 }
-function drawTextWithOutline(
-  page,
-  text,
-  x,
-  y,
-  size,
-  font,
-  opts = {}
-) {
-  const {
-    fill = rgb(1, 1, 1),
-    outline = rgb(0, 0, 0),
-    shadow = true,
-    shadowOpacity = 0.25,
-    outlineScale = 0.06,
-  } = opts;
+function drawTextWithOutline(page, text, x, y, size, font, opts = {}) {
+  const { fill = rgb(1, 1, 1), outline = rgb(0, 0, 0), shadow = true, shadowOpacity = 0.25, outlineScale = 0.06 } = opts;
   const safeText = String(text ?? "");
   const s = clamp(size || 12, 4, 200);
   const d = Math.max(0.8, s * outlineScale);
   if (shadow)
-    page.drawText(safeText, {
-      x: x + d * 0.6,
-      y: y - d * 0.6,
-      size: s,
-      font,
-      color: rgb(0, 0, 0),
-      opacity: shadowOpacity,
-    });
+    page.drawText(safeText, { x: x + d * 0.6, y: y - d * 0.6, size: s, font, color: rgb(0, 0, 0), opacity: shadowOpacity });
   const offs = [
     [d, 0],
     [-d, 0],
@@ -549,7 +423,7 @@ function drawWrappedCenterColor(
   baseLeading,
   minSize = 12,
   color = rgb(0.08, 0.08, 0.08),
-  align = "center"
+  align = "center",
 ) {
   const safe = String(text ?? "");
   for (let size = baseSize; size >= minSize; size--) {
@@ -587,15 +461,7 @@ function drawWrappedCenterColor(
 }
 
 /* ----------------------------- Vine (stroke) ------------------------- */
-function drawVineSafe(
-  page,
-  centerX,
-  y,
-  widthPt,
-  color = rgb(0.35, 0.4, 0.55),
-  opacity = 0.35,
-  trace
-) {
+function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.35, 0.4, 0.55), opacity = 0.35, trace) {
   try {
     const path = `
       M 0 0
@@ -608,14 +474,7 @@ function drawVineSafe(
     `;
     const baseW = 360;
     const scale = widthPt / baseW;
-    page.drawSvgPath(path, {
-      x: centerX - widthPt / 2,
-      y,
-      scale,
-      borderColor: color,
-      borderWidth: 1.4,
-      opacity,
-    });
+    page.drawSvgPath(path, { x: centerX - widthPt / 2, y, scale, borderColor: color, borderWidth: 1.4, opacity });
     tr(trace, "vine:drawn", { widthPt });
   } catch (e) {
     tr(trace, "vine:error", { error: String(e?.message || e) });
@@ -626,20 +485,16 @@ function drawVineSafe(
 async function fetchBytes(trace, url) {
   tr(trace, "font:fetch", { url });
   const r = await fetch(url, { cf: { cacheTtl: 86400, cacheEverything: true } });
-  tr(trace, "font:fetch:done", {
-    url,
-    status: r.status,
-    ct: r.headers.get("content-type"),
-    cl: r.headers.get("content-length"),
-  });
+  tr(trace, "font:fetch:done", { url, status: r.status, ct: r.headers.get("content-type"), cl: r.headers.get("content-length") });
   if (!r.ok) throw new Error(`fetch ${r.status}`);
   const bytes = new Uint8Array(await r.arrayBuffer());
   tr(trace, "font:bytes", { url, bytes: bytes.length });
   return bytes;
 }
 async function embedCustomFont(trace, pdfDoc, url) {
+  // RÄTT: registrera fontkit på *instansen*
   try {
-    PDFDocument.registerFontkit(pdfFontkit);
+    pdfDoc.registerFontkit(fontkit);
   } catch (_) {}
   const bytes = await fetchBytes(trace, url);
   const font = await pdfDoc.embedFont(bytes, { subset: true });
@@ -659,19 +514,10 @@ async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
 }
 
 /* ---------------------------- Build PDF ------------------------------ */
-async function buildPdf(
-  { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text },
-  env,
-  trace
-) {
+async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }, env, trace) {
   tr(trace, "pdf:start");
   const trimSpec = TRIMS[trim] || TRIMS.square210;
-  const bleed =
-    mode === "print"
-      ? Number.isFinite(bleed_mm)
-        ? bleed_mm
-        : trimSpec.default_bleed_mm
-      : 0;
+  const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
 
   const trimWpt = mmToPt(trimSpec.w_mm);
   const trimHpt = mmToPt(trimSpec.h_mm);
@@ -681,67 +527,36 @@ async function buildPdf(
   const contentY = mmToPt(bleed);
 
   const pdfDoc = await PDFDocument.create();
-  pdfDoc.registerFontkit(fontkit); 
+  pdfDoc.registerFontkit(fontkit);
   tr(trace, "pdf:doc-created");
 
   // Fonts via env base
-  const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(
-    /\/+$/,
-    ""
-  );
+  const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(/\/+$/, "");
   const BALOO = [`${base}/Baloo-bold.ttf`];
   const NUN_R = [`${base}/Nunito-Regular.ttf`];
   const NUN_SB = [`${base}/Nunito-Semibold.ttf`];
 
-  const baloo = await getFontOrFallback(
-    trace,
-    pdfDoc,
-    "baloo",
-    BALOO,
-    StandardFonts.HelveticaBold
-  );
-  const nunito = await getFontOrFallback(
-    trace,
-    pdfDoc,
-    "nunito",
-    NUN_R,
-    StandardFonts.TimesRoman
-  );
-  const nunitoSemi = await getFontOrFallback(
-    trace,
-    pdfDoc,
-    "nunitoSemi",
-    NUN_SB,
-    StandardFonts.Helvetica
-  );
+  const baloo = await getFontOrFallback(trace, pdfDoc, "baloo", BALOO, StandardFonts.HelveticaBold);
+  const nunito = await getFontOrFallback(trace, pdfDoc, "nunito", NUN_R, StandardFonts.TimesRoman);
+  const nunitoSemi = await getFontOrFallback(trace, pdfDoc, "nunitoSemi", NUN_SB, StandardFonts.Helvetica);
   tr(trace, "pdf:fonts-ready");
 
   const readingAge = story?.book?.reading_age || 6;
-  const { size: baseTextSize, leading: baseLeading } =
-    fontSpecForReadingAge(readingAge);
+  const { size: baseTextSize, leading: baseLeading } = fontSpecForReadingAge(readingAge);
 
   const title = story?.book?.title || "Min bok";
   const subtitle =
     story?.book?.tagline ||
-    (story?.book?.bible?.main_character?.name
-      ? `Med ${story.book.bible.main_character.name}`
-      : "");
+    (story?.book?.bible?.main_character?.name ? `Med ${story.book.bible.main_character.name}` : "");
   const blurb =
-    story?.book?.back_blurb ||
-    (story?.book?.lesson
-      ? `Lärdom: ${story.book.lesson}.`
-      : "En berättelse skapad med BokPiloten.");
+    story?.book?.back_blurb || (story?.book?.lesson ? `Lärdom: ${story.book.lesson}.` : "En berättelse skapad med BokPiloten.");
   const pagesStory = [...(story?.book?.pages || [])];
 
   // Indexera inkomna bilder
   let coverSrc = images?.find((x) => x?.kind === "cover" || x?.page === 0) || null;
   const imgByPage = new Map();
   (images || []).forEach((row) => {
-    if (
-      Number.isFinite(row?.page) &&
-      row.page > 0 &&
-      (row.image_id || row.url || row.image_url || row.data_url)
-    ) {
+    if (Number.isFinite(row?.page) && row.page > 0 && (row.image_id || row.url || row.image_url || row.data_url)) {
       imgByPage.set(row.page, row);
     }
   });
@@ -758,7 +573,7 @@ async function buildPdf(
           page: out.length + 1,
           text: "",
           scene: "",
-        }
+        },
       );
     return out;
   }
@@ -775,16 +590,10 @@ async function buildPdf(
       const coverImg = await embedImage(pdfDoc, bytes);
       if (coverImg) drawImageCover(coverPage, coverImg, 0, 0, pageW, pageH);
     } else {
-      coverPage.drawRectangle({
-        x: contentX,
-        y: contentY,
-        width: trimWpt,
-        height: trimHpt,
-        color: rgb(0.94, 0.96, 1),
-      });
+      coverPage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.94, 0.96, 1) });
     }
 
-    // topp-gradient för läsbarhet
+    // Topp-gradient för läsbarhet
     const safeInset = mmToPt(GRID.outer_mm + 2);
     const tx = contentX + safeInset;
     const tw = trimWpt - safeInset * 2;
@@ -802,7 +611,7 @@ async function buildPdf(
       });
     }
 
-    // Stabil shrink-to-fit (utan outline för Baloo)
+    // Stabil shrink-to-fit
     function splitFit(text, font, maxSize, minSize, maxWidth, maxLines) {
       const safe = String(text ?? "").replace(/\s+/g, " ").trim();
       for (let s = maxSize; s >= minSize; s--) {
@@ -827,31 +636,15 @@ async function buildPdf(
     const minTitle = 28;
     const fitT = splitFit(title, baloo, maxTitle, minTitle, tw, 2);
     const titleLH = fitT.size * 1.08;
-    const fitS = subtitle
-      ? splitFit(
-          subtitle,
-          nunitoSemi,
-          Math.max(14, fitT.size * 0.46),
-          12,
-          tw,
-          2
-        )
-      : null;
+    const fitS = subtitle ? splitFit(subtitle, nunitoSemi, Math.max(14, fitT.size * 0.46), 12, tw, 2) : null;
     const subLH = fitS ? fitS.size * 1.12 : 0;
-    const blockH =
-      fitT.lines.length * titleLH + (fitS ? mmToPt(4) + fitS.lines.length * subLH : 0);
+    const blockH = fitT.lines.length * titleLH + (fitS ? mmToPt(4) + fitS.lines.length * subLH : 0);
     let y = contentY + trimHpt - mmToPt(GRID.outer_mm + 6) - blockH;
 
     for (const ln of fitT.lines) {
       const w = baloo.widthOfTextAtSize(ln, fitT.size);
       const x = tx + (tw - w) / 2;
-      coverPage.drawText(ln, {
-        x,
-        y,
-        size: fitT.size,
-        font: baloo,
-        color: rgb(0.05, 0.05, 0.08),
-      });
+      coverPage.drawText(ln, { x, y, size: fitT.size, font: baloo, color: rgb(0.05, 0.05, 0.08) });
       y += titleLH;
     }
     if (fitS) {
@@ -859,53 +652,25 @@ async function buildPdf(
       for (const ln of fitS.lines) {
         const w = nunitoSemi.widthOfTextAtSize(ln, fitS.size);
         const x = tx + (tw - w) / 2;
-        drawTextWithOutline(coverPage, ln, x, y, fitS.size, nunitoSemi, {
-          outlineScale: 0.035,
-          shadowOpacity: 0.15,
-        });
+        drawTextWithOutline(coverPage, ln, x, y, fitS.size, nunitoSemi, { outlineScale: 0.035, shadowOpacity: 0.15 });
         y += subLH;
       }
     }
 
-    if (mode === "preview" && watermark_text)
-      drawWatermark(coverPage, watermark_text);
+    if (mode === "preview" && watermark_text) drawWatermark(coverPage, watermark_text);
   } catch (e) {
     tr(trace, "cover:error", { error: String(e?.message || e) });
     const p = pdfDoc.addPage([pageW, pageH]);
-    p.drawText("Omslag kunde inte renderas.", {
-      x: mmToPt(15),
-      y: mmToPt(15),
-      size: 12,
-      font: nunito,
-      color: rgb(0.8, 0.1, 0.1),
-    });
+    p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
   }
 
   /* -------- [1] TITELBLAD -------- */
   {
     const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawRectangle({
-      x: contentX,
-      y: contentY,
-      width: trimWpt,
-      height: trimHpt,
-      color: rgb(0.96, 0.98, 1),
-    });
+    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
     const cx = contentX + trimWpt / 2,
       cy = contentY + trimHpt * 0.62;
-    drawWrappedCenterColor(
-      page,
-      title,
-      cx,
-      cy,
-      trimWpt * 0.76,
-      trimHpt * 0.22,
-      baloo,
-      Math.min(trimWpt, trimHpt) * 0.12,
-      1.08,
-      20,
-      rgb(0.1, 0.1, 0.1)
-    );
+    drawWrappedCenterColor(page, title, cx, cy, trimWpt * 0.76, trimHpt * 0.22, baloo, Math.min(trimWpt, trimHpt) * 0.12, 1.08, 20, rgb(0.1, 0.1, 0.1));
     if (subtitle)
       drawWrappedCenterColor(
         page,
@@ -918,7 +683,7 @@ async function buildPdf(
         Math.max(14, 22),
         1.12,
         12,
-        rgb(0.15, 0.15, 0.15)
+        rgb(0.15, 0.15, 0.15),
       );
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   }
@@ -931,13 +696,7 @@ async function buildPdf(
 
     // Vänster: bild
     const left = pdfDoc.addPage([pageW, pageH]);
-    left.drawRectangle({
-      x: contentX,
-      y: contentY,
-      width: trimWpt,
-      height: trimHpt,
-      color: rgb(1, 1, 1),
-    });
+    left.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(1, 1, 1) });
     try {
       const src = imgByPage.get(scene.page);
       let imgObj = null;
@@ -946,35 +705,16 @@ async function buildPdf(
         imgObj = await embedImage(pdfDoc, bytes);
       }
       if (imgObj) drawImageCover(left, imgObj, 0, 0, pageW, pageH);
-      else
-        left.drawText("Bild saknas", {
-          x: contentX + mmToPt(4),
-          y: contentY + mmToPt(6),
-          size: 12,
-          font: nunito,
-          color: rgb(0.8, 0.1, 0.1),
-        });
+      else left.drawText("Bild saknas", { x: contentX + mmToPt(4), y: contentY + mmToPt(6), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
     } catch (e) {
       tr(trace, "page:image:error", { page: scene?.page, error: String(e?.message || e) });
-      left.drawText("Bildfel", {
-        x: contentX + mmToPt(4),
-        y: contentY + mmToPt(6),
-        size: 12,
-        font: nunito,
-        color: rgb(0.8, 0.1, 0.1),
-      });
+      left.drawText("Bildfel", { x: contentX + mmToPt(4), y: contentY + mmToPt(6), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
     }
     if (mode === "preview" && watermark_text) drawWatermark(left, watermark_text);
 
     // Höger: text
     const right = pdfDoc.addPage([pageW, pageH]);
-    right.drawRectangle({
-      x: contentX,
-      y: contentY,
-      width: trimWpt,
-      height: trimHpt,
-      color: rgb(0.96, 0.98, 1),
-    });
+    right.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
 
     const cx = contentX + trimWpt / 2,
       cy = contentY + trimHpt / 2 + mmToPt(6);
@@ -990,23 +730,17 @@ async function buildPdf(
       baseLeading,
       12,
       rgb(0.08, 0.08, 0.1),
-      "center"
+      "center",
     );
 
-    // Vine (stroke)
+    // Vine
     drawVineSafe(right, cx, contentY + trimHpt * 0.28, trimWpt * 0.5, rgb(0.35, 0.4, 0.55), 0.28, trace);
 
     // Sidnummer
     const pageNum = 2 + i * 2 + 1;
     const pn = String(pageNum);
     const pnW = nunito.widthOfTextAtSize(pn, 10);
-    right.drawText(pn, {
-      x: contentX + trimWpt - outer - pnW,
-      y: contentY + mmToPt(6),
-      size: 10,
-      font: nunito,
-      color: rgb(0.35, 0.35, 0.45),
-    });
+    right.drawText(pn, { x: contentX + trimWpt - outer - pnW, y: contentY + mmToPt(6), size: 10, font: nunito, color: rgb(0.35, 0.35, 0.45) });
 
     if (mode === "preview" && watermark_text) drawWatermark(right, watermark_text);
   }
@@ -1014,28 +748,10 @@ async function buildPdf(
   /* -------- [30] SLUT -------- */
   {
     const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawRectangle({
-      x: contentX,
-      y: contentY,
-      width: trimWpt,
-      height: trimHpt,
-      color: rgb(0.96, 0.98, 1),
-    });
+    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
     const cx = contentX + trimWpt / 2,
       cy = contentY + trimHpt / 2;
-    drawWrappedCenterColor(
-      page,
-      "SLUT",
-      cx,
-      cy,
-      trimWpt * 0.5,
-      trimHpt * 0.2,
-      baloo,
-      Math.min(trimWpt, trimHpt) * 0.12,
-      1.06,
-      24,
-      rgb(0.1, 0.1, 0.1)
-    );
+    drawWrappedCenterColor(page, "SLUT", cx, cy, trimWpt * 0.5, trimHpt * 0.2, baloo, Math.min(trimWpt, trimHpt) * 0.12, 1.06, 24, rgb(0.1, 0.1, 0.1));
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   }
 
@@ -1043,40 +759,15 @@ async function buildPdf(
   try {
     const page = pdfDoc.addPage([pageW, pageH]);
     const bg = rgb(0.58, 0.54, 0.86);
-    page.drawRectangle({
-      x: contentX,
-      y: contentY,
-      width: trimWpt,
-      height: trimHpt,
-      color: bg,
-    });
+    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: bg });
     const centerX = contentX + trimWpt / 2;
     const centerY = contentY + trimHpt / 2;
-    drawWrappedCenterColor(
-      page,
-      blurb,
-      centerX,
-      centerY,
-      trimWpt * 0.72,
-      trimHpt * 0.36,
-      nunito,
-      14,
-      1.42,
-      12,
-      rgb(1, 1, 1),
-      "center"
-    );
+    drawWrappedCenterColor(page, blurb, centerX, centerY, trimWpt * 0.72, trimHpt * 0.36, nunito, 14, 1.42, 12, rgb(1, 1, 1), "center");
     if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
   } catch (e) {
     tr(trace, "back:error", { error: String(e?.message || e) });
     const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawText("Baksidan kunde inte renderas.", {
-      x: mmToPt(15),
-      y: mmToPt(15),
-      size: 12,
-      font: nunito,
-      color: rgb(0.8, 0.1, 0.1),
-    });
+    page.drawText("Baksidan kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
   }
 
   const bytes = await pdfDoc.save();
@@ -1088,13 +779,8 @@ async function buildPdf(
 async function handleUploadRequest(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
-    const items = Array.isArray(body?.items)
-      ? body.items
-      : body?.data_url
-      ? [body]
-      : [];
-    if (!items.length)
-      return err("Body must include items[] or {page|kind,data_url}", 400);
+    const items = Array.isArray(body?.items) ? body.items : body?.data_url ? [body] : [];
+    if (!items.length) return err("Body must include items[] or {page|kind,data_url}", 400);
 
     const uploads = [];
     for (const it of items) {
@@ -1132,21 +818,16 @@ async function handlePdfRequest(req, env) {
   tr(trace, "pdf:entry");
 
   const body = await req.json().catch(() => ({}));
-  const { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text } =
-    body || {};
+  const { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text } = body || {};
   if (!story || !Array.isArray(story?.book?.pages)) {
     return new Response(JSON.stringify({ error: "Missing story" }), {
       status: 400,
-      headers: { ...JSONH, "x-request-id": reqId },
+      headers: { ...jsonHeaders, "x-request-id": reqId },
     });
   }
 
   try {
-    const bytes = await buildPdf(
-      { story, images: images || [], mode, trim, bleed_mm, watermark_text },
-      env,
-      trace
-    );
+    const bytes = await buildPdf({ story, images: images || [], mode, trim, bleed_mm, watermark_text }, env, trace);
     const filename =
       (story?.book?.title || "BokPiloten").replace(/[^\wåäöÅÄÖ\-]+/g, "_") +
       (mode === "print" ? "_PRINT.pdf" : "_PREVIEW.pdf");
@@ -1162,63 +843,51 @@ async function handlePdfRequest(req, env) {
     const body = debug
       ? JSON.stringify({ error: e?.message || String(e), trace }, null, 2)
       : JSON.stringify({ error: "PDF failed" });
-    return new Response(body, {
-      status: 500,
-      headers: { "content-type": "application/json", "x-request-id": reqId, ...CORS },
-    });
+    return new Response(body, { status: 500, headers: { "content-type": "application/json", "x-request-id": reqId, ...CORS } });
   }
 }
 
 /* --------------------------- /api/diag ------------------------------- */
 async function handleDiagRequest(_req, env) {
   const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(/\/+$/, "");
-  const candidates = [
-    `${base}/Baloo-bold.ttf`,
-    `${base}/Nunito-Regular.ttf`,
-    `${base}/Nunito-Semibold.ttf`,
-  ];
+  const candidates = [`${base}/Baloo-bold.ttf`, `${base}/Nunito-Regular.ttf`, `${base}/Nunito-Semibold.ttf`];
   const checks = [];
   for (const u of candidates) {
     try {
       const r = await fetch(u, { method: "HEAD" });
-      checks.push({
-        url: u,
-        status: r.status,
-        ct: r.headers.get("content-type"),
-        cl: r.headers.get("content-length"),
-      });
+      checks.push({ url: u, status: r.status, ct: r.headers.get("content-type"), cl: r.headers.get("content-length") });
     } catch (e) {
       checks.push({ url: u, error: String(e?.message || e) });
     }
   }
-  return ok({ font_base: base, has_fontkit: !!pdfFontkit, checks });
+  return ok({ font_base: base, has_fontkit: true, checks });
 }
 
 /* --------------------------- Story endpoints ------------------------- */
 export default {
   async fetch(req, env) {
-    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-    const url = new URL(req.url);
+    try {
+      if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+      const url = new URL(req.url);
 
-    // Health
-    if (req.method === "GET" && url.pathname === "/") return ok({ ok: true, ts: Date.now() });
+      // Health
+      if (req.method === "GET" && url.pathname === "/") return ok({ ok: true, ts: Date.now() });
 
-    // Diag
-    if (req.method === "GET" && url.pathname === "/api/diag")
-      return handleDiagRequest(req, env);
+      // Diag
+      if (req.method === "GET" && url.pathname === "/api/diag") return handleDiagRequest(req, env);
 
-    // Story
-    if (req.method === "POST" && url.pathname === "/api/story") {
-      try {
-        const body = await req.json().catch(() => ({}));
-        const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
-        const targetAge = Number.isFinite(parseInt(reading_age, 10))
-          ? parseInt(reading_age, 10)
-          : (category || "kids") === "pets"
-          ? 8
-          : parseInt(age || 6, 10);
+      // Story
+      if (req.method === "POST" && url.pathname === "/api/story") {
+        try {
+          const body = await req.json().catch(() => ({}));
+          const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
+          const targetAge = Number.isFinite(parseInt(reading_age, 10))
+            ? parseInt(reading_age, 10)
+            : (category || "kids") === "pets"
+            ? 8
+            : parseInt(age || 6, 10);
 
-        const outlineUser = `
+          const outlineUser = `
 ${heroDescriptor({ category, name, age, traits })}
 Kategori: ${category || "kids"}.
 Läsålder: ${targetAge}.
@@ -1226,9 +895,9 @@ Läsålder: ${targetAge}.
 Antal sidor: ${pages || 12}.
 Returnera enbart json.`.trim();
 
-        const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
+          const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
 
-        const storyUser = `
+          const storyUser = `
 OUTLINE:
 ${JSON.stringify(outline)}
 ${heroDescriptor({ category, name, age, traits })}
@@ -1236,163 +905,142 @@ Läsålder: ${targetAge}. Sidor: ${pages || 12}. Stil: ${style || "cartoon"}. Ka
 Boken ska ha tydlig lärdom (lesson) kopplad till temat.
 Returnera enbart json.`.trim();
 
-        const story = await openaiJSON(env, STORY_SYS, storyUser);
-        const plan = normalizePlan(story?.book?.pages || []);
-        return ok({ story, plan, previewVisible: 4 });
-      } catch (e) {
-        return err(e?.message || "Story failed", 500);
-      }
-    }
-
-    // Ref image
-    if (req.method === "POST" && url.pathname === "/api/ref-image") {
-      try {
-        const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
-        if (photo_b64) {
-          const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
-          return ok({ ref_image_b64: b64 });
+          const story = await openaiJSON(env, STORY_SYS, storyUser);
+          const plan = normalizePlan(story?.book?.pages || []);
+          return ok({ story, plan, previewVisible: 4 });
+        } catch (e) {
+          return err(e?.message || "Story failed", 500);
         }
-        const prompt = characterCardPrompt({ style, bible, traits });
-        const g = await geminiImage(env, { prompt }, 70000, 2);
-        if (g?.b64) return ok({ ref_image_b64: g.b64 });
-        return ok({ ref_image_b64: null });
-      } catch (e) {
-        return err(e?.message || "Ref generation failed", 500);
       }
-    }
 
-    // Generate interior images
-    if (req.method === "POST" && url.pathname === "/api/images") {
-      try {
-        const {
-          style = "cartoon",
-          ref_image_b64,
-          story,
-          plan,
-          concurrency = 4,
-          pages_subset,
-          style_refs_b64,
-          coherence_code,
-        } = await req.json().catch(() => ({}));
-        const allPages = story?.book?.pages || [];
-        const pagesArr =
-          Array.isArray(pages_subset) && pages_subset.length
-            ? allPages.filter((p) => pages_subset.includes(p.page))
-            : allPages;
-        if (!pagesArr.length) return err("No pages", 400);
-        if (!ref_image_b64) return err("Missing reference image", 400);
+      // Ref image
+      if (req.method === "POST" && url.pathname === "/api/ref-image") {
+        try {
+          const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
+          if (photo_b64) {
+            const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
+            return ok({ ref_image_b64: b64 });
+          }
+          const prompt = characterCardPrompt({ style, bible, traits });
+          const g = await geminiImage(env, { prompt }, 70000, 2);
+          if (g?.b64) return ok({ ref_image_b64: g.b64 });
+          return ok({ ref_image_b64: null });
+        } catch (e) {
+          return err(e?.message || "Ref generation failed", 500);
+        }
+      }
 
-        const frames = plan?.plan || [];
-        const pageCount = pagesArr.length;
-        const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
-
-        const jobs = pagesArr.map((pg) => {
-          const f = frames.find((x) => x.page === pg.page) || {};
-          const prompt = buildFramePrompt({
-            style,
+      // Generate interior images
+      if (req.method === "POST" && url.pathname === "/api/images") {
+        try {
+          const {
+            style = "cartoon",
+            ref_image_b64,
             story,
-            page: pg,
-            pageCount,
-            frame: f,
-            characterName: heroName,
-          });
-          return { page: pg.page, prompt };
-        });
+            plan,
+            concurrency = 4,
+            pages_subset,
+            style_refs_b64,
+            coherence_code,
+          } = await req.json().catch(() => ({}));
+          const allPages = story?.book?.pages || [];
+          const pagesArr =
+            Array.isArray(pages_subset) && pages_subset.length
+              ? allPages.filter((p) => pages_subset.includes(p.page))
+              : allPages;
+          if (!pagesArr.length) return err("No pages", 400);
+          if (!ref_image_b64) return err("Missing reference image", 400);
 
-        const out = [];
-        const CONC = Math.min(Math.max(parseInt(concurrency || 3, 10), 1), 8);
-        let idx = 0;
-        async function worker() {
-          while (idx < jobs.length) {
-            const i = idx++;
-            const item = jobs[i];
-            try {
-              const g = await geminiImage(
-                env,
-                {
-                  prompt: item.prompt,
-                  character_ref_b64: ref_image_b64,
-                  style_refs_b64,
-                  coherence_code,
-                },
-                75000,
-                3
-              );
-              out.push({
-                page: item.page,
-                image_url: g.image_url,
-                provider: g.provider || "google",
-              });
-            } catch (e) {
-              out.push({ page: item.page, error: String(e?.message || e) });
+          const frames = plan?.plan || [];
+          const pageCount = pagesArr.length;
+          const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
+
+          const jobs = pagesArr.map((pg) => {
+            const f = frames.find((x) => x.page === pg.page) || {};
+            const prompt = buildFramePrompt({ style, story, page: pg, pageCount, frame: f, characterName: heroName });
+            return { page: pg.page, prompt };
+          });
+
+          const out = [];
+          const CONC = Math.min(Math.max(parseInt(concurrency || 3, 10), 1), 8);
+          let idx = 0;
+          async function worker() {
+            while (idx < jobs.length) {
+              const i = idx++;
+              const item = jobs[i];
+              try {
+                const g = await geminiImage(
+                  env,
+                  { prompt: item.prompt, character_ref_b64: ref_image_b64, style_refs_b64, coherence_code },
+                  75000,
+                  3,
+                );
+                out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
+              } catch (e) {
+                out.push({ page: item.page, error: String(e?.message || e) });
+              }
             }
           }
+          await Promise.all(Array.from({ length: CONC }, worker));
+          out.sort((a, b) => (a.page || 0) - (b.page || 0));
+          return ok({ images: out });
+        } catch (e) {
+          return err(e?.message || "Images failed", 500);
         }
-        await Promise.all(Array.from({ length: CONC }, worker));
-        out.sort((a, b) => (a.page || 0) - (b.page || 0));
-        return ok({ images: out });
-      } catch (e) {
-        return err(e?.message || "Images failed", 500);
       }
-    }
 
-    // Single regenerate
-    if (req.method === "POST" && url.pathname === "/api/image/regenerate") {
-      try {
-        const { style = "cartoon", ref_image_b64, page_text, scene_text, frame, story } =
-          await req.json().catch(() => ({}));
-        if (!ref_image_b64) return err("Missing reference image", 400);
-        const fakeStory =
-          story || { book: { pages: [{ page: 1, scene: scene_text, text: page_text }] } };
-        const pg = { page: 1, scene: scene_text, text: page_text };
-        const f = {
-          shot_type: frame?.shot_type || "M",
-          lens_mm: frame?.lens_mm || 50,
-          subject_size_percent: frame?.subject_size_percent || 60,
-        };
-        const prompt = buildFramePrompt({
-          style,
-          story: fakeStory,
-          page: pg,
-          pageCount: 1,
-          frame: f,
-          characterName: fakeStory.book?.bible?.main_character?.name || "Hjälten",
-        });
-        const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
-        return ok({ image_url: g.image_url, provider: g.provider || "google" });
-      } catch (e) {
-        return err(e?.message || "Regenerate failed", 500);
+      // Single regenerate
+      if (req.method === "POST" && url.pathname === "/api/image/regenerate") {
+        try {
+          const { style = "cartoon", ref_image_b64, page_text, scene_text, frame, story } = await req.json().catch(() => ({}));
+          if (!ref_image_b64) return err("Missing reference image", 400);
+          const fakeStory = story || { book: { pages: [{ page: 1, scene: scene_text, text: page_text }] } };
+          const pg = { page: 1, scene: scene_text, text: page_text };
+          const f = { shot_type: frame?.shot_type || "M", lens_mm: frame?.lens_mm || 50, subject_size_percent: frame?.subject_size_percent || 60 };
+          const prompt = buildFramePrompt({
+            style,
+            story: fakeStory,
+            page: pg,
+            pageCount: 1,
+            frame: f,
+            characterName: fakeStory.book?.bible?.main_character?.name || "Hjälten",
+          });
+          const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
+          return ok({ image_url: g.image_url, provider: g.provider || "google" });
+        } catch (e) {
+          return err(e?.message || "Regenerate failed", 500);
+        }
       }
-    }
 
-    // Cover-only
-    if (req.method === "POST" && url.pathname === "/api/cover") {
-      try {
-        const { style = "cartoon", ref_image_b64, story } = await req.json().catch(() => ({}));
-        const characterName = story?.book?.bible?.main_character?.name || "Hjälten";
-        const prompt = buildCoverPrompt({ style, story, characterName });
-        const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 2);
-        return ok({ image_url: g.image_url, provider: g.provider || "google" });
-      } catch (e) {
-        return err(e?.message || "Cover failed", 500);
+      // Cover-only
+      if (req.method === "POST" && url.pathname === "/api/cover") {
+        try {
+          const { style = "cartoon", ref_image_b64, story } = await req.json().catch(() => ({}));
+          const characterName = story?.book?.bible?.main_character?.name || "Hjälten";
+          const prompt = buildCoverPrompt({ style, story, characterName });
+          const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 2);
+          return ok({ image_url: g.image_url, provider: g.provider || "google" });
+        } catch (e) {
+          return err(e?.message || "Cover failed", 500);
+        }
       }
-    }
 
-    // Upload CF Images
-    if (req.method === "POST" && url.pathname === "/api/images/upload") {
-      const resp = await handleUploadRequest(req, env);
-      return withCORS(resp);
-    }
+      // Upload CF Images
+      if (req.method === "POST" && url.pathname === "/api/images/upload") {
+        const resp = await handleUploadRequest(req, env);
+        return withCORS(resp);
+      }
 
-    // Build PDF
-    if (req.method === "POST" && url.pathname === "/api/pdf") {
-      return withCORS(await handlePdfRequest(req, env));
-    }
+      // Build PDF
+      if (req.method === "POST" && url.pathname === "/api/pdf") {
+        return withCORS(await handlePdfRequest(req, env));
+      }
 
-    // Default 404
-    return new Response(JSON.stringify({ error: "Not found" }), {
-      status: 404,
-      headers: JSONH,
-    });
+      // Default 404
+      return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: jsonHeaders });
+    } catch (e) {
+      // Fångar ALLT så att CORS alltid följer med på fel
+      return err(e?.message || "internal-error", 500);
+    }
   },
 };
