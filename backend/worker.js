@@ -654,7 +654,7 @@ try {
 }
 
 
- /* -------- [1] TITELBLAD -------- */
+/* -------- [1] TITELBLAD -------- */
 {
   const page = pdfDoc.addPage([pageW, pageH]);
   page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
@@ -662,22 +662,29 @@ try {
   const cx = contentX + trimWpt / 2;
   const titleCenterY = contentY + trimHpt * 0.60;
 
-  // Rita titel och få ut verklig storlek/antal rader:
+  // Titel
   const fit = drawWrappedCenterColor(
     page, title, cx, titleCenterY, trimWpt * 0.76, trimHpt * 0.26,
     nunitoSemi, Math.min(trimWpt, trimHpt) * 0.12, 1.08, 20, rgb(0.08,0.08,0.1), "center"
   );
 
-  // Räkna fram nederkant av titelblocket och lägg underrubrik nedanför
-  const titleLineH = fit.size * 1.08;
-  const titleBlockH = Math.max(titleLineH * Math.max(1, fit.lines.length), mmToPt(12));
-  const bottomOfTitleCenter = titleCenterY - (titleBlockH / 2);
+  // --- NY SPACING-LOGIK ---
+  const titleLineH   = fit.size * 1.08;
+  const titleBlockH  = Math.max(titleLineH * Math.max(1, fit.lines.length), mmToPt(12));
+  const gapBelow     = mmToPt(10);                  // extra luft under titeln
 
   if (subtitle) {
-    const subtitleSize = Math.max(14, (fit.size * 0.5) | 0);
-    const subtitleCenterY = bottomOfTitleCenter - mmToPt(6);
+    const subtitleSize    = Math.max(14, (fit.size * 0.50) | 0);
+    const subtitleLineH   = subtitleSize * 1.12;
+    const subtitleBlockH  = subtitleLineH;          // underrubrik brukar bli 1 rad
+    // centerY för underrubriken placeras EN TYDLIG BLOCK-HÖJD under titeln:
+    const subtitleCenterY =
+      (titleCenterY - (titleBlockH / 2))            // nederkant av titelblocket
+      - gapBelow                                    // extra avstånd
+      - (subtitleBlockH / 2);                       // centrera själva underrubriken
+
     drawWrappedCenterColor(
-      page, subtitle, cx, subtitleCenterY, trimWpt * 0.72, mmToPt(22),
+      page, subtitle, cx, subtitleCenterY, trimWpt * 0.72, mmToPt(28),
       nunito, subtitleSize, 1.12, 12, rgb(0.14,0.14,0.16), "center"
     );
   }
