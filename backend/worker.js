@@ -1,5 +1,5 @@
 // ============================================================================
-// BokPiloten – Worker v27 "Helvetica Cover + Vine Fix + Safe Wrap"
+// BokPiloten – Worker v28 "Smart Wardrobe (Kids Only) + Pet Anatomy Guard + Cover Fallback"
 // Endpoints: story, ref-image, images, image/regenerate, images/upload, cover, pdf, diag
 // Env: API_KEY, GEMINI_API_KEY, IMAGES_API_TOKEN, CF_ACCOUNT_ID,
 //      CF_IMAGES_ACCOUNT_HASH, CF_IMAGES_VARIANT, FONT_BASE_URL
@@ -238,21 +238,67 @@ function buildSeriesContext(story) {
     if (!locs.includes(lkey)) locs.push(lkey);
     return `p${p.page}: ${key}`;
   });
-  return [`SERIES CONTEXT — title: ${story?.book?.title || "Sagobok"}`, `locations: ${locs.join(", ")}`, `beats: ${beats.join(" | ")}`].join("\n");
+  return [
+    `SERIES CONTEXT — title: ${story?.book?.title || "Sagobok"}`,
+    `locations: ${locs.join(", ")}`,
+    `beats: ${beats.join(" | ")}`,
+  ].join("\n");
 }
 function shotLine(f = {}) {
   const map = { EW: "extra wide", W: "wide", M: "medium", CU: "close-up" };
   return `${map[f.shot_type || "M"]} shot, ~${f.subject_size_percent || 60}% subject, ≈${f.lens_mm || 35}mm`;
 }
 
+/* ---------------------- Coherence + Wardrobe helpers ---------------------- */
+function makeCoherenceCode(story) {
+  const t = String(story?.book?.title || "sagobok");
+  let h = 0;
+  for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) >>> 0;
+  return (h.toString(36) + "000000").slice(0, 6).toUpperCase();
+}
+
+/** Single-color wardrobe for kids only. Pets: return "" (omit). */
+function deriveWardrobeSignature(story) {
+  const cat = (story?.book?.category || "kids").toLowerCase();
+  if (cat === "pets") return ""; // <- viktiga förändringen: ingen wardrobe för djur
+
+  const wb = story?.book?.bible || {};
+  const hintArr = Array.isArray(wb?.wardrobe) ? wb.wardrobe : [];
+  const hinted = hintArr.join(", ").trim();
+  if (hinted) return hinted;
+
+  // Plocka stabil färg från palette eller deterministisk fallback från title-hash
+  const palette = (wb?.palette || []).map((s) => s.toLowerCase()).filter(Boolean);
+  const colors = ["blå", "röd", "grön", "gul", "lila", "turkos"];
+  const idx = parseInt(makeCoherenceCode(story), 36) % colors.length;
+  const base = (palette[0] || colors[idx]);
+  const accent = (palette[1] || "vit");
+
+  const name = (wb?.main_character?.name || "").toLowerCase();
+  const seemsGirl = /a$|ia$|na$|emma|olivia|ella|elin|sofia|lisa|anna/.test(name);
+
+  // Enfärgat: klänning eller tröja+byxa
+  return seemsGirl
+    ? `en ${base} klänning med diskreta ${accent} detaljer (håll exakt samma klädsel och grundfärg på alla sidor)`
+    : `en ${base} tröja och ${accent} byxor (håll exakt samma klädsel och grundfärg på alla sidor)`;
+}
+
+/* ------------------------- Prompt builders --------------------------- */
 function buildFramePrompt({ style, story, page, pageCount, frame, characterName, wardrobe_signature, coherence_code }) {
   const series = buildSeriesContext(story);
   const styleLine = styleHint(style);
   const salt = "UNIQUE_TOKEN:" + page.page + "-" + ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
+  const isPet = (story?.book?.category || "kids").toLowerCase() === "pets";
 
-  const wardrobeLine = wardrobe_signature
+  const wardrobeLine = !isPet && wardrobe_signature
     ? `WARDROBE_SIGNATURE: ${wardrobe_signature}. Keep wardrobe consistent across pages.`
-    : "Keep wardrobe consistent across pages.";
+    : "Keep identity consistent across pages.";
+
+  const anatomyGuard = isPet
+    ? "ANATOMY GUARD: natural, plausible anatomy. Exactly four limbs unless species differs; no extra tails/ears; avoid deformities."
+    : "";
+
+  const sceneGuard = "Stay faithful to the SCENE and time of day; no sudden location changes.";
 
   const coh = coherence_code || makeCoherenceCode(story);
 
@@ -260,8 +306,10 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
     series,
     `This is page ${page.page} of ${pageCount}.`,
     `Render in ${styleLine}. No text or speech bubbles.`,
-    `Match earlier pages’ line work and cel-shading; avoid photoreal textures.`,
+    `Match earlier pages’ line work and watercolor texture; avoid photoreal textures.`,
     wardrobeLine,
+    anatomyGuard,
+    sceneGuard,
     `COHERENCE_CODE:${coh}`,
     `Square composition (1:1), keep limbs fully in frame.`,
     `Keep the same hero (${characterName}) from reference; adapt pose, camera, lighting.`,
@@ -279,16 +327,23 @@ function characterCardPrompt({ style, bible, traits }) {
   const mc = bible?.main_character || {};
   const name = mc.name || "Nova";
   const phys = mc.physique || traits || "fluffy gray cat with curious eyes";
-  return [`Character reference in ${styleHint(style)}.`, `One hero only, full body, neutral background.`, `Hero: ${name}, ${phys}. No text.`].join(" ");
+  return [
+    `Character reference in ${styleHint(style)}.`,
+    `One hero only, full body, neutral background.`,
+    `Hero: ${name}, ${phys}. No text.`,
+  ].join(" ");
 }
 
+/** Cover prompt – no wardrobe for pets, soft guard for identity */
 function buildCoverPrompt({ style, story, characterName, wardrobe_signature, coherence_code }) {
   const styleLine = styleHint(style);
   const theme = story?.book?.theme || "";
-  const wardrobeLine = wardrobe_signature
+  const isPet = (story?.book?.category || "kids").toLowerCase() === "pets";
+  const wardrobeLine = !isPet && wardrobe_signature
     ? `WARDROBE_SIGNATURE: ${wardrobe_signature}. Keep wardrobe consistent with interior pages.`
-    : "Keep wardrobe consistent with interior pages.";
+    : "Keep identity consistent with interior pages.";
   const coh = coherence_code || makeCoherenceCode(story);
+
   return [
     `BOOK COVER ILLUSTRATION (front cover), ${styleLine}.`,
     `Square composition (1:1). No text or logos.`,
@@ -298,27 +353,6 @@ function buildCoverPrompt({ style, story, characterName, wardrobe_signature, coh
     theme ? `Theme cue: ${theme}.` : "",
   ].filter(Boolean).join("\n");
 }
-
-
-/* ---------------------- Coherence + Wardrobe helpers ---------------------- */
-function makeCoherenceCode(story) {
-  const t = String(story?.book?.title || "sagobok");
-  // enkel stabil hash → 6 tecken
-  let h = 0;
-  for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) >>> 0;
-  return (h.toString(36) + "000000").slice(0, 6).toUpperCase();
-}
-function deriveWardrobeSignature(story) {
-  const wb = story?.book?.bible || {};
-  const arr = Array.isArray(wb?.wardrobe) ? wb.wardrobe : [];
-  const main = arr.join(", ").trim();
-  if (main) return main;
-  // fallback: gissa något vänligt från palette/world/name
-  const palette = (wb?.palette || []).slice(0, 2).join(", ");
-  const name = wb?.main_character?.name ? `for ${wb.main_character.name}` : "";
-  return [palette && `soft palette (${palette})`, "simple top and trousers", name].filter(Boolean).join(" ");
-}
-
 
 /* ---------------------- Cloudflare Images utils ---------------------- */
 function dataUrlToBlob(dataUrl) {
@@ -385,7 +419,6 @@ async function getImageBytes(env, row) {
         return u8;
       }
     }
-        // NEW: cover/interior kan komma som image_url: "data:image/..."
     if (row?.image_url?.startsWith?.("data:image/")) {
       const m2 = row.image_url.match(/^data:([^;]+);base64,(.+)$/i);
       if (m2) {
@@ -395,7 +428,6 @@ async function getImageBytes(env, row) {
         return u82;
       }
     }
-
     return null;
   } catch {
     return null;
@@ -431,7 +463,7 @@ function drawWatermark(page, text = "FÖRHANDSVISNING", color = rgb(0.5, 0.5, 0.
   });
 }
 
-// robust ord/tecken-wrapping så inget försvinner
+// robust ord/tecken-wrapping
 function drawWrappedCenterColor(
   page, text, centerX, centerY, maxW, maxH, font,
   baseSize, baseLeading, minSize = 12, color = rgb(0.08, 0.08, 0.08), align = "center",
@@ -443,15 +475,10 @@ function drawWrappedCenterColor(
     const lines = [];
     let line = "";
 
-    const pushLine = (t) => {
-      if (t == null || t === "") return;
-      lines.push(t);
-    };
+    const pushLine = (t) => { if (t == null || t === "") return; lines.push(t); };
 
     for (const w of words) {
-      // om själva ordet är bredare än max → bryt på tecken
       if (font.widthOfTextAtSize(w, size) > maxW) {
-        // flush förgående rad
         if (line) { pushLine(line); line = ""; }
         let cur = "";
         for (const ch of w.split("")) {
@@ -498,7 +525,6 @@ function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.25,0.32,0.55), st
     return;
   }
 
-  // fallback-polyline
   const segments = 180, amp = 10, freq = Math.PI*4;
   let px = x, py = y;
   for (let i=1;i<=segments;i++){
@@ -511,19 +537,12 @@ function drawVineSafe(page, centerX, y, widthPt, color = rgb(0.25,0.32,0.55), st
 function drawHeart(page, cx, y, sizePt, color = rgb(0.58, 0.30, 0.80)) {
   const s = sizePt / 100;
   const path = [
-    "M 50 30",
-    "C 50 20, 40 10, 30 10",
-    "C 15 10, 10 25, 10 30",
-    "C 10 50, 30 65, 50 85",
-    "C 70 65, 90 50, 90 30",
-    "C 90 25, 85 10, 70 10",
-    "C 60 10, 50 20, 50 30",
-    "Z"
+    "M 50 30","C 50 20, 40 10, 30 10","C 15 10, 10 25, 10 30","C 10 50, 30 65, 50 85",
+    "C 70 65, 90 50, 90 30","C 90 25, 85 10, 70 10","C 60 10, 50 20, 50 30","Z"
   ].join(" ");
   if (typeof page.drawSvgPath === "function") {
     page.drawSvgPath(path, { x: cx - 50*s, y: y - 30*s, scale: s, color, borderColor: color, opacity: 0.9 });
   } else {
-    // enkel fallback: två cirklar + triangel
     page.drawEllipse({ x: cx - sizePt*0.18, y, xScale: sizePt*0.18, yScale: sizePt*0.16, color });
     page.drawEllipse({ x: cx + sizePt*0.18, y, xScale: sizePt*0.18, yScale: sizePt*0.16, color });
     page.drawRectangle({ x: cx - sizePt*0.18, y: y - sizePt*0.35, width: sizePt*0.36, height: sizePt*0.35, color, opacity: 0.98, rotate: degrees(45) });
@@ -578,12 +597,10 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   pdfDoc.registerFontkit(fontkit);
   tr(trace, "pdf:doc-created");
 
-  // Standardfonter (inget externberoende för rubriker)
   const helv      = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const helvBold  = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const helvIt    = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
 
-  // Nunito för brödtext (om saknas → standardfall tillbaka till Times/Helvetica)
   const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(/\/+$/, "");
   const NUN_R  = [`${base}/Nunito-Regular.ttf`];
   const NUN_SB = [`${base}/Nunito-Semibold.ttf`];
@@ -618,7 +635,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     }
   });
 
-  // Normalisera 14 scener (28 inlaga-sidor)
+  // Normalisera 14 scener
   function mapTo14ScenePages() {
     const want = 14;
     if (pagesStory.length === want) return pagesStory;
@@ -630,112 +647,82 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   }
   const scenePages = mapTo14ScenePages();
   tr(trace, "pdf:scene-pages", { count: scenePages.length });
-/* -------- FRONT COVER (single-draw, no duplicate) -------- */
-try {
-  const coverPage = pdfDoc.addPage([pageW, pageH]);
-  if (!coverSrc) coverSrc = imgByPage.get(1) || null;
 
-  if (coverSrc) {
-    const bytes = await getImageBytes(env, coverSrc);
-    const coverImg = await embedImage(pdfDoc, bytes);
-    if (coverImg) drawImageCover(coverPage, coverImg, 0, 0, pageW, pageH);
-  } else {
-    coverPage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.94,0.96,1) });
-  }
+  /* -------- FRONT COVER -------- */
+  try {
+    const coverPage = pdfDoc.addPage([pageW, pageH]);
+    if (!coverSrc) coverSrc = imgByPage.get(1) || null;
 
-  // Geometry
-  const safeInset = mmToPt(GRID.outer_mm + 2);
-  const tw  = trimWpt - safeInset * 2;
-  const cx  = contentX + trimWpt / 2;
-  const topCenterY0 = contentY + trimHpt - mmToPt(GRID.outer_mm + 16);
+    if (coverSrc) {
+      const bytes = await getImageBytes(env, coverSrc);
+      const coverImg = await embedImage(pdfDoc, bytes);
+      if (coverImg) drawImageCover(coverPage, coverImg, 0, 0, pageW, pageH);
+    } else {
+      coverPage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.94,0.96,1) });
+    }
 
-  // --- local MEASURE: computes lines, never draws
-  const measure = (txt, font, baseSize, leading, minSize, maxW, maxH) => {
-    const s = String(txt ?? "");
-    for (let size = baseSize; size >= minSize; size--) {
-      const lineH = size * leading;
-      const words = s.split(/\s+/);
-      const lines = [];
-      let line = "";
-      for (const w of words) {
-        const t = line ? line + " " + w : w;
-        if (font.widthOfTextAtSize(t, size) <= maxW) line = t;
-        else { if (line) lines.push(line); line = w; }
+    const safeInset = mmToPt(GRID.outer_mm + 2);
+    const tw  = trimWpt - safeInset * 2;
+    const cx  = contentX + trimWpt / 2;
+    const topCenterY0 = contentY + trimHpt - mmToPt(GRID.outer_mm + 16);
+
+    const measure = (txt, font, baseSize, leading, minSize, maxW, maxH) => {
+      const s = String(txt ?? "");
+      for (let size = baseSize; size >= minSize; size--) {
+        const lineH = size * leading;
+        const words = s.split(/\s+/);
+        const lines = [];
+        let line = "";
+        for (const w of words) {
+          const t = line ? line + " " + w : w;
+          if (font.widthOfTextAtSize(t, size) <= maxW) line = t;
+          else { if (line) lines.push(line); line = w; }
+        }
+        if (line) lines.push(line);
+        const blockH = lines.length * lineH;
+        if (blockH <= maxH) return { size, lineH, lines, blockH };
       }
-      if (line) lines.push(line);
-      const blockH = lines.length * lineH;
-      if (blockH <= maxH) return { size, lineH, lines, blockH };
+      return { size: 12, lineH: 12 * 1.1, lines: [], blockH: 0 };
+    };
+
+    const titleM = measure(title, nunitoSemi, Math.min(trimWpt, trimHpt) * 0.16, 1.08, 22, tw, mmToPt(32));
+    const subtitleSize = Math.max(14, (titleM.size * 0.48) | 0);
+    const subM = subtitle ? measure(subtitle, nunito, subtitleSize, 1.12, 12, tw, mmToPt(18)) : { blockH: 0 };
+
+    const padY = mmToPt(4), padX = mmToPt(6), gap = mmToPt(4);
+    const badgeH = titleM.blockH + (subtitle ? (gap + subM.blockH) : 0) + padY * 2;
+    const badgeY = topCenterY0 - badgeH / 2;
+
+    coverPage.drawRectangle({
+      x: contentX + safeInset - padX, y: badgeY, width: tw + padX * 2, height: badgeH,
+      color: rgb(1,1,1), opacity: 0.25,
+    });
+
+    {
+      let y = badgeY + badgeH - padY - titleM.lineH / 2;
+      for (const ln of titleM.lines) {
+        const w = nunitoSemi.widthOfTextAtSize(ln, titleM.size);
+        coverPage.drawText(ln, { x: cx - w / 2, y, size: titleM.size, font: nunitoSemi, color: rgb(0.05,0.05,0.05) });
+        y -= titleM.lineH;
+      }
     }
-    return { size: 12, lineH: 12 * 1.1, lines: [], blockH: 0 };
-  };
 
-  // Measure title + subtitle (no drawing)
-  const titleM = measure(
-    title,
-    nunitoSemi,
-    Math.min(trimWpt, trimHpt) * 0.16,
-    1.08,
-    22,
-    tw,
-    mmToPt(32)
-  );
-  const subtitleSize = Math.max(14, (titleM.size * 0.48) | 0);
-  const subM = subtitle ? measure(subtitle, nunito, subtitleSize, 1.12, 12, tw, mmToPt(18)) : { blockH: 0 };
-
-  // Soft badge behind both
-  const padY = mmToPt(4), padX = mmToPt(6), gap = mmToPt(4);
-  const badgeH = titleM.blockH + (subtitle ? (gap + subM.blockH) : 0) + padY * 2;
-  const badgeY = topCenterY0 - badgeH / 2;
-
-  coverPage.drawRectangle({
-    x: contentX + safeInset - padX,
-    y: badgeY,
-    width: tw + padX * 2,
-    height: badgeH,
-    color: rgb(1,1,1),
-    opacity: 0.25,
-  });
-
-  // Draw TITLE once
-  {
-    let y = badgeY + badgeH - padY - titleM.lineH / 2;
-    for (const ln of titleM.lines) {
-      const w = nunitoSemi.widthOfTextAtSize(ln, titleM.size);
-      coverPage.drawText(ln, {
-        x: cx - w / 2,
-        y,
-        size: titleM.size,
-        font: nunitoSemi,
-        color: rgb(0.05,0.05,0.05),
-      });
-      y -= titleM.lineH;
+    if (subtitle) {
+      const subCenterY = badgeY + padY + subM.blockH / 2;
+      let y = subCenterY + subM.blockH / 2 - subM.lineH;
+      for (const ln of subM.lines) {
+        const w = nunito.widthOfTextAtSize(ln, subtitleSize);
+        coverPage.drawText(ln, { x: cx - w / 2, y, size: subtitleSize, font: nunito, color: rgb(0.12,0.12,0.12) });
+        y -= subM.lineH;
+      }
     }
+
+    if (mode === "preview" && watermark_text) drawWatermark(coverPage, watermark_text);
+  } catch (e) {
+    tr(trace, "cover:error", { error: String(e?.message || e) });
+    const p = pdfDoc.addPage([pageW, pageH]);
+    p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8,0.1,0.1) });
   }
-
-  // Draw SUBTITLE once (if present), under title
-  if (subtitle) {
-    const subCenterY = badgeY + padY + subM.blockH / 2; // nicely spaced under title
-    let y = subCenterY + subM.blockH / 2 - subM.lineH;
-    for (const ln of subM.lines) {
-      const w = nunito.widthOfTextAtSize(ln, subtitleSize);
-      coverPage.drawText(ln, {
-        x: cx - w / 2,
-        y,
-        size: subtitleSize,
-        font: nunito,
-        color: rgb(0.12,0.12,0.12),
-      });
-      y -= subM.lineH;
-    }
-  }
-
-  if (mode === "preview" && watermark_text) drawWatermark(coverPage, watermark_text);
-} catch (e) {
-  tr(trace, "cover:error", { error: String(e?.message || e) });
-  const p = pdfDoc.addPage([pageW, pageH]);
-  p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8,0.1,0.1) });
-}
-
 
   /* -------- 14 uppslag: bild vänster, text höger + vine -------- */
   const outer = mmToPt(GRID.outer_mm);
@@ -777,34 +764,30 @@ try {
     const pnW = nunito.widthOfTextAtSize(pn, 10);
     right.drawText(pn, { x: contentX + trimWpt - outer - pnW, y: contentY + mmToPt(6), size: 10, font: nunito, color: rgb(0.35, 0.35, 0.45) });
 
-    // Watermark först, vine ovanpå – och lite närmare texten
     if (mode === "preview" && watermark_text) drawWatermark(right, watermark_text);
     drawVineSafe(right, cx, contentY + trimHpt * 0.36, trimWpt * 0.80, rgb(0.25,0.32,0.55), 2.4);
   }
 
- /* -------- [30] SLUT -------- */
-{
-  const page = pdfDoc.addPage([pageW, pageH]);
-  page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
+  /* -------- [30] SLUT -------- */
+  {
+    const page = pdfDoc.addPage([pageW, pageH]);
+    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
 
-  const cx = contentX + trimWpt / 2;
-  const topY = contentY + trimHpt * 0.58;
+    const cx = contentX + trimWpt / 2;
+    const topY = contentY + trimHpt * 0.58;
 
-  // Elegant avslutningstext i samma brödtextfont
-  drawWrappedCenterColor(
-    page,
-    "Snipp snapp snut – så var sagan slut!",
-    cx, topY,
-    trimWpt * 0.76, mmToPt(30),
-    nunito, 22, 1.22, 14, rgb(0.1,0.1,0.12), "center"
-  );
+    drawWrappedCenterColor(
+      page,
+      "Snipp snapp snut – så var sagan slut!",
+      cx, topY,
+      trimWpt * 0.76, mmToPt(30),
+      nunito, 22, 1.22, 14, rgb(0.1,0.1,0.12), "center"
+    );
 
-  // Litet hjärta under
-  drawHeart(page, cx, contentY + trimHpt * 0.38, mmToPt(14), rgb(0.50, 0.36, 0.82));
+    drawHeart(page, cx, contentY + trimHpt * 0.38, mmToPt(14), rgb(0.50, 0.36, 0.82));
 
-  if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
-}
-
+    if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
+  }
 
   /* -------- [31] BACK COVER -------- */
   try {
@@ -953,164 +936,168 @@ Boken ska ha tydlig lärdom (lesson) kopplad till temat.
 Returnera enbart json.`.trim();
 
           const story = await openaiJSON(env, STORY_SYS, storyUser);
-          const plan = normalizePlan(story?.book?.pages || []);
+                    const plan = normalizePlan(story?.book?.pages || []);
           const coherence_code = makeCoherenceCode(story);
-const wardrobe_signature = deriveWardrobeSignature(story);
-return ok({ story, plan, previewVisible: 4, coherence_code, wardrobe_signature });
-
+          const wardrobe_signature = deriveWardrobeSignature(story);
+          return ok({ outline, story, plan, coherence_code, wardrobe_signature });
         } catch (e) {
-          return err(e?.message || "Story failed", 500);
+          return err(e?.message || "Story generation failed", 500);
         }
       }
 
-      // Ref image
+      // Character reference
       if (req.method === "POST" && url.pathname === "/api/ref-image") {
         try {
-          const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
-          if (photo_b64) {
-            const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
-            return ok({ ref_image_b64: b64 });
-          }
+          const body = await req.json().catch(() => ({}));
+          const { story } = body || {};
+          const style = story?.book?.style || "storybook";
+          const bible = story?.book?.bible || {};
+          const traits = story?.book?.bible?.main_character?.physique || "";
           const prompt = characterCardPrompt({ style, bible, traits });
-          const g = await geminiImage(env, { prompt }, 70000, 2);
-          if (g?.b64) return ok({ ref_image_b64: g.b64 });
-          return ok({ ref_image_b64: null });
+
+          const img = await geminiImage(env, { prompt });
+          if (!img?.image_url) throw new Error("Gemini returned no image");
+          return ok({ ...img, prompt });
         } catch (e) {
-          return err(e?.message || "Ref generation failed", 500);
+          return err(e?.message || "Character reference failed");
         }
       }
 
-      // Generate interior images
+      // Page images
       if (req.method === "POST" && url.pathname === "/api/images") {
         try {
-          const {
-            style = "cartoon",
-            ref_image_b64,
-            story,
-            plan,
-            concurrency = 4,
-            pages_subset,
-            style_refs_b64,
-            coherence_code,
-             wardrobe_signature,  
-          } = await req.json().catch(() => ({}));
-          const allPages = story?.book?.pages || [];
-          const pagesArr =
-            Array.isArray(pages_subset) && pages_subset.length
-              ? allPages.filter((p) => pages_subset.includes(p.page))
-              : allPages;
-          if (!pagesArr.length) return err("No pages", 400);
-          if (!ref_image_b64) return err("Missing reference image", 400);
+          const body = await req.json().catch(() => ({}));
+          const { story, character_ref_b64, style_refs_b64 } = body || {};
+          if (!story?.book?.pages) return err("Missing story.pages", 400);
 
-          const frames = plan?.plan || [];
-          const pageCount = pagesArr.length;
-          const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
+          const coherence_code = makeCoherenceCode(story);
+          const wardrobe_signature = deriveWardrobeSignature(story);
+          const plan = normalizePlan(story.book.pages);
+          const frames = plan.plan;
+          const all = [];
 
-         const wSig = wardrobe_signature || deriveWardrobeSignature(story);
-const coh = coherence_code || makeCoherenceCode(story);
+          for (let i = 0; i < story.book.pages.length; i++) {
+            const page = story.book.pages[i];
+            const frame = frames[i] || { shot_type: "M", lens_mm: 50 };
+            const prompt = buildFramePrompt({
+              style: story.book.style,
+              story,
+              page,
+              pageCount: story.book.pages.length,
+              frame,
+              characterName: story.book.bible.main_character.name,
+              wardrobe_signature,
+              coherence_code,
+            });
 
-const jobs = pagesArr.map((pg) => {
-  const f = frames.find((x) => x.page === pg.page) || {};
-  const prompt = buildFramePrompt({
-    style,
-    story,
-    page: pg,
-    pageCount,
-    frame: f,
-    characterName: heroName,
-    wardrobe_signature: wSig,
-    coherence_code: coh,
-  });
-  return { page: pg.page, prompt };
-});
+            const img = await geminiImage(env, {
+              prompt,
+              character_ref_b64,
+              style_refs_b64,
+              guidance: styleHint(story.book.style),
+              coherence_code,
+            }).catch((e) => ({ error: String(e?.message || e) }));
 
-          const out = [];
-          const CONC = Math.min(Math.max(parseInt(concurrency || 3, 10), 1), 8);
-          let idx = 0;
-          async function worker() {
-            while (idx < jobs.length) {
-              const i = idx++;
-              const item = jobs[i];
-              try {
-                const g = await geminiImage(
-                  env,
-                  { prompt: item.prompt, character_ref_b64: ref_image_b64, style_refs_b64, coherence_code: coh },
-                  75000,
-                  3,
-                );
-                out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
-              } catch (e) {
-                out.push({ page: item.page, error: String(e?.message || e) });
-              }
-            }
+            all.push({ page: page.page, prompt, ...img });
           }
-          await Promise.all(Array.from({ length: CONC }, worker));
-          out.sort((a, b) => (a.page || 0) - (b.page || 0));
-          return ok({ images: out });
+
+          return ok({ images: all });
         } catch (e) {
-          return err(e?.message || "Images failed", 500);
+          return err(e?.message || "Images generation failed");
         }
       }
 
-      // Single regenerate
+      // Regenerate single image
       if (req.method === "POST" && url.pathname === "/api/image/regenerate") {
         try {
-          const { style = "cartoon", ref_image_b64, page_text, scene_text, frame, story } = await req.json().catch(() => ({}));
-          if (!ref_image_b64) return err("Missing reference image", 400);
-          const fakeStory = story || { book: { pages: [{ page: 1, scene: scene_text, text: page_text }] } };
-          const pg = { page: 1, scene: scene_text, text: page_text };
-          const f = { shot_type: frame?.shot_type || "M", lens_mm: frame?.lens_mm || 50, subject_size_percent: frame?.subject_size_percent || 60 };
-          const wSig = deriveWardrobeSignature(fakeStory);
-const coh = makeCoherenceCode(fakeStory);
-const prompt = buildFramePrompt({
-  style,
-  story: fakeStory,
-  page: pg,
-  pageCount: 1,
-  frame: f,
-  characterName: fakeStory.book?.bible?.main_character?.name || "Hjälten",
-  wardrobe_signature: wSig,
-  coherence_code: coh,
-});
+          const body = await req.json().catch(() => ({}));
+          const { story, page, character_ref_b64 } = body || {};
+          if (!story?.book?.pages) return err("Missing story.pages", 400);
+          const target = story.book.pages.find((p) => p.page === page);
+          if (!target) return err(`Page ${page} not found`, 404);
 
-          const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 3);
-          return ok({ image_url: g.image_url, provider: g.provider || "google" });
+          const frame = normalizePlan(story.book.pages).plan.find((f) => f.page === page);
+          const coherence_code = makeCoherenceCode(story);
+          const wardrobe_signature = deriveWardrobeSignature(story);
+
+          const prompt = buildFramePrompt({
+            style: story.book.style,
+            story,
+            page: target,
+            pageCount: story.book.pages.length,
+            frame,
+            characterName: story.book.bible.main_character.name,
+            wardrobe_signature,
+            coherence_code,
+          });
+
+          const img = await geminiImage(env, {
+            prompt,
+            character_ref_b64,
+            guidance: styleHint(story.book.style),
+            coherence_code,
+          });
+          return ok({ page, prompt, ...img });
         } catch (e) {
-          return err(e?.message || "Regenerate failed", 500);
+          return err(e?.message || "Image regeneration failed");
         }
       }
 
-      // Cover-only
+      // Cover generation
       if (req.method === "POST" && url.pathname === "/api/cover") {
         try {
-          const { style = "cartoon", ref_image_b64, story } = await req.json().catch(() => ({}));
-          const characterName = story?.book?.bible?.main_character?.name || "Hjälten";
-          const wSig = deriveWardrobeSignature(story);
-const coh = makeCoherenceCode(story);
-const prompt = buildCoverPrompt({ style, story, characterName, wardrobe_signature: wSig, coherence_code: coh });
+          const body = await req.json().catch(() => ({}));
+          const { story, character_ref_b64 } = body || {};
+          if (!story?.book) return err("Missing story", 400);
 
-          const g = await geminiImage(env, { prompt, character_ref_b64: ref_image_b64 }, 75000, 2);
-          return ok({ image_url: g.image_url, provider: g.provider || "google" });
+          const coherence_code = makeCoherenceCode(story);
+          const wardrobe_signature = deriveWardrobeSignature(story);
+          const prompt = buildCoverPrompt({
+            style: story.book.style,
+            story,
+            characterName: story.book.bible.main_character.name,
+            wardrobe_signature,
+            coherence_code,
+          });
+
+          const img = await geminiImage(env, {
+            prompt,
+            character_ref_b64,
+            guidance: styleHint(story.book.style),
+            coherence_code,
+          });
+
+          if (!img?.image_url) {
+            // fallback
+            const fb = await geminiImage(env, {
+              prompt: prompt + "\nFallback: bright joyful storybook cover, focus on main character smiling.",
+            }).catch(() => null);
+            if (fb?.image_url) return ok({ ...fb, prompt, fallback: true });
+            return err("Cover generation failed", 500);
+          }
+
+          return ok({ ...img, prompt });
         } catch (e) {
-          return err(e?.message || "Cover failed", 500);
+          return err(e?.message || "Cover generation failed");
         }
       }
 
-      // Upload CF Images
+      // Uploads
       if (req.method === "POST" && url.pathname === "/api/images/upload") {
-        const resp = await handleUploadRequest(req, env);
-        return withCORS(resp);
+        return handleUploadRequest(req, env);
       }
 
-      // Build PDF
+      // PDF build
       if (req.method === "POST" && url.pathname === "/api/pdf") {
-        return withCORS(await handlePdfRequest(req, env));
+        return handlePdfRequest(req, env);
       }
 
-      // Default 404
-      return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: JSON_HEADERS });
+      // Not found
+      return new Response("Not found", { status: 404, headers: CORS });
     } catch (e) {
-      return err(e?.message || "internal-error", 500);
+      return err(e?.message || "Unhandled error");
     }
   },
 };
+
+
