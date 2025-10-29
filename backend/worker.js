@@ -243,8 +243,12 @@ Du får en outline för en svensk bilderbok. Skriv boken enligt:
  "theme": string,"lesson": string,
  "pages":[{ "page": number, "text": string, "scene": string, "time_of_day": "day"|"golden_hour"|"evening"|"night","weather":"clear"|"cloudy"|"rain"|"snow"}]
 }}
-Hårda regler: 12–20 sidor, 2–4 meningar/sida. Konkreta scener i huvudmiljö. Svenskt språk. Endast JSON.
- Titeln ska vara säljbar. Fyll "tagline" och "back_blurb" (1–3 meningar).
+HÅRDA REGLER:
+- **EXAKT 14 sidor**. Page-numrering måste vara **1..14** utan luckor eller dubbletter.
+- **3–5 meningar** per sida, på **svenska**.
+- **Konkreta scener** i vald huvudmiljö; undvik abstrakta formuleringar.
+- Titeln ska vara säljbar. Fyll "tagline" och "back_blurb" (1–3 meningar).
+- Returnera **enbart giltig JSON** i ovan format.
 `;
 function heroDescriptor({ category, name, age, traits }) {
   if ((category || "kids") === "pets")
@@ -968,13 +972,13 @@ Returnera enbart json.`.trim();
 
           const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
 
-          const storyUser = `
+        const storyUser = `
 OUTLINE:
 ${JSON.stringify(outline)}
 ${heroDescriptor({ category, name, age, traits })}
-Läsålder: ${targetAge}. Sidor: ${pages || 12}. Stil: ${style || "cartoon"}. Kategori: ${category || "kids"}.
+Läsålder: ${targetAge}. **Sidor: 14**. Stil: ${style || "cartoon"}. Kategori: ${category || "kids"}.
 Boken ska ha tydlig lärdom (lesson) kopplad till temat.
-Returnera enbart json.`.trim();
+Returnera enbart JSON i exakt det efterfrågade formatet.`.trim();
 
           const story = await openaiJSON(env, STORY_SYS, storyUser);
                     const plan = normalizePlan(story?.book?.pages || []);
