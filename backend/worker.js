@@ -146,7 +146,7 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts }],
-          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.6 },
+          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.9 },
         }),
         signal: ctl.signal,
       });
@@ -968,6 +968,81 @@ if (req.method === "POST" && url.pathname === "/api/ref-image") {
     return ok({ ref_image_b64: null });
   } catch (e) {
     return err(e?.message || "Ref generation failed", 500);
+  }
+}
+
+// Generate interior images (plural endpoint expected by frontend)
+if (req.method === "POST" && url.pathname === "/api/images") {
+  try {
+    const {
+      style = "cartoon",
+      ref_image_b64,
+      story,
+      plan,
+      concurrency = 4,
+      pages_subset,
+      style_refs_b64,
+      coherence_code,
+      guidance, // optional
+    } = await req.json().catch(() => ({}));
+
+    const allPages = story?.book?.pages || [];
+    const pagesArr = Array.isArray(pages_subset) && pages_subset.length
+      ? allPages.filter((p) => pages_subset.includes(p.page))
+      : allPages;
+
+    if (!pagesArr.length) return err("No pages", 400);
+    if (!ref_image_b64)  return err("Missing reference image", 400);
+
+    const frames = plan?.plan || [];
+    const pageCount = pagesArr.length;
+    const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
+
+    const jobs = pagesArr.map((pg) => {
+      const f = frames.find((x) => x.page === pg.page) || {};
+      const prompt = buildFramePrompt({
+        style,
+        story,
+        page: pg,
+        pageCount,
+        frame: f,
+        characterName: heroName,
+        wardrobe_signature: deriveWardrobeSignature(story),
+        coherence_code: coherence_code || makeCoherenceCode(story),
+      });
+      return { page: pg.page, prompt };
+    });
+
+    const out = [];
+    const CONC = Math.min(Math.max(parseInt(concurrency || 3, 10), 1), 8);
+    let idx = 0;
+
+    async function worker() {
+      while (idx < jobs.length) {
+        const i = idx++;
+        const item = jobs[i];
+        try {
+          const payload = {
+            prompt: item.prompt,
+            character_ref_b64: ref_image_b64,
+          };
+          if (Array.isArray(style_refs_b64) && style_refs_b64.length) payload.style_refs_b64 = style_refs_b64;
+          if (coherence_code) payload.coherence_code = coherence_code;
+          if (guidance) payload.guidance = guidance;
+
+          const g = await geminiImage(env, payload, 75000, 3);
+          out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
+        } catch (e) {
+          out.push({ page: item.page, error: String(e?.message || e) });
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: CONC }, worker));
+    out.sort((a, b) => (a.page || 0) - (b.page || 0));
+    return ok({ images: out });
+  } catch (e) {
+    return err(e?.message || "Images generation failed", 500);
   }
 }
 
