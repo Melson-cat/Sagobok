@@ -1097,6 +1097,70 @@ if (req.method === "POST" && url.pathname === "/api/images") {
   }
 }
 
+// Generate ONE interior image, sequential (keeps context via prev_b64)
+if (req.method === "POST" && url.pathname === "/api/images/next") {
+  try {
+    const body = await req.json().catch(() => ({}));
+    const {
+      style = "cartoon",
+      story,
+      plan,
+      page,                    // number (1..14)
+      ref_image_b64,           // canonical character card (b64)
+      prev_b64,                // previous generated page (b64) – optional
+      style_refs_b64,          // extra style refs (optional)
+      coherence_code,
+      guidance                 // optional
+    } = body || {};
+
+    if (!story?.book?.pages) return err("Missing story.pages", 400);
+    if (!ref_image_b64) return err("Missing reference image", 400);
+    if (!Number.isFinite(page)) return err("Missing page number", 400);
+
+    const target = story.book.pages.find((p) => p.page === page);
+    if (!target) return err(`Page ${page} not found`, 404);
+
+    const frames = plan?.plan || [];
+    const frame = frames.find((f) => f.page === page) || {};
+    const wardrobe_signature = deriveWardrobeSignature(story);
+    const coh = coherence_code || makeCoherenceCode(story);
+    const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
+
+    const prompt = buildFramePrompt({
+      style,
+      story,
+      page: target,
+      pageCount: story.book.pages.length,
+      frame,
+      characterName: heroName,
+      wardrobe_signature,
+      coherence_code: coh,
+    });
+
+    // parts: referens → (ev. prev) → extra style refs → guidance → prompt
+    const styleParts = Array.isArray(style_refs_b64) ? style_refs_b64.slice(0, 2) : [];
+    if (prev_b64 && typeof prev_b64 === "string" && prev_b64.length > 64) {
+      styleParts.unshift(prev_b64); // gör föregående bild till främsta stil-ankare
+    }
+
+    const g = await geminiImage(
+      env,
+      {
+        prompt,
+        character_ref_b64: ref_image_b64,
+        style_refs_b64: styleParts.length ? styleParts : undefined,
+        coherence_code: coh,
+        guidance: guidance || styleHint(style),
+      },
+      75000,
+      3
+    );
+
+    return ok({ page, image_url: g.image_url, provider: g.provider || "google" });
+  } catch (e) {
+    return err(e?.message || "Next image generation failed", 500);
+  }
+}
 
 
       // Regenerate single image

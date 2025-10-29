@@ -139,6 +139,11 @@ async function urlToDataURL(url) {
     fr.readAsDataURL(blob);
   });
 }
+function dataUrlToBareB64(dataUrl){
+  if(!dataUrl || !dataUrl.startsWith("data:image/")) return null;
+  const m = dataUrl.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
+  return m ? m[1] : null;
+}
 
 /* --------------------------- Status/Progress --------------------------- */
 const STATUS_QUIPS = [
@@ -477,41 +482,72 @@ async function onSubmit(e) {
     state.ref_b64 = refData.ref_image_b64 || null;
     if (!state.ref_b64) throw new Error("Ingen referensbild kunde skapas.");
 
-    // 3) INTERIOR IMAGES
-    setStatus("🎥 Lägger kameror & ljus…", 38);
-    const imgRes = await fetch(`${API}/api/images`, {
+    // 3) INTERIOR IMAGES — SEKVENSIELLT (sida för sida, med föregående bild som stil-ankare)
+setStatus("🎥 Lägger kameror & ljus…", 38);
+
+let received = 0;
+let prevBareB64 = null; // för nästa sida
+
+for (const pg of pages) {
+  // visa skeleton om tom
+  const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${pg.page}"]`);
+  if (wrap && !wrap.querySelector("img")?.src) {
+    const sk = wrap.querySelector(".skeleton") || document.createElement("div");
+    sk.className = "skeleton";
+    if (!wrap.querySelector(".skeleton")) wrap.prepend(sk);
+  }
+
+  try {
+    const res = await fetch(`${API}/api/images/next`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         style: state.form.style,
-        ref_image_b64: state.ref_b64,
         story: state.story,
         plan: state.plan,
-        concurrency: 4,
+        page: pg.page,
+        ref_image_b64: state.ref_b64,
+        prev_b64: prevBareB64, // ← nyckeln som ger koherens
       }),
     });
-    const imgData = await imgRes.json().catch(() => ({}));
-    if (!imgRes.ok || imgData?.error) throw new Error(imgData?.error || "Bildgenerering misslyckades");
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || j?.error || !j?.image_url) throw new Error(j?.error || `HTTP ${res.status}`);
 
-    const results = imgData.images || [];
-    let received = 0;
-    for (const row of results) {
-      if (row?.image_url) {
-        state.images_by_page.set(row.page, { image_url: row.image_url });
-        fillCard(row.page, row.image_url, "Gemini");
-      } else {
-        const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${row.page}"]`);
-        if (wrap) {
-          const fb = document.createElement("div");
-          fb.className = "img-fallback";
-          fb.textContent = "Kunde inte generera bild";
-          wrap.appendChild(fb);
-          wrap.parentElement.querySelector(".retry-wrap")?.classList.remove("hidden");
-        }
+    // visa direkt
+    await fillCard(pg.page, j.image_url, "Gemini");
+    state.images_by_page.set(pg.page, { image_url: j.image_url });
+
+    // för nästa sida: gör om till bare b64
+    const du = await urlToDataURL(j.image_url);
+    const bare = dataUrlToBareB64(du);
+    prevBareB64 = bare || null;
+
+    // ladda upp till CF direkt (ersätter batch senare)
+    if (du) {
+      const uploads = await uploadToCF([{ page: pg.page, data_url: du }]).catch(() => []);
+      const u = uploads?.find(x => x.page === pg.page);
+      if (u?.image_id) {
+        state.images_by_page.set(pg.page, { image_id: u.image_id, image_url: u.url });
+        await fillCard(pg.page, u.url || j.image_url, "CF");
       }
-      received++;
-      setStatus(`🎨 Målar sida ${received}/${results.length}…`, 38 + (received / Math.max(1, results.length)) * 32);
     }
+
+  } catch (err) {
+    console.error("page", pg.page, err);
+    if (wrap) {
+      wrap.querySelector(".skeleton")?.remove();
+      const fb = document.createElement("div");
+      fb.className = "img-fallback";
+      fb.textContent = "Kunde inte generera bild";
+      wrap.appendChild(fb);
+      wrap.parentElement.querySelector(".retry-wrap")?.classList.remove("hidden");
+    }
+  }
+
+  received++;
+  setStatus(`🎨 Målar sida ${received}/${pages.length}…`, 38 + (received / Math.max(1, pages.length)) * 32);
+}
+
 
     // 4) COVER (icke-blockerande eller hoppa över)
     if (COVER_STRATEGY === "async") {
