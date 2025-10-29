@@ -945,67 +945,55 @@ Returnera enbart json.`.trim();
         }
       }
 
-      // Character reference
-      if (req.method === "POST" && url.pathname === "/api/ref-image") {
-        try {
-          const body = await req.json().catch(() => ({}));
-          const { story } = body || {};
-          const style = story?.book?.style || "storybook";
-          const bible = story?.book?.bible || {};
-          const traits = story?.book?.bible?.main_character?.physique || "";
-          const prompt = characterCardPrompt({ style, bible, traits });
+    // Character reference (backwards compatible + photo passthrough)
+if (req.method === "POST" && url.pathname === "/api/ref-image") {
+  try {
+    const body = await req.json().catch(() => ({}));
 
-          const img = await geminiImage(env, { prompt });
-          if (!img?.image_url) throw new Error("Gemini returned no image");
-          return ok({ ...img, prompt });
-        } catch (e) {
-          return err(e?.message || "Character reference failed");
-        }
-      }
+    // 1) Backcompat: stöd både story.book och fristående fält
+    const story = body?.story;
+    const style =
+      story?.book?.style ||
+      body?.style ||
+      "storybook";
 
-      // Page images
-      if (req.method === "POST" && url.pathname === "/api/images") {
-        try {
-          const body = await req.json().catch(() => ({}));
-          const { story, character_ref_b64, style_refs_b64 } = body || {};
-          if (!story?.book?.pages) return err("Missing story.pages", 400);
+    const bible =
+      story?.book?.bible ||
+      body?.bible ||
+      {};
 
-          const coherence_code = makeCoherenceCode(story);
-          const wardrobe_signature = deriveWardrobeSignature(story);
-          const plan = normalizePlan(story.book.pages);
-          const frames = plan.plan;
-          const all = [];
+    const traits =
+      story?.book?.bible?.main_character?.physique ||
+      body?.traits ||
+      "";
 
-          for (let i = 0; i < story.book.pages.length; i++) {
-            const page = story.book.pages[i];
-            const frame = frames[i] || { shot_type: "M", lens_mm: 50 };
-            const prompt = buildFramePrompt({
-              style: story.book.style,
-              story,
-              page,
-              pageCount: story.book.pages.length,
-              frame,
-              characterName: story.book.bible.main_character.name,
-              wardrobe_signature,
-              coherence_code,
-            });
+    // 2) Om klienten skickar in ett eget foto → passera igenom
+    const photo_b64 = body?.photo_b64 || body?.ref_image_b64;
+    if (photo_b64 && typeof photo_b64 === "string") {
+      // Tillåt dataurl eller ren base64
+      const b64 = photo_b64.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
+      if (b64.length > 64) return ok({ ref_image_b64: b64, provider: "client" });
+      return err("Provided photo_b64 looked invalid", 400);
+    }
 
-            const img = await geminiImage(env, {
-              prompt,
-              character_ref_b64,
-              style_refs_b64,
-              guidance: styleHint(story.book.style),
-              coherence_code,
-            }).catch((e) => ({ error: String(e?.message || e) }));
+    // 3) Generera referens med Gemini
+    const prompt = characterCardPrompt({ style, bible, traits });
+    const g = await geminiImage(env, { prompt }, 75000, 3);
+    if (g?.b64) return ok({ ref_image_b64: g.b64, provider: g.provider || "google", prompt });
+    if (g?.image_url?.startsWith("data:image/")) {
+      // Plocka ut base64 om vi bara fick data-url tillbaka
+      const m = g.image_url.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
+      if (m) return ok({ ref_image_b64: m[1], provider: g.provider || "google", prompt });
+    }
 
-            all.push({ page: page.page, prompt, ...img });
-          }
+    // 4) Tydligare fel
+    return err("Gemini returned no image (ref-image)", 502, { prompt });
+  } catch (e) {
+    // Skicka tillbaka lite mer kontext för felsökning i nätverksfliken
+    return err(e?.message || "Ref generation failed", 500);
+  }
+}
 
-          return ok({ images: all });
-        } catch (e) {
-          return err(e?.message || "Images generation failed");
-        }
-      }
 
       // Regenerate single image
       if (req.method === "POST" && url.pathname === "/api/image/regenerate") {
