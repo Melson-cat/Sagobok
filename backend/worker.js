@@ -247,21 +247,24 @@ Du får en outline för en svensk bilderbok. Skriv boken enligt:
  "theme": string,"lesson": string,
  "pages":[{
    "page": number,
-   "text": string,               // SVENSKA: 3–5 meningar berättande text
-   "scene": string,              // SVENSKA: kort scenangivelse
-   "scene_en": string,           // ENGELSK: kort, visuell beskrivning för bild (1–2 meningar, inga repliker)
+   "text": string,            // SV: det som trycks i boken
+   "scene": string,           // SV: kort scenbeskrivning (miljö + handling)
+   "scene_en": string,        // EN: samma scenbeskrivning, naturlig engelska
+   "location": string,        // t.ex. "gata", "sovrum", "park", "kök"
+   "continuity": "continuation"|"new_scene", // är detta en fortsättning på föreg. bild?
    "time_of_day": "day"|"golden_hour"|"evening"|"night",
    "weather":"clear"|"cloudy"|"rain"|"snow"
  }]
 }}
 HÅRDA REGLER:
-- **EXAKT 14 sidor**. Page-numrering måste vara **1..14** utan luckor eller dubbletter.
-- **3–5 meningar** per sida i "text" (svenska).
-- "scene_en" ska vara en **kort visuell instruktion på engelska**, utan dialog, fokuserad på miljö, handling och rekvisita.
-- Tydliga konkreta scener i vald huvudmiljö; undvik abstrakta formuleringar.
-- Titeln ska vara säljbar. Fyll "tagline" och "back_blurb" (1–3 meningar).
-- Returnera **enbart giltig JSON** i ovan format.
+- **EXAKT 14 sidor** (page 1..14).
+- 3–5 meningar per sida, på **svenska** i "text".
+- "scene_en" ska vara idiomatisk engelska av "scene" (inte maskinöversättning ord för ord).
+- "continuity": Ange "continuation" om plats/tid/ögonblick direkt följer föregående sida; annars "new_scene".
+- Var tydlig med "location".
+- Endast giltig JSON i exakt format ovan.
 `;
+
 
 function heroDescriptor({ category, name, age, traits }) {
   if ((category || "kids") === "pets")
@@ -355,6 +358,19 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
     `Håll strikt samma STIL (se STYLE) i varje bild; inga stilbyten mellan 2D/3D.`,
     `Variera kameravinkel och uttryck försiktigt för att undvika upprepning, men behåll identiteten.`
   ].join(" ");
+// --- NEW: Continuation policy styrd av storyn ---
+const cont = String(page?.continuity || "").toLowerCase(); // "continuation" | "new_scene"
+const continuationLines = (cont === "continuation")
+  ? [
+      "Fortsättning på föregående bild: behåll plats/stämning/karaktärer.",
+      "MEN: ändra komposition/kameravinkel och kroppsspråk – upprepa inte poserna.",
+      "Prioritera nuvarande SCEN-beskrivning för handlingen."
+    ].join(" ")
+  : [
+      "NY SCEN: byt bakgrund och staging enligt SCEN-beskrivningen.",
+      "Använd referensbilden enbart för identitet (ansikte, frisyr, kläder) – inte för bakgrund.",
+      "Undvik medvetet att återskapa föregående bakgrund/komposition."
+    ].join(" ");
 
   const salt = "UNIQUE_PAGE:" + page.page + "-" + ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
 
@@ -365,14 +381,16 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
     identityLines,
     wardrobeLine,
     // KONTINUITET
-    consistency,
-    `COHERENCE_CODE:${coh}`,
+consistency,
+continuationLines,
+`COHERENCE_CODE:${coh}`,
+
     // FORMAT
     `Format: kvadrat (1:1); undvik att kapa lemmar ofrivilligt.`,
     // SCEN
     page.time_of_day ? `Tid på dygnet: ${page.time_of_day}.` : "",
     page.weather    ? `Väder: ${page.weather}.` : "",
-    `SCEN: ${page.scene || page.text || ""}`,
+    page.scene_en ? `SCENE_EN: ${page.scene_en}` : "",
     `BILDVINKEL: ${shotLine(frame)}.`,
     // REPEAT-SKYDD
     `ÅTERANVÄND INTE exakt samma bildkomposition som tidigare.`,
