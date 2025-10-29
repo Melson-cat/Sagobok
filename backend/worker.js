@@ -146,7 +146,7 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts }],
-          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.9 },
+          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.3, topP: 0.6 },
         }),
         signal: ctl.signal,
       });
@@ -176,6 +176,40 @@ function styleHint(style = "cartoon") {
   if (s === "painting") return "soft painterly illustration, visible brushwork";
   return "expressive 2D cartoon: thick-and-thin outlines, cel shading, vibrant palette";
 }
+
+function styleGuard(style = "cartoon") {
+  const s = (style || "").toLowerCase();
+  switch (s) {
+    case "pixar":
+      return [
+        "STYLE: stylized 3D animated film still (clean gradients, soft global illumination).",
+        "Do NOT use watercolor, inked lines, flat 2D shading, or comic outlines.",
+        "Not photorealistic, not live-action."
+      ].join(" ");
+    case "storybook":
+      return [
+        "STYLE: storybook watercolor illustration, soft edges, paper texture, gentle grain.",
+        "Do NOT render as 3D/Pixar or photorealistic CGI.",
+        "No hard cel-shaded comic inking."
+      ].join(" ");
+    case "comic":
+      return [
+        "STYLE: bold comic inked lines with flat colors.",
+        "Do NOT render as watercolor or 3D."
+      ].join(" ");
+    case "painting":
+      return [
+        "STYLE: painterly illustration with visible brushwork.",
+        "Do NOT render as 3D or cel-shaded comic."
+      ].join(" ");
+    default:
+      return [
+        "STYLE: expressive 2D cartoon with cel shading.",
+        "Do NOT render as 3D Pixar or photorealistic."
+      ].join(" ");
+  }
+}
+
 const OUTLINE_SYS = `
 Skriv en svensk dispositions-json för en bilderbok om en HJÄLTE (som användaren beskriver).
 Returnera exakt:{
@@ -260,83 +294,89 @@ function makeCoherenceCode(story) {
 /** Single-color wardrobe for kids only. Pets: return "" (omit). */
 function deriveWardrobeSignature(story) {
   const cat = (story?.book?.category || "kids").toLowerCase();
-  if (cat === "pets") return ""; // <- viktiga förändringen: ingen wardrobe för djur
+  if (cat === "pets") return "";
 
   const wb = story?.book?.bible || {};
   const hintArr = Array.isArray(wb?.wardrobe) ? wb.wardrobe : [];
   const hinted = hintArr.join(", ").trim();
-  if (hinted) return hinted;
+  if (hinted) return hinted; // om du redan matar in engelska här, låt vara
 
-  // Plocka stabil färg från palette eller deterministisk fallback från title-hash
   const palette = (wb?.palette || []).map((s) => s.toLowerCase()).filter(Boolean);
-  const colors = ["blå", "röd", "grön", "gul", "lila", "turkos"];
+  const colors = ["blue","red","green","yellow","purple","turquoise"];
   const idx = parseInt(makeCoherenceCode(story), 36) % colors.length;
   const base = (palette[0] || colors[idx]);
-  const accent = (palette[1] || "vit");
+  const accent = (palette[1] || "white");
 
   const name = (wb?.main_character?.name || "").toLowerCase();
   const seemsGirl = /a$|ia$|na$|emma|olivia|ella|elin|sofia|lisa|anna/.test(name);
 
-  // Enfärgat: klänning eller tröja+byxa
   return seemsGirl
-    ? `en ${base} klänning med diskreta ${accent} detaljer (håll exakt samma klädsel och grundfärg på alla sidor)`
-    : `en ${base} tröja och ${accent} byxor (håll exakt samma klädsel och grundfärg på alla sidor)`;
+    ? `a ${base} dress with subtle ${accent} details (keep exactly the same outfit and base color on all pages)`
+    : `a ${base} sweater and ${accent} pants (keep exactly the same outfit and base color on all pages)`;
 }
 
-/* ------------------------- Prompt builders --------------------------- */
+
 function buildFramePrompt({ style, story, page, pageCount, frame, characterName, wardrobe_signature, coherence_code }) {
   const series = buildSeriesContext(story);
-  const styleLine = styleHint(style);
-  const salt = "UNIQUE_TOKEN:" + page.page + "-" + ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
-  const isPet = (story?.book?.category || "kids").toLowerCase() === "pets";
+  const sGuard = styleGuard(style);
+  const isPet  = (story?.book?.category || "kids").toLowerCase() === "pets";
+  const coh    = coherence_code || makeCoherenceCode(story);
 
   const wardrobeLine = !isPet && wardrobe_signature
-    ? `WARDROBE_SIGNATURE: ${wardrobe_signature}. Keep wardrobe consistent across pages.`
-    : "Keep identity consistent across pages.";
-
-  const anatomyGuard = isPet
-    ? "ANATOMY GUARD: natural, plausible anatomy. Exactly four limbs unless species differs; no extra tails/ears; avoid deformities."
+    ? `Outfit: ${wardrobe_signature}. Keep outfit colors consistent across pages.`
     : "";
 
-  const sceneGuard = "Stay faithful to the SCENE and time of day; no sudden location changes.";
+  // Viktigt: ingen akvarell-mening när stilen är 3D/Pixar
+  const textureHint = (String(style).toLowerCase() === "storybook")
+    ? "Match earlier pages’ soft watercolor texture; avoid hard comic inking."
+    : "Keep rendering strictly in the declared STYLE for every page.";
 
-  const coh = coherence_code || makeCoherenceCode(story);
+  const identityLine = [
+    `Keep the SAME main character identity as the reference (face structure, age, head/body proportions, hairstyle and hair color).`,
+    `Allow variations in pose, camera, lighting, and facial expression.`
+  ].join(" ");
+
+  const salt = "UNIQUE_TOKEN:" + page.page + "-" + ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
 
   return [
     series,
     `This is page ${page.page} of ${pageCount}.`,
-    `Render in ${styleLine}. No text or speech bubbles.`,
-    `Match earlier pages’ line work and watercolor texture; avoid photoreal textures.`,
+    sGuard,
+    textureHint,
+    identityLine,
     wardrobeLine,
-    anatomyGuard,
-    sceneGuard,
+    isPet ? "ANATOMY GUARD: natural plausible anatomy; correct limb count; avoid deformities." : "",
     `COHERENCE_CODE:${coh}`,
-    `Square composition (1:1), keep limbs fully in frame.`,
-    `Keep the same hero (${characterName}) from reference; adapt pose, camera, lighting.`,
+    `Square composition (1:1);Avoid awkward crops; keep limbs in frame when composition allows.`,
     page.time_of_day ? `Time of day: ${page.time_of_day}.` : "",
-    page.weather ? `Weather: ${page.weather}.` : "",
+    page.weather    ? `Weather: ${page.weather}.`       : "",
     `SCENE: ${page.scene || page.text || ""}`,
     `FRAMING: ${shotLine(frame)}.`,
-    `VARIETY: each page unique yet coherent.`,
-    `PAGE_ID: ${page.page}. DO NOT REUSE the same composition as any previous page.`,
-    salt,
+    `VARIETY: each page unique yet coherent; DO NOT reuse previous compositions.`,
+    salt
   ].filter(Boolean).join("\n");
 }
 
+
 function characterCardPrompt({ style, bible, traits }) {
-  const mc = bible?.main_character || {};
+  const mc   = bible?.main_character || {};
   const name = mc.name || "Nova";
   const phys = mc.physique || traits || "fluffy gray cat with curious eyes";
+
   return [
-    `Character reference in ${styleHint(style)}.`,
-    `One hero only, full body, neutral background.`,
-    `Hero: ${name}, ${phys}. No text.`,
-  ].join(" ");
+    styleGuard(style),
+    "Single full-body turntable card on neutral background.",
+    "This card defines the canonical identity used for ALL subsequent images.",
+    "Keep consistent face (eyes, nose, mouth spacing), age, head-to-body proportions, hairstyle, and hair color.",
+    `Hero: ${name}, ${phys}.`,
+    "No text or logos."
+  ].join("\n");
 }
+
 
 /** Cover prompt – no wardrobe for pets, soft guard for identity */
 function buildCoverPrompt({ style, story, characterName, wardrobe_signature, coherence_code }) {
-  const styleLine = styleHint(style);
+  const sGuard = styleGuard(style);
   const theme = story?.book?.theme || "";
   const isPet = (story?.book?.category || "kids").toLowerCase() === "pets";
   const wardrobeLine = !isPet && wardrobe_signature
