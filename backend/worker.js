@@ -127,6 +127,10 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
   const parts = [];
   if (item.character_ref_b64)
     parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
+  // Previous page image as soft continuity anchor (bare b64, NOT data URL)
+if (item.prev_b64)
+  parts.push({ inlineData: { mimeType: "image/png", data: item.prev_b64 } });
+
   if (Array.isArray(item.style_refs_b64)) {
     for (const b64 of item.style_refs_b64.slice(0, 3))
       if (typeof b64 === "string" && b64.length > 64)
@@ -241,15 +245,24 @@ Du får en outline för en svensk bilderbok. Skriv boken enligt:
  "bible":{"main_character": { "name": string, "age": number, "physique": string, "identity_keys": string[] },
           "wardrobe": string[], "palette": string[], "world": string, "tone": string},
  "theme": string,"lesson": string,
- "pages":[{ "page": number, "text": string, "scene": string, "time_of_day": "day"|"golden_hour"|"evening"|"night","weather":"clear"|"cloudy"|"rain"|"snow"}]
+ "pages":[{
+   "page": number,
+   "text": string,               // SVENSKA: 3–5 meningar berättande text
+   "scene": string,              // SVENSKA: kort scenangivelse
+   "scene_en": string,           // ENGELSK: kort, visuell beskrivning för bild (1–2 meningar, inga repliker)
+   "time_of_day": "day"|"golden_hour"|"evening"|"night",
+   "weather":"clear"|"cloudy"|"rain"|"snow"
+ }]
 }}
 HÅRDA REGLER:
 - **EXAKT 14 sidor**. Page-numrering måste vara **1..14** utan luckor eller dubbletter.
-- **3–5 meningar** per sida, på **svenska**.
-- **Konkreta scener** i vald huvudmiljö; undvik abstrakta formuleringar.
+- **3–5 meningar** per sida i "text" (svenska).
+- "scene_en" ska vara en **kort visuell instruktion på engelska**, utan dialog, fokuserad på miljö, handling och rekvisita.
+- Tydliga konkreta scener i vald huvudmiljö; undvik abstrakta formuleringar.
 - Titeln ska vara säljbar. Fyll "tagline" och "back_blurb" (1–3 meningar).
 - Returnera **enbart giltig JSON** i ovan format.
 `;
+
 function heroDescriptor({ category, name, age, traits }) {
   if ((category || "kids") === "pets")
     return `HJÄLTE: ett husdjur vid namn ${name || "Nova"}; egenskaper: ${traits || "nyfiken, lekfull"}.`;
@@ -986,11 +999,34 @@ Läsålder: ${targetAge}. **Sidor: 14**. Stil: ${style || "cartoon"}. Kategori: 
 Boken ska ha tydlig lärdom (lesson) kopplad till temat.
 Returnera enbart JSON i exakt det efterfrågade formatet.`.trim();
 
-          const story = await openaiJSON(env, STORY_SYS, storyUser);
-                    const plan = normalizePlan(story?.book?.pages || []);
-          const coherence_code = makeCoherenceCode(story);
-          const wardrobe_signature = deriveWardrobeSignature(story);
-          return ok({ outline, story, plan, coherence_code, wardrobe_signature });
+        const story = await openaiJSON(env, STORY_SYS, storyUser);
+
+// Fallback: om storyn skulle sakna scene_en (bakåtkomp eller modellglitch)
+try {
+  const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
+  const needs = pages.some(p => !p.scene_en || !String(p.scene_en).trim());
+  if (needs && pages.length) {
+    const toTranslate = pages.map(p => ({ page: p.page, sv: p.scene || p.text || "" }));
+    const tprompt = `
+Översätt följande scenangivelser till **kort** engelsk, visuell beskrivning (1–2 meningar, inga repliker).
+Returnera exakt: { "items":[{"page":number,"scene_en":string}, ...] } och inget mer.
+SVENSKA:
+${JSON.stringify(toTranslate)}
+`.trim();
+    const t = await openaiJSON(env,
+      "Du är en saklig översättare. Returnera endast giltig JSON.",
+      tprompt
+    );
+    const map = new Map((t?.items || []).map(x => [x.page, x.scene_en]));
+    story.book.pages = pages.map(p => ({ ...p, scene_en: p.scene_en || map.get(p.page) || "" }));
+  }
+} catch { /* ignore graceful */ }
+
+const plan = normalizePlan(story?.book?.pages || []);
+const coherence_code = makeCoherenceCode(story);
+const wardrobe_signature = deriveWardrobeSignature(story);
+return ok({ outline, story, plan, coherence_code, wardrobe_signature });
+
         } catch (e) {
           return err(e?.message || "Story generation failed", 500);
         }
@@ -1098,69 +1134,81 @@ if (req.method === "POST" && url.pathname === "/api/images") {
 }
 
 // Generate ONE interior image, sequential (keeps context via prev_b64)
+// Generate ONE interior image, sequentially, with previous-image guidance
 if (req.method === "POST" && url.pathname === "/api/images/next") {
   try {
-    const body = await req.json().catch(() => ({}));
     const {
       style = "cartoon",
       story,
       plan,
-      page,                    // number (1..14)
-      ref_image_b64,           // canonical character card (b64)
-      prev_b64,                // previous generated page (b64) – optional
-      style_refs_b64,          // extra style refs (optional)
+      page,
+      ref_image_b64,
+      prev_b64,          // ← föregående bild som referens (bare b64)
       coherence_code,
-      guidance                 // optional
-    } = body || {};
+      style_refs_b64,
+    } = await req.json().catch(() => ({}));
 
     if (!story?.book?.pages) return err("Missing story.pages", 400);
-    if (!ref_image_b64) return err("Missing reference image", 400);
-    if (!Number.isFinite(page)) return err("Missing page number", 400);
+    const pg = story.book.pages.find(p => p.page === page);
+    if (!pg) return err(`Page ${page} not found`, 404);
+    if (!ref_image_b64) return err("Missing ref_image_b64", 400);
 
-    const target = story.book.pages.find((p) => p.page === page);
-    if (!target) return err(`Page ${page} not found`, 404);
+    const frames = (plan?.plan || []);
+    const frame  = frames.find(f => f.page === page) || {};
+    const pageCount = story.book.pages.length;
+    const heroName  = story.book.bible?.main_character?.name || "Hero";
 
-    const frames = plan?.plan || [];
-    const frame = frames.find((f) => f.page === page) || {};
-    const wardrobe_signature = deriveWardrobeSignature(story);
-    const coh = coherence_code || makeCoherenceCode(story);
-    const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
+    // English scene text if available, else fallback to Swedish scene/text
+    const sceneEN = pg.scene_en || pg.scene || pg.text || "";
 
-    const prompt = buildFramePrompt({
-      style,
-      story,
-      page: target,
-      pageCount: story.book.pages.length,
-      frame,
-      characterName: heroName,
-      wardrobe_signature,
-      coherence_code: coh,
-    });
+    // --- CONTINUATION BLOCK (ENG) ---
+    const continuation = [
+      "This illustration continues directly from the previous scene.",
+      "Use the previous image only as a visual guide for style, lighting, and character identity.",
+      "Do not replicate it exactly — imagine this as the same story world seen from a new camera angle or moment.",
+      "Keep the main character fully consistent (face, hair, hairstyle/length, outfit and its base color, proportions).",
+      "Preserve the overall tone and lighting continuity inspired by the previous scene.",
+      "Now illustrate this new scene based on the description below:"
+    ].join(" ");
 
-    // parts: referens → (ev. prev) → extra style refs → guidance → prompt
-    const styleParts = Array.isArray(style_refs_b64) ? style_refs_b64.slice(0, 2) : [];
-    if (prev_b64 && typeof prev_b64 === "string" && prev_b64.length > 64) {
-      styleParts.unshift(prev_b64); // gör föregående bild till främsta stil-ankare
-    }
+    // Bygg prompt (på engelska för bildmodellen)
+    const prompt = [
+      styleGuard(style),
+      // identitet & kläder
+      `Use the exact same main character as in the reference (${heroName}). Keep hair color and length identical. Do not change age/proportions.`,
+      deriveWardrobeSignature(story)
+        ? `WARDROBE: ${deriveWardrobeSignature(story)}. Keep outfit and base color identical on every page.`
+        : "",
+      // kontinuitet
+      `This is page ${pg.page} of ${pageCount}. Keep the same global style across all pages.`,
+      `COHERENCE_CODE:${coherence_code || makeCoherenceCode(story)}`,
+      // continuation-instruktion
+      continuation,
+      // scenen
+      `SCENE (EN): ${sceneEN}`,
+      `SHOT: ${shotLine(frame)}.`,
+      // format
+      "Square composition (1:1). Avoid accidental limb cropping.",
+      // mild anti-repeat
+      "Avoid reusing the exact same pose/composition from the previous image."
+    ].filter(Boolean).join("\n");
 
-    const g = await geminiImage(
-      env,
-      {
-        prompt,
-        character_ref_b64: ref_image_b64,
-        style_refs_b64: styleParts.length ? styleParts : undefined,
-        coherence_code: coh,
-        guidance: guidance || styleHint(style),
-      },
-      75000,
-      3
-    );
+    const payload = {
+      prompt,
+      character_ref_b64: ref_image_b64,
+      prev_b64, // ← den viktiga “föregående bild”-referensen
+      coherence_code: coherence_code || makeCoherenceCode(story),
+    };
+    if (Array.isArray(style_refs_b64) && style_refs_b64.length) payload.style_refs_b64 = style_refs_b64;
 
-    return ok({ page, image_url: g.image_url, provider: g.provider || "google" });
+    const g = await geminiImage(env, payload, 75000, 3);
+    if (!g?.image_url) return err("No image from Gemini", 502);
+    return ok({ page, image_url: g.image_url, provider: g.provider || "google", prompt });
   } catch (e) {
-    return err(e?.message || "Next image generation failed", 500);
+    return err(e?.message || "images/next failed", 500);
   }
 }
+
 
 
       // Regenerate single image
