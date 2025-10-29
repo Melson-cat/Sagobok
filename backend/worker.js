@@ -150,7 +150,7 @@ if (item.prev_b64)
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts }],
-          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.25, topP: 0.7 },
+          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.4, topP: 0.7 },
         }),
         signal: ctl.signal,
       });
@@ -358,19 +358,17 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
     `Håll strikt samma STIL (se STYLE) i varje bild; inga stilbyten mellan 2D/3D.`,
     `Variera kameravinkel och uttryck försiktigt för att undvika upprepning, men behåll identiteten.`
   ].join(" ");
-// --- NEW: Continuation policy styrd av storyn ---
-const cont = String(page?.continuity || "").toLowerCase(); // "continuation" | "new_scene"
-const continuationLines = (cont === "continuation")
-  ? [
-      "Fortsättning på föregående bild: behåll plats/stämning/karaktärer.",
-      "MEN: ändra komposition/kameravinkel och kroppsspråk – upprepa inte poserna.",
-      "Prioritera nuvarande SCEN-beskrivning för handlingen."
-    ].join(" ")
-  : [
-      "NY SCEN: byt bakgrund och staging enligt SCEN-beskrivningen.",
-      "Använd referensbilden enbart för identitet (ansikte, frisyr, kläder) – inte för bakgrund.",
-      "Undvik medvetet att återskapa föregående bakgrund/komposition."
-    ].join(" ");
+
+  const compositionLines = [
+  "AVPORTRÄTTERA: Gör INTE en centrerad, rak, helkroppspose om det inte uttryckligen står.",
+  "Använd filmisk komposition: tredjedelsregeln, djup (förgrund 10–30% som leder in), lager och ledande linjer.",
+  "Välj kameravinkel som tjänar handlingen (t.ex. låg vinkel för mod, hög vinkel för osäkerhet).",
+  "Gestalta verbet i SCEN: kroppsspråk och ansikte ska tydligt uttrycka känslan/aktionen.",
+  "Variera bildtyp över sidor: wide/establishing för miljö, medium för samspel, close-up för känslor, OTS/over-the-shoulder för spänning.",
+  "Undvik upprepning: byt pose, kamerahöjd eller bakgrundselement jämfört med föregående bild."
+].join(" ");
+
+
 
   const salt = "UNIQUE_PAGE:" + page.page + "-" + ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
 
@@ -382,11 +380,11 @@ const continuationLines = (cont === "continuation")
     wardrobeLine,
     // KONTINUITET
 consistency,
-continuationLines,
+compositionLines,
 `COHERENCE_CODE:${coh}`,
 
     // FORMAT
-    `Format: kvadrat (1:1); undvik att kapa lemmar ofrivilligt.`,
+    `Format: kvadrat (1:1).`,
     // SCEN
     page.time_of_day ? `Tid på dygnet: ${page.time_of_day}.` : "",
     page.weather    ? `Väder: ${page.weather}.` : "",
