@@ -385,8 +385,9 @@ function buildCoverPrompt({ style, story, characterName, wardrobe_signature, coh
   const coh = coherence_code || makeCoherenceCode(story);
 
   return [
-    `BOOK COVER ILLUSTRATION (front cover), ${styleLine}.`,
-    `Square composition (1:1). No text or logos.`,
+    sGuard,
+    "BOOK COVER ILLUSTRATION (front cover).",
+    "Square composition (1:1). No text or logos.",
     wardrobeLine,
     `COHERENCE_CODE:${coh}`,
     `Focus on the main hero (${characterName}) from the reference; perfect identity consistency.`,
