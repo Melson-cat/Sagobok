@@ -945,54 +945,32 @@ Returnera enbart json.`.trim();
         }
       }
 
-    // Character reference (backwards compatible + photo passthrough)
+ // Ref image (v27-kompatibel, enkel prompt, platt payload)
 if (req.method === "POST" && url.pathname === "/api/ref-image") {
   try {
-    const body = await req.json().catch(() => ({}));
+    const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
 
-    // 1) Backcompat: stöd både story.book och fristående fält
-    const story = body?.story;
-    const style =
-      story?.book?.style ||
-      body?.style ||
-      "storybook";
-
-    const bible =
-      story?.book?.bible ||
-      body?.bible ||
-      {};
-
-    const traits =
-      story?.book?.bible?.main_character?.physique ||
-      body?.traits ||
-      "";
-
-    // 2) Om klienten skickar in ett eget foto → passera igenom
-    const photo_b64 = body?.photo_b64 || body?.ref_image_b64;
-    if (photo_b64 && typeof photo_b64 === "string") {
-      // Tillåt dataurl eller ren base64
-      const b64 = photo_b64.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
+    // Client-supplied photo wins
+    if (photo_b64) {
+      const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
       if (b64.length > 64) return ok({ ref_image_b64: b64, provider: "client" });
       return err("Provided photo_b64 looked invalid", 400);
     }
 
-    // 3) Generera referens med Gemini
+    // Minimal, robust prompt – exakt som v27
     const prompt = characterCardPrompt({ style, bible, traits });
-    const g = await geminiImage(env, { prompt }, 75000, 3);
-    if (g?.b64) return ok({ ref_image_b64: g.b64, provider: g.provider || "google", prompt });
-    if (g?.image_url?.startsWith("data:image/")) {
-      // Plocka ut base64 om vi bara fick data-url tillbaka
-      const m = g.image_url.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
-      if (m) return ok({ ref_image_b64: m[1], provider: g.provider || "google", prompt });
-    }
 
-    // 4) Tydligare fel
-    return err("Gemini returned no image (ref-image)", 502, { prompt });
+    // Anropa Gemini utan extra parts
+    const g = await geminiImage(env, { prompt }, 70000, 2);
+    if (g?.b64) return ok({ ref_image_b64: g.b64, provider: g.provider || "google" });
+
+    // Tillbaka-kompatibelt svar (frontend hanterar null)
+    return ok({ ref_image_b64: null });
   } catch (e) {
-    // Skicka tillbaka lite mer kontext för felsökning i nätverksfliken
     return err(e?.message || "Ref generation failed", 500);
   }
 }
+
 
 
       // Regenerate single image
