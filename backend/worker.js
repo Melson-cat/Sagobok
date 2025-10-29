@@ -146,7 +146,7 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts }],
-          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.3, topP: 0.6 },
+          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.25, topP: 0.7 },
         }),
         signal: ctl.signal,
       });
@@ -321,61 +321,67 @@ function deriveWardrobeSignature(story) {
 
 
 function buildFramePrompt({ style, story, page, pageCount, frame, characterName, wardrobe_signature, coherence_code }) {
-  const series = buildSeriesContext(story);
   const sGuard = styleGuard(style);
   const isPet  = (story?.book?.category || "kids").toLowerCase() === "pets";
   const coh    = coherence_code || makeCoherenceCode(story);
+  const age    = story?.book?.bible?.main_character?.age || 5;
 
   const wardrobeLine = !isPet && wardrobe_signature
-    ? `Outfit: ${wardrobe_signature}. Keep outfit colors consistent across pages.`
+    ? `Kläder: ${wardrobe_signature}. Hjälten har alltid samma kläder och färger genom hela berättelsen. Ändra aldrig klädtyp eller färg i någon bild.`
     : "";
 
-  // Viktigt: ingen akvarell-mening när stilen är 3D/Pixar
-  const textureHint = (String(style).toLowerCase() === "storybook")
-    ? "Match earlier pages’ soft watercolor texture; avoid hard comic inking."
-    : "Keep rendering strictly in the declared STYLE for every page.";
-
-  const identityLine = [
-    `Keep the SAME main character identity as the reference (face structure, age, head/body proportions, hairstyle and hair color).`,
-    `Allow variations in pose, camera, lighting, and facial expression.`
+  const identityLines = [
+    `Använd exakt samma huvudkaraktär som på referensbilden (${characterName}).`,
+    `Bevara ansiktsstruktur (ögon/näsa/mun-placering), frisyr och hårfärg.`,
+    `Ålder ≈ ${age} (barnproportioner: större huvud-till-kropp).`,
+    `Ändra aldrig hårfärg eller hårlängd. Ingen sminkning. Gör inte om till tonåring eller vuxen.`
   ].join(" ");
 
-  const salt = "UNIQUE_TOKEN:" + page.page + "-" + ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
+  const consistency = [
+    `Detta är sida ${page.page} av ${pageCount}.`,
+    `Håll strikt samma STIL (se STYLE) i varje bild; inga stilbyten mellan 2D/3D.`,
+    `Variera kameravinkel och uttryck försiktigt för att undvika upprepning, men behåll identiteten.`
+  ].join(" ");
+
+  const salt = "UNIQUE_PAGE:" + page.page + "-" + ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
 
   return [
-    series,
-    `This is page ${page.page} of ${pageCount}.`,
+    // STYLE
     sGuard,
-    textureHint,
-    identityLine,
+    // IDENTITET & KLÄDER
+    identityLines,
     wardrobeLine,
-    isPet ? "ANATOMY GUARD: natural plausible anatomy; correct limb count; avoid deformities." : "",
+    // KONTINUITET
+    consistency,
     `COHERENCE_CODE:${coh}`,
-    `Square composition (1:1);Avoid awkward crops; keep limbs in frame when composition allows.`,
-    page.time_of_day ? `Time of day: ${page.time_of_day}.` : "",
-    page.weather    ? `Weather: ${page.weather}.`       : "",
-    `SCENE: ${page.scene || page.text || ""}`,
-    `FRAMING: ${shotLine(frame)}.`,
-    `VARIETY: each page unique yet coherent; DO NOT reuse previous compositions.`,
+    // FORMAT
+    `Format: kvadrat (1:1); undvik att kapa lemmar ofrivilligt.`,
+    // SCEN
+    page.time_of_day ? `Tid på dygnet: ${page.time_of_day}.` : "",
+    page.weather    ? `Väder: ${page.weather}.` : "",
+    `SCEN: ${page.scene || page.text || ""}`,
+    `BILDVINKEL: ${shotLine(frame)}.`,
+    // REPEAT-SKYDD
+    `ÅTERANVÄND INTE exakt samma bildkomposition som tidigare.`,
     salt
   ].filter(Boolean).join("\n");
 }
 
 
+
 function characterCardPrompt({ style, bible, traits }) {
   const mc   = bible?.main_character || {};
   const name = mc.name || "Nova";
-  const phys = mc.physique || traits || "fluffy gray cat with curious eyes";
-
+  const phys = mc.physique || traits || "liten, lekfull";
   return [
     styleGuard(style),
-    "Single full-body turntable card on neutral background.",
-    "This card defines the canonical identity used for ALL subsequent images.",
-    "Keep consistent face (eyes, nose, mouth spacing), age, head-to-body proportions, hairstyle, and hair color.",
-    `Hero: ${name}, ${phys}.`,
-    "No text or logos."
+    "En (1) hjälte, helkropp, neutral bakgrund. Detta är kanonisk referens för ALLA bilder.",
+    `Hjälte: ${name}, ${phys}.`,
+    "Bevara ansiktsstruktur, hårfärg och hårlängd. Barnproportioner om barnet är ungt.",
+    "Ingen text eller logotyper."
   ].join("\n");
 }
+
 
 
 /** Cover prompt – no wardrobe for pets, soft guard for identity */
