@@ -311,7 +311,7 @@ REGLER(lätta):
 `;
 
 const STORY_SYS = `
-Du får en outline för en svensk bilderbok. Skriv boken enligt:
+Du är en svensk barnboksförfattare som får en outline för en svensk bildbok. Skriv en intressant, engagerande och fin bok enligt:
 + { "book":{
  "title": string,
  "tagline": string,
@@ -324,7 +324,7 @@ Du får en outline för en svensk bilderbok. Skriv boken enligt:
  "theme": string,"lesson": string,
  "pages":[{
    "page": number,
-   "text": string,            // SV: 3–5 meningar
+   "text": string,            // SV: 2–4 meningar
    "scene": string,           // SV: kort visuell händelse (MILJÖ + ACTION)
    "scene_en": string,        // EN: idiomatisk, 2–3 meningar, rik visuell instruktion
    "location": string,        // t.ex. "gata", "sovrum", "park", "kök"
@@ -334,10 +334,10 @@ Du får en outline för en svensk bilderbok. Skriv boken enligt:
 }}
 HÅRDA FORMATREGLER:
 - EXAKT 14 sidor (page 1..14).
-- 3–4 meningar per sida i "text" (svenska).
+- 2–4 meningar per sida i "text" (svenska).
 - "scene_en" ska vara kort, filmisk, levande och konkret (inte dialog).
-- Varje sida ska vara visuellt distinkt (ny vinkel/miljö/rörelse/känsla).
-- Lärdom/tema subtilt (inte predikan).
+- Varje sida ska vara visuellt distinkt.
+
 - Endast giltig JSON i exakt format ovan.
 `;
 
@@ -1464,7 +1464,8 @@ if (req.method === "POST" && url.pathname === "/api/cover") {
     if (g?.b64 || g?.image_url) {
       return ok({
         cover_b64: g?.b64 || null,
-        image_url: g?.image_url || null,
+          image_url: g?.image_url || null,   // kan vara http(s) eller data:
+    data_url,                          // ← garanterad data-URL om möjligt
         provider: g?.provider || "google",
         prompt
       });

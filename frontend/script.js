@@ -549,38 +549,57 @@ for (const pg of pages) {
 }
 
 
-    // 4) COVER (icke-blockerande eller hoppa över)
-    if (COVER_STRATEGY === "async") {
-      // starta i bakgrunden – ingen await
-      generateCoverAsync().catch(()=>{ /* ignoreras i UI */ });
-      // Visa att omslaget inte blockerar
-      setStatus("☁️ Laddar upp illustrationer…", 86);
-    } else {
-      // skip: låt PDF använda sida 1 som omslag i workern
-      setStatus("☁️ Laddar upp illustrationer…", 86);
-    }
+   // 4) COVER (icke-blockerande eller hoppa över)
+if (COVER_STRATEGY === "async") {
+  // Fire-and-forget – UI visar omslag när/om det hinner
+  generateCoverAsync().catch(() => {});
+  setStatus("☁️ Laddar upp illustrationer…", 86);
+} else if (COVER_STRATEGY === "sync") {
+  // Vill du blocka tills omslaget är klart:
+  setStatus("🎨 Skapar omslag…", 84);
+  await generateCoverAsync();
+  setStatus("☁️ Laddar upp illustrationer…", 86);
+} else {
+  // "skip": låt workern använda sida 1 som omslag
+  setStatus("☁️ Laddar upp illustrationer…", 86);
+}
 
-    // 5) CLOUDFLARE IMAGES (alla sidor, omslag läggs till senare om/ när det finns)
-    const items = [];
-    for (const p of pages) {
-      const row = state.images_by_page.get(p.page);
-      if (!row) continue;
-      const du = row.data_url || (row.image_url ? await urlToDataURL(row.image_url) : null);
-      if (du) items.push({ page: p.page, data_url: du });
-    }
+// 5) CLOUDFLARE IMAGES (alla sidor; omslaget läggs till separat)
+const items = [];
+for (const p of pages) {
+  const row = state.images_by_page.get(p.page);
+  if (!row) continue;
+  const du = row.data_url || (row.image_url ? await urlToDataURL(row.image_url) : null);
+  if (du) items.push({ page: p.page, data_url: du });
+}
 
-    if (items.length) {
-      const uploads = await uploadToCF(items);
-      const byPage = new Map();
-      for (const u of uploads) if (Number.isFinite(u.page)) byPage.set(u.page, u);
-      for (const p of pages) {
-        const u = byPage.get(p.page);
-        if (u?.image_id) {
-          state.images_by_page.set(p.page, { image_id: u.image_id, image_url: u.url });
-          fillCard(p.page, u.url || state.images_by_page.get(p.page)?.image_url || "", "CF");
-        }
-      }
+if (items.length) {
+  const uploads = await uploadToCF(items);
+  const byPage = new Map();
+  for (const u of uploads) if (Number.isFinite(u.page)) byPage.set(u.page, u);
+  for (const p of pages) {
+    const u = byPage.get(p.page);
+    if (u?.image_id) {
+      state.images_by_page.set(p.page, { image_id: u.image_id, image_url: u.url });
+      fillCard(p.page, u.url || state.images_by_page.get(p.page)?.image_url || "", "CF");
     }
+  }
+}
+
+// 5.5) Catch-up: om omslaget redan kom men inte hunnit till CF → ladda upp nu
+if (state.cover_preview_url && !state.cover_image_id) {
+  const duCover = await urlToDataURL(state.cover_preview_url);
+  if (duCover) {
+    const ups = await uploadToCF([{ kind: "cover", data_url: duCover }]).catch(() => []);
+    const uc = ups?.find(x => x.kind === "cover" || x.page === 0);
+    if (uc?.image_id) {
+      state.cover_image_id = uc.image_id;
+      state.cover_preview_url = uc.url || state.cover_preview_url;
+      await fillCard(0, state.cover_preview_url, "CF");
+    }
+  }
+}
+
 
     stopQuips();
     setStatus("✅ Klart! Förhandsvisning redo.", 100);
@@ -642,11 +661,9 @@ async function regenerateOne(page) {
   }
 }
 
-// Generera omslag i bakgrunden; om det hinner – visa + ladda upp till CF
 async function generateCoverAsync() {
   try {
-    // hård timeout så vi aldrig blockerar UX
-    const timeoutMs = 12000;
+    const timeoutMs = 25000;
     const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error("cover-timeout")), timeoutMs));
 
     const covRes = await Promise.race([
@@ -655,34 +672,44 @@ async function generateCoverAsync() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           style: state.form.style,
-          ref_image_b64: state.ref_b64,
+          character_ref_b64: state.ref_b64,   // ← FIX: correct key for backend
           story: state.story,
         }),
       }),
-      timeout
+      timeout,
     ]);
 
-    if (!(covRes instanceof Response)) return; // timeout
+    if (!(covRes instanceof Response)) return; // timed out silently
     const cov = await covRes.json().catch(() => ({}));
-    if (!covRes.ok || cov?.error) return; // ingen UI-störning
+    if (!covRes.ok || cov?.error) {
+      console.warn("cover generation failed", cov?.error);
+      return;
+    }
 
-    state.cover_preview_url = cov.image_url || null;
-    if (state.cover_preview_url) fillCard(0, state.cover_preview_url, "Gemini");
+    const dataUrl =
+      cov.image_url ||
+      cov.data_url ||
+      (cov.cover_b64 ? `data:image/png;base64,${cov.cover_b64}` : null);
 
-    // ladda upp till CF om möjligt
-    const du = await urlToDataURL(state.cover_preview_url);
+    if (!dataUrl) return;
+
+    state.cover_preview_url = dataUrl;
+    await fillCard(0, dataUrl, "Gemini");
+
+    const du = await urlToDataURL(dataUrl);
     if (!du) return;
-    const uploads = await uploadToCF([{ kind: "cover", data_url: du }]).catch(()=>[]);
+    const uploads = await uploadToCF([{ kind: "cover", data_url: du }]).catch(() => []);
     const u = uploads?.find(x => x.kind === "cover" || x.page === 0);
     if (u?.image_id) {
       state.cover_image_id = u.image_id;
-      state.cover_preview_url = u.url || state.cover_preview_url;
-      fillCard(0, state.cover_preview_url, "CF");
+      state.cover_preview_url = u.url || dataUrl;
+      await fillCard(0, state.cover_preview_url, "CF");
     }
-  } catch {
-    // tyst fail – PDF funkar ändå via sida 1 som omslag
+  } catch (err) {
+    console.warn("Cover async fail", err);
   }
 }
+
 
 /* --------------------------- Events & Init --------------------------- */
 function bindEvents() {
