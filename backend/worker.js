@@ -1396,43 +1396,17 @@ if (req.method === "POST" && url.pathname === "/api/images/next") {
         }
       }
 
-      // Cover generation
-// Cover generation
+   // Cover generation
 if (req.method === "POST" && url.pathname === "/api/cover") {
   try {
-    // 1) Läs kropp och normalisera b64 (funkar för både data-URL och bare b64)
-    const body = await req.json().catch(() => ({}));
-    const {
-      story,
-      style,                       // optional override
-      character_ref_b64: charRefRaw,
-      ref_image_b64: refRaw,       // vissa frontends skickar detta fältnamn
-      prev_image_b64: prevRaw,     // kan vara data-URL eller bare b64
-    } = body || {};
-
+    const { story, style = "storybook", character_ref_b64, prev_image_b64 } = await req.json().catch(() => ({}));
     if (!story?.book) return err("Missing story", 400);
+    if (!character_ref_b64) return err("Missing character_ref_b64", 400); // viktigt för identitet
 
-    const toBareB64 = (s) => {
-      if (typeof s !== "string") return "";
-      const m = s.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
-      return m ? m[1] : s;
-    };
-    const character_ref_b64 = toBareB64(charRefRaw || refRaw || "");
-    const prev_b64 = toBareB64(prevRaw || "");
-
-    if (!character_ref_b64) {
-      return err(
-        "Missing character_ref_b64 (send bare base64 or data URL in 'character_ref_b64' or 'ref_image_b64')",
-        400
-      );
-    }
-
-    // 2) Samma stil som interiören om inget stil-override
-    const effectiveStyle = (style || story.book.style || "cartoon");
-
-    // 3) Prompt med hård identitets- och ålders-guard + miljö-hint från första scenen
-    const coherence_code     = makeCoherenceCode(story);
+    const coherence_code = makeCoherenceCode(story);
     const wardrobe_signature = deriveWardrobeSignature(story);
+    const effectiveStyle = style || story.book.style || "cartoon";
+
     const prompt = buildCoverPrompt({
       style: effectiveStyle,
       story,
@@ -1441,40 +1415,35 @@ if (req.method === "POST" && url.pathname === "/api/cover") {
       coherence_code,
     });
 
-    // 4) Skicka minimalt men robust paket till Gemini (geminiImage har redan backoff)
-    const g = await geminiImage(
-      env,
-      {
-        prompt,
-        character_ref_b64,
-        prev_b64: prev_b64 || null,                  // hjälper ton/ljus om du skickar sid-1-bilden
-        coherence_code,
-        guidance: styleHint(effectiveStyle),
-        // extra "minPrompt" används i vår progressive fallback i geminiImage
-        minPrompt:
-          "Front cover matching the interior style. Same hero as reference: identical face, hair color/length, and child proportions. " +
-          (wardrobe_signature
-            ? `Same outfit and base colors: ${wardrobe_signature}.`
-            : "Keep outfit colors/pattern identical."),
-      },
-      75000,
-      3
-    );
+    const g = await geminiImage(env, {
+      prompt,
+      character_ref_b64,
+      prev_b64: prev_image_b64 || null,
+      coherence_code,
+      guidance: styleHint(effectiveStyle),
+    }, 75000, 3);
 
-    if (g?.b64 || g?.image_url) {
-      return ok({
-        cover_b64: g?.b64 || null,
-          image_url: g?.image_url || null,   // kan vara http(s) eller data:
-    data_url,                          // ← garanterad data-URL om möjligt
-        provider: g?.provider || "google",
-        prompt
-      });
-    }
-    return err("Cover generation failed", 502);
+    // Bygg robust svar oavsett format
+    let data_url = null;
+    if (g?.b64) data_url = `data:image/png;base64,${g.b64}`;
+    else if (g?.image_url) data_url = g.image_url;
+    else if (g?.data_url) data_url = g.data_url;
+
+    if (!data_url) return err("Cover generation failed (no image data)", 500);
+
+    return ok({
+      cover_b64: g.b64 || null,
+      data_url,
+      image_url: g.image_url || null,
+      provider: g.provider || "google",
+      prompt,
+    });
   } catch (e) {
+    console.error("COVER ERROR", e);
     return err(e?.message || "Cover generation failed", 500);
   }
 }
+
 
 
 
