@@ -271,17 +271,78 @@ function heroDescriptor({ category, name, age, traits }) {
   const a = parseInt(age || 6, 10);
   return `HJÄLTE: ett barn vid namn ${name || "Nova"} (${a} år), egenskaper: ${traits || "modig, omtänksam"}.`;
 }
-function normalizePlan(pages) {
+
+async function getCameraHints(env, story) {
+  const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
+  if (!pages.length) return { shots: [] };
+
+  const prompt = `
+Du får en lista av sidors scener i en svensk bilderbok. Föreslå en kamera-/bildhint per sida
+som hjälper en bild-AI variera kompositionen utan att byta stil/identitet.
+
+Tillåtna hints (välj 1 per sida): "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
+
+Returnera EXAKT:
+{ "shots": [ { "page": number, "shot": string } ] }
+
+SCENER (sv + ev. eng):
+${JSON.stringify(pages.map(p => ({
+  page: p.page,
+  scene: p.scene || "",
+  scene_en: p.scene_en || "",
+  location: p.location || "",
+  time_of_day: p.time_of_day || "",
+  weather: p.weather || ""
+})))}
+`.trim();
+
+  // Svarar som JSON (vi har redan openaiJSON helper)
+  try {
+    const j = await openaiJSON(env,
+      "Du är en filmspråkscoach. Returnera ENDAST giltig JSON i exakt efterfrågat format.",
+      prompt
+    );
+    const shots = Array.isArray(j?.shots) ? j.shots : [];
+    // Liten sanering
+    const allowed = new Set(["wide","medium","close-up","low-angle","high-angle","over-the-shoulder"]);
+    return { shots: shots.filter(x => Number.isFinite(x?.page) && allowed.has(String(x?.shot || "").toLowerCase())) };
+  } catch {
+    return { shots: [] };
+  }
+}
+
+function normalizePlan(pages, shotsHints = []) {
   const out = [];
-  const order = ["EW", "M", "CU", "W"];
+  const fallbackOrder = ["EW", "M", "CU", "W"]; // om inga hints
+  const hintByPage = new Map(shotsHints.map(s => [s.page, String(s.shot).toLowerCase()]));
+
+  function mapHintToFrame(hint) {
+    switch (hint) {
+      case "wide":                return { shot_type: "W",  lens_mm: 35, subject_size_percent: 35, camera_hint: "wide" };
+      case "medium":              return { shot_type: "M",  lens_mm: 50, subject_size_percent: 60, camera_hint: "medium" };
+      case "close-up":            return { shot_type: "CU", lens_mm: 85, subject_size_percent: 80, camera_hint: "close-up" };
+      case "low-angle":           return { shot_type: "M",  lens_mm: 40, subject_size_percent: 60, camera_hint: "low-angle" };
+      case "high-angle":          return { shot_type: "M",  lens_mm: 40, subject_size_percent: 60, camera_hint: "high-angle" };
+      case "over-the-shoulder":   return { shot_type: "M",  lens_mm: 50, subject_size_percent: 55, camera_hint: "over-the-shoulder" };
+      default:                    return null;
+    }
+  }
+
   pages.forEach((p, i) => {
-    const t = order[i % order.length];
-    const lens = { EW: 28, W: 35, M: 50, CU: 85 }[t] || 35;
-    const size = { EW: 30, W: 45, M: 60, CU: 80 }[t] || 60;
-    out.push({ page: p.page, shot_type: t, lens_mm: lens, subject_size_percent: size });
+    const hint = hintByPage.get(p.page);
+    const mapped = hint ? mapHintToFrame(hint) : null;
+    if (mapped) {
+      out.push({ page: p.page, ...mapped });
+    } else {
+      const t = fallbackOrder[i % fallbackOrder.length];
+      const lens = { EW: 28, W: 35, M: 50, CU: 85 }[t] || 35;
+      const size = { EW: 30, W: 45, M: 60, CU: 80 }[t] || 60;
+      out.push({ page: p.page, shot_type: t, lens_mm: lens, subject_size_percent: size });
+    }
   });
   return { plan: out };
 }
+
 function buildSeriesContext(story) {
   const pages = story?.book?.pages || [];
   const locs = [];
@@ -341,6 +402,9 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
   const isPet  = (story?.book?.category || "kids").toLowerCase() === "pets";
   const coh    = coherence_code || makeCoherenceCode(story);
   const age    = story?.book?.bible?.main_character?.age || 5;
+  const cameraHintLine = frame?.camera_hint
+    ? `CAMERA_HINT: ${frame.camera_hint}. Use this as guidance for angle/composition; do not copy the previous page.`
+    : "";
 
   const wardrobeLine = !isPet && wardrobe_signature
     ? `Wardrobe: ${wardrobe_signature}. The hero always wears the exact same outfit and colors throughout the story. Never change clothing type or color in any image.`
@@ -351,7 +415,8 @@ const identityLines = [
   `Use the exact same main character as in the reference (${characterName}).`,
   `Preserve face structure (relative eye/nose/mouth placement), hairstyle and hair color.`,
   `Age ≈ ${age} (child proportions: larger head-to-body).`,
-  `Never change hair color or length. No makeup. Do not age the hero up.`
+  `Never change hair color or length. No makeup. The hero is a child, do NOT age.`
+  `Always keep the exact same base color tone for clothing and accessories. Never recolor or shift hue even slightly.`
 ].join(" ");
 
 // --- SEQUENCE CONSISTENCY ----------------------------------------------
@@ -388,6 +453,7 @@ const cinematicContext = [
   wardrobeLine,
   consistency,
   compositionLines,
+    cameraHintLine,
   cinematicContext,
   `COHERENCE_CODE:${coh}`,
    `Format: square (1:1).`,
@@ -1021,6 +1087,7 @@ Returnera enbart JSON i exakt det efterfrågade formatet.`.trim();
 
         const story = await openaiJSON(env, STORY_SYS, storyUser);
 
+
 // Fallback: om storyn skulle sakna scene_en (bakåtkomp eller modellglitch)
 try {
   const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
@@ -1042,10 +1109,15 @@ ${JSON.stringify(toTranslate)}
   }
 } catch { /* ignore graceful */ }
 
-const plan = normalizePlan(story?.book?.pages || []);
+// ⬇️ NYTT: hämta kamerahints och bygg plan med hints
+const camHints = await getCameraHints(env, story);
+const plan = normalizePlan(story?.book?.pages || [], camHints.shots);
+
 const coherence_code = makeCoherenceCode(story);
 const wardrobe_signature = deriveWardrobeSignature(story);
+
 return ok({ outline, story, plan, coherence_code, wardrobe_signature });
+
 
         } catch (e) {
           return err(e?.message || "Story generation failed", 500);
