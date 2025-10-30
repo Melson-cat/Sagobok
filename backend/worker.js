@@ -207,7 +207,7 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts: partsForStage(i) }],
-          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.7 },
+          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.6 },
         }),
         signal: ctl.signal,
       });
@@ -469,78 +469,48 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
   const isPet  = (story?.book?.category || "kids").toLowerCase() === "pets";
   const coh    = coherence_code || makeCoherenceCode(story);
   const age    = story?.book?.bible?.main_character?.age || 5;
-  const cameraHintLine = frame?.camera_hint
-    ? `CAMERA_HINT: ${frame.camera_hint}. Use this as guidance for angle/composition; do not copy the previous page.`
-    : "";
 
   const wardrobeLine = !isPet && wardrobe_signature
-    ? `Wardrobe: ${wardrobe_signature}. The hero always wears the exact same outfit and colors throughout the story. Never change clothing type or color in any image.`
+    ? `Wardrobe: ${wardrobe_signature}. The hero always wears the same outfit and colors. Do NOT change garment type, color family, or pattern.`
     : "";
 
- // --- IDENTITY ----------------------------------------------------------
-const identityLines = [
-  `Same hero as reference (${characterName}): identical face, hair, and proportions.`,
-  `Child, not adult. No makeup or aging.`
-].join(" ");
+  const identityLines = [
+    `Use the same hero as in the reference (${characterName}).`,
+    `Age ≈ ${age}. Depict clear *child* anatomy (larger head-to-body ratio, rounder face, smaller hands).`,
+    `Never depict the hero as a teen or adult. No makeup. Keep same hairstyle, color and length.`,
+    `Hero must appear visibly in frame unless the SCENE_EN explicitly excludes them.`
+  ].join(" ");
 
+  const consistency = [
+    `This is page ${page.page} of ${pageCount} in the same continuous story.`,
+    `Keep STYLE and lighting consistent; vary camera angle or mood slightly per page.`,
+    `Maintain identical identity and outfit; avoid repetition of identical composition.`
+  ].join(" ");
 
-// --- SEQUENCE CONSISTENCY ----------------------------------------------
-const consistency = [
-  `This is page ${page.page} of ${pageCount} in the same story.`,
-  `Keep the same STYLE (see STYLE) across pages; do not switch between 2D/3D.`,
-  `Vary camera angle and expression to avoid repetition while keeping identity consistent.`
-  `Always Include hero in scene.`
-].join(" ");
-
-// --- COMPOSITION GUARD -------------------------------------------------
-const compositionLines = [
-  `Avoid centered full-body pose. Use cinematic composition (rule of thirds, depth, leading lines).`,
-  `Match action verb from SCENE_EN with clear gesture or posture.`,
-  `Show location clearly if relevant.`,
-].join(" ");
-
-// --- CINEMATIC CONTEXT -------------------------------------------------
-const cinematicContext = [
-  `Each image is the next movie frame, not a repeat. Make it cinematicly flow between scenes.`,
-  `Keep style/lighting consistent, vary angle.`
-].join(" ");
-
-
+  const cinematicContext = [
+    `Each image is a *film frame* from the same animated movie.`,
+    `Depict the *next moment* of the previous scene, not a remake.`,
+    `Visualize the action in SCENE_EN through body language, gesture, and environment.`,
+    `Background and lighting should evolve naturally with the story.`
+  ].join(" ");
 
   const salt = "UNIQUE_PAGE:" + page.page + "-" + ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
 
- return [
-  sGuard,
-  identityLines,
-  wardrobeLine,
-  consistency,
-  compositionLines,
-    cameraHintLine,
-  cinematicContext,
-  `COHERENCE_CODE:${coh}`,
-   `Format: square (1:1).`,
-  page.time_of_day ? `Time of day: ${page.time_of_day}.` : "",
-  page.weather    ? `Weather: ${page.weather}.` : "",
-  "SCENE_EN is the single source of truth for what happens in this frame. If it conflicts with the previous image, follow SCENE_EN.",
-  page.scene_en   ? `SCENE_EN: ${page.scene_en}` : "",
-  salt
-].filter(Boolean).join("\n");
-
-}
-
-
-function characterCardPrompt({ style, bible, traits }) {
-  const mc   = bible?.main_character || {};
-  const name = mc.name || "Nova";
-  const phys = mc.physique || traits || "small and playful";
   return [
-    styleGuard(style),
-    "One (1) full-body hero on a neutral background. This defines the canonical identity for ALL subsequent images.",
-    `Hero: ${name}, ${phys}.`,
-    "Preserve face structure, hair color, and hair length. Use child proportions if the hero is young.",
-    "No text or logos."
-  ].join("\n");
+    sGuard,
+    identityLines,
+    wardrobeLine,
+    consistency,
+    cinematicContext,
+    `COHERENCE_CODE:${coh}`,
+    `Format: square (1:1).`,
+    page.time_of_day ? `Time of day: ${page.time_of_day}.` : "",
+    page.weather ? `Weather: ${page.weather}.` : "",
+    page.scene_en ? `SCENE_EN: ${page.scene_en}` : "",
+    salt
+  ].filter(Boolean).join("\n");
 }
+
 
 
 
@@ -548,20 +518,25 @@ function characterCardPrompt({ style, bible, traits }) {
 /** Cover prompt – no wardrobe for pets, soft guard for identity */
 function buildCoverPrompt({ style, story, characterName, wardrobe_signature, coherence_code }) {
   const sGuard = styleGuard(style);
-  const theme = story?.book?.theme || "";
   const coh = coherence_code || makeCoherenceCode(story);
+  const theme = story?.book?.theme || "";
+  const isPet = (story?.book?.category || "kids").toLowerCase() === "pets";
 
   return [
     sGuard,
-    "BOOK COVER — same universe and visual style as interior pages.",
-    "Focus on the main hero together with one symbolic element from the story (e.g., the setting or companion).",
-    "Keep identity, lighting, and wardrobe identical to interior pages.",
-    "Square composition (1:1). No text, titles, or logos.",
-    `WARDROBE_SIGNATURE: ${wardrobe_signature || "same outfit as inside pages"}.`,
-    `COHERENCE_CODE: ${coh}.`,
+    "BOOK COVER — must perfectly match the visual style of interior illustrations.",
+    "Use the *same hero* (same face, age, clothing, and proportions) as in the reference image.",
+    "Keep identical lighting, color palette, and rendering style as the story pages.",
+    "Square (1:1). No title text, no logos, no typography.",
+    isPet
+      ? "Focus on the pet hero interacting with the world of the story."
+      : `Focus on the hero (${characterName}) in a dynamic or emotional moment that hints at the story's theme.`,
+    wardrobe_signature ? `WARDROBE_SIGNATURE: ${wardrobe_signature}.` : "",
+    `COHERENCE_CODE:${coh}.`,
     theme ? `Theme cue: ${theme}.` : "",
   ].filter(Boolean).join("\n");
 }
+
 
 
 /* ---------------------- Cloudflare Images utils ---------------------- */
