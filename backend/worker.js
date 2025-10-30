@@ -496,7 +496,7 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
   const consistency = [
     `This is page ${page.page} of ${pageCount} in the same continuous story.`,
     `Keep STYLE and lighting consistent.`,
-    `Maintain identical identity and outfit.`
+    `Maintain identical identity and outfit.`,
     `Do not reuse the same camera height/angle and composition as the previous page.`,
   ].join(" ");
 
