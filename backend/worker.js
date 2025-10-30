@@ -501,9 +501,10 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
   ].join(" ");
 
   const cinematicContext = [
-    `Each image is a *film frame* from the same animated movie.`,
-    `Depict the *next moment* of the previous scene, Do not make an identical scene.`,
-    `Background and lighting should evolve naturally with the story.`
+    `Each image is a *film frame* from the same movie.`,
+    `Depict the *next moment* of the previous scene.`,
+    `Background and lighting should evolve naturally with the story.`,
+    `NEVER make an identical image, NEVER use the same exact angle.`
   ].join(" ");
 
   const salt = "UNIQUE_PAGE:" + page.page + "-" + ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
@@ -1396,18 +1397,42 @@ if (req.method === "POST" && url.pathname === "/api/images/next") {
       }
 
       // Cover generation
+// Cover generation
 if (req.method === "POST" && url.pathname === "/api/cover") {
   try {
-   const { story, style, character_ref_b64, prev_image_b64 } = await req.json().catch(() => ({}));
-   if (!story?.book) return err("Missing story", 400);
-  if (!character_ref_b64) return err("Missing character_ref_b64", 400); // ← viktigt för identitet
+    // 1) Läs kropp och normalisera b64 (funkar för både data-URL och bare b64)
+    const body = await req.json().catch(() => ({}));
+    const {
+      story,
+      style,                       // optional override
+      character_ref_b64: charRefRaw,
+      ref_image_b64: refRaw,       // vissa frontends skickar detta fältnamn
+      prev_image_b64: prevRaw,     // kan vara data-URL eller bare b64
+    } = body || {};
 
-    const coherence_code     = makeCoherenceCode(story);
-    const wardrobe_signature = deriveWardrobeSignature(story);
+    if (!story?.book) return err("Missing story", 400);
 
-    // använd samma stil som interiören om style saknas
+    const toBareB64 = (s) => {
+      if (typeof s !== "string") return "";
+      const m = s.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
+      return m ? m[1] : s;
+    };
+    const character_ref_b64 = toBareB64(charRefRaw || refRaw || "");
+    const prev_b64 = toBareB64(prevRaw || "");
+
+    if (!character_ref_b64) {
+      return err(
+        "Missing character_ref_b64 (send bare base64 or data URL in 'character_ref_b64' or 'ref_image_b64')",
+        400
+      );
+    }
+
+    // 2) Samma stil som interiören om inget stil-override
     const effectiveStyle = (style || story.book.style || "cartoon");
 
+    // 3) Prompt med hård identitets- och ålders-guard + miljö-hint från första scenen
+    const coherence_code     = makeCoherenceCode(story);
+    const wardrobe_signature = deriveWardrobeSignature(story);
     const prompt = buildCoverPrompt({
       style: effectiveStyle,
       story,
@@ -1416,14 +1441,25 @@ if (req.method === "POST" && url.pathname === "/api/cover") {
       coherence_code,
     });
 
-    // Skicka bara ref + prompt till geminiImage (den bygger parts själv)
-    const g = await geminiImage(env, {
-      prompt,
-      character_ref_b64,
-      prev_b64: prev_image_b64 || null,
-      coherence_code,
-      guidance: styleHint(effectiveStyle),
-    }, 75000, 3);
+    // 4) Skicka minimalt men robust paket till Gemini (geminiImage har redan backoff)
+    const g = await geminiImage(
+      env,
+      {
+        prompt,
+        character_ref_b64,
+        prev_b64: prev_b64 || null,                  // hjälper ton/ljus om du skickar sid-1-bilden
+        coherence_code,
+        guidance: styleHint(effectiveStyle),
+        // extra "minPrompt" används i vår progressive fallback i geminiImage
+        minPrompt:
+          "Front cover matching the interior style. Same hero as reference: identical face, hair color/length, and child proportions. " +
+          (wardrobe_signature
+            ? `Same outfit and base colors: ${wardrobe_signature}.`
+            : "Keep outfit colors/pattern identical."),
+      },
+      75000,
+      3
+    );
 
     if (g?.b64 || g?.image_url) {
       return ok({
@@ -1438,6 +1474,7 @@ if (req.method === "POST" && url.pathname === "/api/cover") {
     return err(e?.message || "Cover generation failed", 500);
   }
 }
+
 
 
       // Uploads
