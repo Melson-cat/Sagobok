@@ -150,7 +150,7 @@ if (item.prev_b64)
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts }],
-          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.4, topP: 0.7 },
+          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.45, topP: 0.7 },
         }),
         signal: ctl.signal,
       });
@@ -209,8 +209,9 @@ function styleGuard(style = "cartoon") {
     default:
       return [
         "STYLE: expressive 2D cartoon with cel shading.",
-        "Do NOT render as 3D Pixar or photorealistic."
+        
       ].join(" ");
+        
   }
 }
 
@@ -251,7 +252,6 @@ Du får en outline för en svensk bilderbok. Skriv boken enligt:
    "scene": string,           // SV: kort scenbeskrivning (miljö + handling)
    "scene_en": string,        // EN: samma scenbeskrivning, naturlig engelska
    "location": string,        // t.ex. "gata", "sovrum", "park", "kök"
-   "continuity": "continuation"|"new_scene", // är detta en fortsättning på föreg. bild?
    "time_of_day": "day"|"golden_hour"|"evening"|"night",
    "weather":"clear"|"cloudy"|"rain"|"snow"
  }]
@@ -260,7 +260,6 @@ HÅRDA REGLER:
 - **EXAKT 14 sidor** (page 1..14).
 - 3–5 meningar per sida, på **svenska** i "text".
 - "scene_en" ska vara idiomatisk engelska av "scene" (inte maskinöversättning ord för ord).
-- "continuity": Ange "continuation" om plats/tid/ögonblick direkt följer föregående sida; annars "new_scene".
 - Var tydlig med "location".
 - Endast giltig JSON i exakt format ovan.
 `;
@@ -330,9 +329,10 @@ function deriveWardrobeSignature(story) {
   const name = (wb?.main_character?.name || "").toLowerCase();
   const seemsGirl = /a$|ia$|na$|emma|olivia|ella|elin|sofia|lisa|anna/.test(name);
 
-  return seemsGirl
-    ? `a ${base} dress with subtle ${accent} details (keep exactly the same outfit and base color on all pages)`
-    : `a ${base} sweater and ${accent} pants (keep exactly the same outfit and base color on all pages)`;
+ return seemsGirl
+  ? `a ${base} dress with subtle ${accent} accents (keep the same outfit and base color on every page; do not redesign or recolor it)`
+  : `a ${base} sweater and ${accent} pants (keep the same outfit and base color on every page; do not redesign or recolor them)`;
+
 }
 
 
@@ -343,73 +343,77 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
   const age    = story?.book?.bible?.main_character?.age || 5;
 
   const wardrobeLine = !isPet && wardrobe_signature
-    ? `Kläder: ${wardrobe_signature}. Hjälten har alltid samma kläder och färger genom hela berättelsen. Ändra aldrig klädtyp eller färg i någon bild.`
+    ? `Wardrobe: ${wardrobe_signature}. The hero always wears the exact same outfit and colors throughout the story. Never change clothing type or color in any image.`
     : "";
 
-  const identityLines = [
-    `Använd exakt samma huvudkaraktär som på referensbilden (${characterName}).`,
-    `Bevara ansiktsstruktur (ögon/näsa/mun-placering), frisyr och hårfärg.`,
-    `Ålder ≈ ${age} (barnproportioner: större huvud-till-kropp).`,
-    `Ändra aldrig hårfärg eller hårlängd. Ingen sminkning. Gör inte om till tonåring eller vuxen.`
-  ].join(" ");
+ // --- IDENTITY ----------------------------------------------------------
+const identityLines = [
+  `Use the exact same main character as in the reference (${characterName}).`,
+  `Preserve face structure (relative eye/nose/mouth placement), hairstyle and hair color.`,
+  `Age ≈ ${age} (child proportions: larger head-to-body).`,
+  `Never change hair color or length. No makeup. Do not age the hero up.`
+].join(" ");
 
-  const consistency = [
-    `Detta är sida ${page.page} av ${pageCount}.`,
-    `Håll strikt samma STIL (se STYLE) i varje bild; inga stilbyten mellan 2D/3D.`,
-    `Variera kameravinkel och uttryck försiktigt för att undvika upprepning, men behåll identiteten.`
-  ].join(" ");
+// --- SEQUENCE CONSISTENCY ----------------------------------------------
+const consistency = [
+  `This is page ${page.page} of ${pageCount} in the same story.`,
+  `Keep the same STYLE (see STYLE) across pages; do not switch between 2D/3D.`,
+  `Vary camera angle and expression to avoid repetition while keeping identity consistent.`
+].join(" ");
 
-  const compositionLines = [
-  "AVPORTRÄTTERA: Gör INTE en centrerad, rak, helkroppspose om det inte uttryckligen står.",
-  "Använd filmisk komposition: tredjedelsregeln, djup (förgrund 10–30% som leder in), lager och ledande linjer.",
-  "Välj kameravinkel som tjänar handlingen (t.ex. låg vinkel för mod, hög vinkel för osäkerhet).",
-  "Gestalta verbet i SCEN: kroppsspråk och ansikte ska tydligt uttrycka känslan/aktionen.",
-  "Variera bildtyp över sidor: wide/establishing för miljö, medium för samspel, close-up för känslor, OTS/over-the-shoulder för spänning.",
-  "Undvik upprepning: byt pose, kamerahöjd eller bakgrundselement jämfört med föregående bild."
+// --- COMPOSITION GUARD -------------------------------------------------
+const compositionLines = [
+  `Do NOT default to a centered, straight, full-body pose unless explicitly requested.`,
+  `Use cinematic composition: rule of thirds, depth (10–30% foreground as a leading element), layering, and leading lines.`,
+  `Pick a camera angle that serves the action (e.g., low for courage, high for uncertainty).`,
+  `Stage the verb in SCENE: body language and face must clearly express the emotion/action.`,
+  `Vary shot types across pages: wide/establishing for setting, medium for interaction, close-up for emotion, over-the-shoulder for tension.`,
+  `Avoid repeating the previous page’s composition: change pose, camera height, or background elements.`
+].join(" ");
+
+// --- CINEMATIC CONTEXT -------------------------------------------------
+const cinematicContext = [
+  `Think like a film shot designer: each image is a frame in the SAME movie, not a standalone illustration.`,
+  `Create a natural continuation of the previous scene without copying it.`,
+  `Maintain character, lighting, and tone; change angle/pose/composition to feel like the next frame.`
 ].join(" ");
 
 
 
   const salt = "UNIQUE_PAGE:" + page.page + "-" + ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
 
-  return [
-    // STYLE
-    sGuard,
-    // IDENTITET & KLÄDER
-    identityLines,
-    wardrobeLine,
-    // KONTINUITET
-consistency,
-compositionLines,
-`COHERENCE_CODE:${coh}`,
+ return [
+  sGuard,
+  identityLines,
+  wardrobeLine,
+  consistency,
+  compositionLines,
+  cinematicContext,
+  `COHERENCE_CODE:${coh}`,
+   `Format: square (1:1).`,
+  page.time_of_day ? `Time of day: ${page.time_of_day}.` : "",
+  page.weather    ? `Weather: ${page.weather}.` : "",
+  "SCENE_EN is the single source of truth for what happens in this frame. If it conflicts with the previous image, follow SCENE_EN.",
+  page.scene_en   ? `SCENE_EN: ${page.scene_en}` : "",
+  salt
+].filter(Boolean).join("\n");
 
-    // FORMAT
-    `Format: kvadrat (1:1).`,
-    // SCEN
-    page.time_of_day ? `Tid på dygnet: ${page.time_of_day}.` : "",
-    page.weather    ? `Väder: ${page.weather}.` : "",
-    page.scene_en ? `SCENE_EN: ${page.scene_en}` : "",
-    `BILDVINKEL: ${shotLine(frame)}.`,
-    // REPEAT-SKYDD
-    `ÅTERANVÄND INTE exakt samma bildkomposition som tidigare.`,
-    salt
-  ].filter(Boolean).join("\n");
 }
-
 
 
 function characterCardPrompt({ style, bible, traits }) {
   const mc   = bible?.main_character || {};
   const name = mc.name || "Nova";
-  const phys = mc.physique || traits || "liten, lekfull";
+  const phys = mc.physique || traits || "small and playful";
   return [
     styleGuard(style),
-    "En (1) hjälte, helkropp, neutral bakgrund. Detta är kanonisk referens för ALLA bilder.",
-    `Hjälte: ${name}, ${phys}.`,
-    "Bevara ansiktsstruktur, hårfärg och hårlängd. Barnproportioner om barnet är ungt.",
-    "Ingen text eller logotyper."
+    "One (1) full-body hero on a neutral background. This defines the canonical identity for ALL subsequent images.",
+    `Hero: ${name}, ${phys}.`,
+    "Preserve face structure, hair color, and hair length. Use child proportions if the hero is young.",
+    "No text or logos."
   ].join("\n");
 }
+
 
 
 
