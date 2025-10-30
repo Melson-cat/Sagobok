@@ -150,7 +150,7 @@ if (item.prev_b64)
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts }],
-          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.45, topP: 0.7 },
+          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.4, topP: 0.7 },
         }),
         signal: ctl.signal,
       });
@@ -424,6 +424,7 @@ const consistency = [
   `This is page ${page.page} of ${pageCount} in the same story.`,
   `Keep the same STYLE (see STYLE) across pages; do not switch between 2D/3D.`,
   `Vary camera angle and expression to avoid repetition while keeping identity consistent.`
+  `Always Include hero in scene.`
 ].join(" ");
 
 // --- COMPOSITION GUARD -------------------------------------------------
