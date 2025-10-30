@@ -207,7 +207,7 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts: partsForStage(i) }],
-          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.6 },
+          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.4, topP: 0.7 },
         }),
         signal: ctl.signal,
       });
@@ -410,6 +410,7 @@ function normalizePlan(pages, shotsHints = []) {
   return { plan: out };
 }
 
+
 function buildSeriesContext(story) {
   const pages = story?.book?.pages || [];
   const locs = [];
@@ -476,21 +477,21 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
 
   const identityLines = [
     `Use the same hero as in the reference (${characterName}).`,
-    `Age ≈ ${age}. Depict clear *child* anatomy (larger head-to-body ratio, rounder face, smaller hands).`,
+    `Age ≈ ${age}. Depict clear *child* anatomy.`,
     `Never depict the hero as a teen or adult. No makeup. Keep same hairstyle, color and length.`,
     `Hero must appear visibly in frame unless the SCENE_EN explicitly excludes them.`
   ].join(" ");
 
   const consistency = [
     `This is page ${page.page} of ${pageCount} in the same continuous story.`,
-    `Keep STYLE and lighting consistent; vary camera angle or mood slightly per page.`,
-    `Maintain identical identity and outfit; avoid repetition of identical composition.`
+    `Keep STYLE and lighting consistent.`,
+    `Maintain identical identity and outfit.`
+    `Do not reuse the same camera height/angle and composition as the previous page.`,
   ].join(" ");
 
   const cinematicContext = [
     `Each image is a *film frame* from the same animated movie.`,
-    `Depict the *next moment* of the previous scene, not a remake.`,
-    `Visualize the action in SCENE_EN through body language, gesture, and environment.`,
+    `Depict the *next moment* of the previous scene, Do not make an identical scene.`,
     `Background and lighting should evolve naturally with the story.`
   ].join(" ");
 
@@ -515,27 +516,33 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
 
 
 
-/** Cover prompt – no wardrobe for pets, soft guard for identity */
 function buildCoverPrompt({ style, story, characterName, wardrobe_signature, coherence_code }) {
-  const sGuard = styleGuard(style);
-  const coh = coherence_code || makeCoherenceCode(story);
-  const theme = story?.book?.theme || "";
-  const isPet = (story?.book?.category || "kids").toLowerCase() === "pets";
+  const sGuard      = styleGuard(style);
+  const theme       = story?.book?.theme || "";
+  const coh         = coherence_code || makeCoherenceCode(story);
+  const hero        = story?.book?.bible?.main_character || {};
+  const age         = hero?.age || 5;
+  const firstScene  = story?.book?.pages?.[0]?.scene_en || "";
+
+  // (Optional) best-effort hair color cue pulled from physique string
+  const hairMatch = (hero?.physique || "").match(/\b(blond|blonde|brown|black|dark|light|red|ginger)\b/i);
+  const hairCue   = hairMatch ? ` Hair color: ${hairMatch[0].toLowerCase()}.` : "";
 
   return [
     sGuard,
-    "BOOK COVER — must perfectly match the visual style of interior illustrations.",
-    "Use the *same hero* (same face, age, clothing, and proportions) as in the reference image.",
-    "Keep identical lighting, color palette, and rendering style as the story pages.",
-    "Square (1:1). No title text, no logos, no typography.",
-    isPet
-      ? "Focus on the pet hero interacting with the world of the story."
-      : `Focus on the hero (${characterName}) in a dynamic or emotional moment that hints at the story's theme.`,
-    wardrobe_signature ? `WARDROBE_SIGNATURE: ${wardrobe_signature}.` : "",
-    `COHERENCE_CODE:${coh}.`,
-    theme ? `Theme cue: ${theme}.` : "",
+    "BOOK COVER — Create a cinematic front cover image that perfectly matches the interior illustration style.",
+    `Follow the reference hero EXACTLY (same face structure, hairstyle, hair length, and age ≈ ${age}).${hairCue}`,
+    wardrobe_signature
+      ? `WARDROBE: ${wardrobe_signature}. Keep the identical outfit and base color; do not redesign or recolor.`
+      : "Keep outfit/identity identical to the reference; do not redesign or recolor.",
+    "Square composition (1:1). No text, no logos.",
+    theme ? `Hint at the story theme: ${theme}.` : "",
+    firstScene ? `Background/environment should resemble: ${firstScene}.` : "",
+    "Imagine this as the opening shot of the same animated movie as the interior pages (same lighting/tone/palette).",
+    `COHERENCE_CODE:${coh}`
   ].filter(Boolean).join("\n");
 }
+
 
 
 
@@ -1375,43 +1382,33 @@ if (req.method === "POST" && url.pathname === "/api/images/next") {
       }
 
       // Cover generation
-      if (req.method === "POST" && url.pathname === "/api/cover") {
-        try {
-          const body = await req.json().catch(() => ({}));
-          const { story, character_ref_b64 } = body || {};
-          if (!story?.book) return err("Missing story", 400);
+    if (req.method === "POST" && url.pathname === "/api/cover") {
+  try {
+    const { story, style = "storybook", character_ref_b64, prev_image_b64 } = await req.json().catch(() => ({}));
+    if (!story) return err("Missing story", 400);
 
-          const coherence_code = makeCoherenceCode(story);
-          const wardrobe_signature = deriveWardrobeSignature(story);
-          const prompt = buildCoverPrompt({
-            style: story.book.style,
-            story,
-            characterName: story.book.bible.main_character.name,
-            wardrobe_signature,
-            coherence_code,
-          });
+    const coherence_code = makeCoherenceCode(story);
+    const wardrobe_signature = deriveWardrobeSignature(story);
+    const prompt = buildCoverPrompt({ style, story, characterName: story.book.bible.main_character.name, wardrobe_signature, coherence_code });
 
-          const img = await geminiImage(env, {
-            prompt,
-            character_ref_b64,
-            guidance: styleHint(story.book.style),
-            coherence_code,
-          });
+    const parts = [];
+    if (character_ref_b64)
+      parts.push({ inlineData: { mimeType: "image/png", data: character_ref_b64 } });
 
-          if (!img?.image_url) {
-            // fallback
-            const fb = await geminiImage(env, {
-              prompt: prompt + "\nFallback: bright joyful storybook cover, focus on main character smiling.",
-            }).catch(() => null);
-            if (fb?.image_url) return ok({ ...fb, prompt, fallback: true });
-            return err("Cover generation failed", 500);
-          }
+    if (prev_image_b64)
+      parts.push({ inlineData: { mimeType: "image/png", data: prev_image_b64 } });
 
-          return ok({ ...img, prompt });
-        } catch (e) {
-          return err(e?.message || "Cover generation failed");
-        }
-      }
+    parts.push({ text: prompt });
+
+    const g = await geminiImage(env, { prompt, character_ref_b64, prev_b64: prev_image_b64, coherence_code }, 75000, 3);
+    if (g?.b64) return ok({ cover_b64: g.b64, provider: g.provider || "google" });
+
+    return err("Cover generation failed", 500);
+  } catch (e) {
+    return err(e?.message || "Cover generation failed", 500);
+  }
+}
+
 
       // Uploads
       if (req.method === "POST" && url.pathname === "/api/images/upload") {
