@@ -117,6 +117,17 @@ function findGeminiImagePart(json) {
   if (p) return { url: p.text };
   return null;
 }
+function isContextTooLong(errText = "") {
+  const s = String(errText || "").toLowerCase();
+  return s.includes("context") || s.includes("too long") || s.includes("exceeded") || s.includes("413");
+}
+
+function reducePrompt(p, keepLines = 8) {
+  if (!p || typeof p !== "string") return p;
+  const lines = p.split(/\r?\n/).filter(Boolean);
+  return lines.slice(0, keepLines).join("\n");
+}
+
 async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
   const key = env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY missing");
@@ -124,24 +135,70 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=" +
     encodeURIComponent(key);
 
-  const parts = [];
+  // Build the "full" parts once
+  const baseParts = [];
   if (item.character_ref_b64)
-    parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
-  // Previous page image as soft continuity anchor (bare b64, NOT data URL)
-if (item.prev_b64)
-  parts.push({ inlineData: { mimeType: "image/png", data: item.prev_b64 } });
+    baseParts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
+
+  if (item.prev_b64)
+    baseParts.push({ inlineData: { mimeType: "image/png", data: item.prev_b64 } });
 
   if (Array.isArray(item.style_refs_b64)) {
-    for (const b64 of item.style_refs_b64.slice(0, 3))
+    for (const b64 of item.style_refs_b64.slice(0, 3)) {
       if (typeof b64 === "string" && b64.length > 64)
-        parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
+        baseParts.push({ inlineData: { mimeType: "image/png", data: b64 } });
+    }
   }
-  if (item.guidance) parts.push({ text: item.guidance });
-  if (item.coherence_code) parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
-  parts.push({ text: item.prompt });
+
+  if (item.guidance) baseParts.push({ text: item.guidance });
+  if (item.coherence_code) baseParts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
+  baseParts.push({ text: item.prompt });
 
   let last;
-  for (let i = 1; i <= attempts; i++) {
+
+  // Progressive backoffs per attempt (only triggered if 500/context issue)
+  function partsForStage(stage) {
+    // stage 0: full
+    if (stage === 0) return baseParts;
+
+    // stage 1: drop style refs + shorten prompt
+    if (stage === 1) {
+      const parts = [];
+      for (const p of baseParts) {
+        if (p.inlineData && p.inlineData.data === item.prev_b64) parts.push(p); // keep prev
+        else if (p.inlineData && p.inlineData.data === item.character_ref_b64) parts.push(p); // keep char ref
+        else if (p.text?.startsWith("COHERENCE_CODE:")) parts.push(p); // keep code
+        else if (typeof p.text === "string" && p.text === item.guidance) continue; // drop guidance
+        else if (typeof p.text === "string" && p.text === item.prompt)
+          parts.push({ text: reducePrompt(item.prompt, 8) }); // shorter prompt
+        // style_refs_b64 are implicitly dropped by not copying them
+      }
+      return parts;
+    }
+
+    // stage 2: drop prev_b64 (last resort) + keep very short prompt
+    if (stage === 2) {
+      const parts = [];
+      if (item.character_ref_b64)
+        parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
+      if (item.coherence_code) parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
+      parts.push({
+        text: reducePrompt(
+          (item.minPrompt /* optional hook */) ||
+          `Same hero as reference. Same outfit and hair. Next frame of same movie. ${item.prompt || ""}`,
+          6
+        )
+      });
+      return parts;
+    }
+
+    // stage 3: minimal text only (very rare)
+    return [
+      { text: reducePrompt(`Same hero as reference. Keep outfit/hair identical. Next frame, not a copy.\n${item.prompt || ""}`, 5) }
+    ];
+  }
+
+  for (let i = 0; i < attempts; i++) {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort("timeout"), timeoutMs);
     try {
@@ -149,13 +206,22 @@ if (item.prev_b64)
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          contents: [{ role: "user", parts }],
-          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.4, topP: 0.7 },
+          contents: [{ role: "user", parts: partsForStage(i) }],
+          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.35, topP: 0.7 },
         }),
         signal: ctl.signal,
       });
       clearTimeout(t);
-      if (!r.ok) throw new Error(`Gemini ${r.status} ${await r.text().catch(() => "")}`);
+      if (!r.ok) {
+        const txt = await r.text().catch(() => "");
+        // Only escalate stage if it's a context/500-ish error; otherwise fail fast.
+        if ((r.status === 500 || r.status === 413) || isContextTooLong(txt)) {
+          last = new Error(`Gemini ${r.status} ${txt}`);
+          continue; // try next stage
+        }
+        throw new Error(`Gemini ${r.status} ${txt}`);
+      }
+
       const j = await r.json();
       const got = findGeminiImagePart(j);
       if (got?.b64 && got?.mime)
@@ -165,7 +231,8 @@ if (item.prev_b64)
     } catch (e) {
       clearTimeout(t);
       last = e;
-      await new Promise((r) => setTimeout(r, 250 * i));
+      // If it wasn't a context-ish error, or we’re at the last attempt, wait a bit then continue/throw
+      await new Promise((r) => setTimeout(r, 250 * (i + 1)));
     }
   }
   throw last || new Error("Gemini failed");
@@ -412,12 +479,10 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
 
  // --- IDENTITY ----------------------------------------------------------
 const identityLines = [
-  `Use the exact same main character as in the reference (${characterName}).`,
-  `Preserve face structure (relative eye/nose/mouth placement), hairstyle and hair color.`,
-  `Age ≈ ${age} (child proportions: larger head-to-body).`,
-  `Never change hair color or length. No makeup. The hero is a child, do NOT age.`
-  `Always keep the exact same base color tone for clothing and accessories. Never recolor or shift hue even slightly.`
+  `Same hero as reference (${characterName}): identical face, hair, and proportions.`,
+  `Child, not adult. No makeup or aging.`
 ].join(" ");
+
 
 // --- SEQUENCE CONSISTENCY ----------------------------------------------
 const consistency = [
@@ -429,19 +494,15 @@ const consistency = [
 
 // --- COMPOSITION GUARD -------------------------------------------------
 const compositionLines = [
-  `Do NOT default to a centered, straight, full-body pose unless explicitly requested.`,
-  `Use cinematic composition: rule of thirds, depth (10–30% foreground as a leading element), layering, and leading lines.`,
-  `Pick a camera angle that serves the action (e.g., low for courage, high for uncertainty).`,
-  `Stage the verb in SCENE: body language and face must clearly express the emotion/action.`,
-  `Vary shot types across pages: wide/establishing for setting, medium for interaction, close-up for emotion, over-the-shoulder for tension.`,
-  `Avoid repeating the previous page’s composition: change pose, camera height, or background elements.`
+  `Avoid centered full-body pose. Use cinematic composition (rule of thirds, depth, leading lines).`,
+  `Match action verb from SCENE_EN with clear gesture or posture.`,
+  `Show location clearly if relevant.`,
 ].join(" ");
 
 // --- CINEMATIC CONTEXT -------------------------------------------------
 const cinematicContext = [
-  `Think like a film shot designer: each image is a frame in the SAME movie, not a standalone illustration.`,
-  `Create a natural continuation of the previous scene without copying it.`,
-  `Maintain character, lighting, and tone; change angle/pose/composition to feel like the next frame.`
+  `Each image is the next movie frame, not a repeat. Make it cinematicly flow between scenes.`,
+  `Keep style/lighting consistent, vary angle.`
 ].join(" ");
 
 
@@ -488,22 +549,20 @@ function characterCardPrompt({ style, bible, traits }) {
 function buildCoverPrompt({ style, story, characterName, wardrobe_signature, coherence_code }) {
   const sGuard = styleGuard(style);
   const theme = story?.book?.theme || "";
-  const isPet = (story?.book?.category || "kids").toLowerCase() === "pets";
-  const wardrobeLine = !isPet && wardrobe_signature
-    ? `WARDROBE_SIGNATURE: ${wardrobe_signature}. Keep wardrobe consistent with interior pages.`
-    : "Keep identity consistent with interior pages.";
   const coh = coherence_code || makeCoherenceCode(story);
 
   return [
     sGuard,
-    "BOOK COVER ILLUSTRATION (front cover).",
-    "Square composition (1:1). No text or logos.",
-    wardrobeLine,
-    `COHERENCE_CODE:${coh}`,
-    `Focus on the main hero (${characterName}) from the reference; perfect identity consistency.`,
+    "BOOK COVER — same universe and visual style as interior pages.",
+    "Focus on the main hero together with one symbolic element from the story (e.g., the setting or companion).",
+    "Keep identity, lighting, and wardrobe identical to interior pages.",
+    "Square composition (1:1). No text, titles, or logos.",
+    `WARDROBE_SIGNATURE: ${wardrobe_signature || "same outfit as inside pages"}.`,
+    `COHERENCE_CODE: ${coh}.`,
     theme ? `Theme cue: ${theme}.` : "",
   ].filter(Boolean).join("\n");
 }
+
 
 /* ---------------------- Cloudflare Images utils ---------------------- */
 function dataUrlToBlob(dataUrl) {
