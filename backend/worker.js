@@ -283,24 +283,34 @@ function styleGuard(style = "cartoon") {
 }
 
 const OUTLINE_SYS = `
-Skriv en svensk dispositions-json för en bilderbok om en HJÄLTE (som användaren beskriver).
+Skriv en svensk dispositions-JSON för en bilderbok om en HJÄLTE (enligt användarens beskrivning).
 Returnera exakt:{
  "outline": {
-   "logline": string,"theme": string,"reading_age": number,"tone": string,"motif": string,
+   "logline": string,
+   "theme": string,
+   "reading_age": number,
+   "tone": string,
+   "motif": string,
    "beats": [
-     {"id":"setup","summary":string},{"id":"inciting","summary":string},{"id":"progress","summary":string},
-     {"id":"midpoint","summary":string},{"id":"setback","summary":string},{"id":"plan","summary":string},
-     {"id":"climax","summary":string},{"id":"resolution","summary":string}
+     {"id":"setup","summary":string},
+     {"id":"inciting","summary":string},
+     {"id":"progress","summary":string},
+     {"id":"midpoint","summary":string},
+     {"id":"setback","summary":string},
+     {"id":"plan","summary":string},
+     {"id":"climax","summary":string},
+     {"id":"resolution","summary":string}
    ]
  }
 }
-Regler:
-- Hjälten är den typ användaren anger (barn/husdjur).
-- Tydligt mål, riktiga hinder, vändpunkt och payoff.
-- Håll dig NOGA till användarens tema (plats/aktivitet).
-- Anpassa ordförråd/meningslängd till reading_age.
-- Endast JSON.
+REGLER(lätta):
+- Skriv engagerande och händelserikt.
+- Varje beat ska tillföra en ny visuell händelse eller miljö (kontrast/överraskning/rörelse).
+- Tema och lärdom finns i bakgrunden, inte moraliserande.
+- Anpassa språk till reading_age.
+- Endast giltig JSON.
 `;
+
 const STORY_SYS = `
 Du får en outline för en svensk bilderbok. Skriv boken enligt:
 + { "book":{
@@ -315,21 +325,23 @@ Du får en outline för en svensk bilderbok. Skriv boken enligt:
  "theme": string,"lesson": string,
  "pages":[{
    "page": number,
-   "text": string,            // SV: det som trycks i boken
-   "scene": string,           // SV: kort scenbeskrivning (miljö + handling)
-   "scene_en": string,        // EN: samma scenbeskrivning, naturlig engelska
+   "text": string,            // SV: 3–5 meningar
+   "scene": string,           // SV: kort visuell händelse (MILJÖ + ACTION)
+   "scene_en": string,        // EN: idiomatisk, 1–2 meningar, ren visuell instruktion
    "location": string,        // t.ex. "gata", "sovrum", "park", "kök"
    "time_of_day": "day"|"golden_hour"|"evening"|"night",
    "weather":"clear"|"cloudy"|"rain"|"snow"
  }]
 }}
-HÅRDA REGLER:
-- **EXAKT 14 sidor** (page 1..14).
-- 3–5 meningar per sida, på **svenska** i "text".
-- "scene_en" ska vara idiomatisk engelska av "scene" (inte maskinöversättning ord för ord).
-- Var tydlig med "location".
+HÅRDA FORMATREGLER:
+- EXAKT 14 sidor (page 1..14).
+- 3–5 meningar per sida i "text" (svenska).
+- "scene_en" ska vara kort, filmisk och konkret (inte dialog).
+- Varje sida ska vara visuellt distinkt (ny vinkel/miljö/rörelse/känsla).
+- Lärdom/tema subtilt (inte predikan).
 - Endast giltig JSON i exakt format ovan.
 `;
+
 
 
 function heroDescriptor({ category, name, age, traits }) {
@@ -524,24 +536,23 @@ function buildCoverPrompt({ style, story, characterName, wardrobe_signature, coh
   const age         = hero?.age || 5;
   const firstScene  = story?.book?.pages?.[0]?.scene_en || "";
 
-  // (Optional) best-effort hair color cue pulled from physique string
   const hairMatch = (hero?.physique || "").match(/\b(blond|blonde|brown|black|dark|light|red|ginger)\b/i);
   const hairCue   = hairMatch ? ` Hair color: ${hairMatch[0].toLowerCase()}.` : "";
 
   return [
     sGuard,
-    "BOOK COVER — Create a cinematic front cover image that perfectly matches the interior illustration style.",
-    `Follow the reference hero EXACTLY (same face structure, hairstyle, hair length, and age ≈ ${age}).${hairCue}`,
+    "BOOK COVER — Create a cinematic front cover that perfectly matches the interior illustration style.",
+    `Always include the main hero (${characterName}). Follow the reference EXACTLY: same face structure, hairstyle, hair length, and age ≈ ${age}.${hairCue}`,
     wardrobe_signature
       ? `WARDROBE: ${wardrobe_signature}. Keep the identical outfit and base color; do not redesign or recolor.`
       : "Keep outfit/identity identical to the reference; do not redesign or recolor.",
-    "Square composition (1:1). No text, no logos.",
-    theme ? `Hint at the story theme: ${theme}.` : "",
+    "Square (1:1). No text or logos.",
     firstScene ? `Background/environment should resemble: ${firstScene}.` : "",
     "Imagine this as the opening shot of the same animated movie as the interior pages (same lighting/tone/palette).",
     `COHERENCE_CODE:${coh}`
   ].filter(Boolean).join("\n");
 }
+
 
 
 
@@ -1119,13 +1130,16 @@ Returnera enbart json.`.trim();
 
           const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
 
-        const storyUser = `
+      const storyUser = `
 OUTLINE:
 ${JSON.stringify(outline)}
+Skriv en engagerande, händelserik saga som är rolig att läsa högt.
+Variera miljöer och visuella ögonblick mellan sidorna.
 ${heroDescriptor({ category, name, age, traits })}
 Läsålder: ${targetAge}. **Sidor: 14**. Stil: ${style || "cartoon"}. Kategori: ${category || "kids"}.
-Boken ska ha tydlig lärdom (lesson) kopplad till temat.
-Returnera enbart JSON i exakt det efterfrågade formatet.`.trim();
+Returnera enbart JSON i exakt formatet.
+`.trim();
+
 
         const story = await openaiJSON(env, STORY_SYS, storyUser);
 
@@ -1382,28 +1396,44 @@ if (req.method === "POST" && url.pathname === "/api/images/next") {
       }
 
       // Cover generation
-    if (req.method === "POST" && url.pathname === "/api/cover") {
+if (req.method === "POST" && url.pathname === "/api/cover") {
   try {
-    const { story, style = "storybook", character_ref_b64, prev_image_b64 } = await req.json().catch(() => ({}));
-    if (!story) return err("Missing story", 400);
+    const { story, style, character_ref_b64, prev_image_b64 } = await req.json().catch(() => ({}));
+    if (!story?.book) return err("Missing story", 400);
 
-    const coherence_code = makeCoherenceCode(story);
+    const coherence_code     = makeCoherenceCode(story);
     const wardrobe_signature = deriveWardrobeSignature(story);
-    const prompt = buildCoverPrompt({ style, story, characterName: story.book.bible.main_character.name, wardrobe_signature, coherence_code });
 
-    const parts = [];
-    if (character_ref_b64)
-      parts.push({ inlineData: { mimeType: "image/png", data: character_ref_b64 } });
+    // använd samma stil som interiören om style saknas
+    const effectiveStyle = (style || story.book.style || "cartoon");
 
-    if (prev_image_b64)
-      parts.push({ inlineData: { mimeType: "image/png", data: prev_image_b64 } });
+    const prompt = buildCoverPrompt({
+      style: effectiveStyle,
+      story,
+      characterName: story.book.bible?.main_character?.name || "Hero",
+      wardrobe_signature,
+      coherence_code,
+    });
 
-    parts.push({ text: prompt });
+    // Skicka bara ref + prompt till geminiImage (den bygger parts själv)
+    const g = await geminiImage(env, {
+      prompt,
+      character_ref_b64,
+      // prev kan hjälpa ton/ljus – men låt bli om du jagar minsta context
+      // prev_b64: prev_image_b64,
+      coherence_code,
+      guidance: styleHint(effectiveStyle),
+    }, 75000, 3);
 
-    const g = await geminiImage(env, { prompt, character_ref_b64, prev_b64: prev_image_b64, coherence_code }, 75000, 3);
-    if (g?.b64) return ok({ cover_b64: g.b64, provider: g.provider || "google" });
-
-    return err("Cover generation failed", 500);
+    if (g?.b64 || g?.image_url) {
+      return ok({
+        cover_b64: g?.b64 || null,
+        image_url: g?.image_url || null,
+        provider: g?.provider || "google",
+        prompt
+      });
+    }
+    return err("Cover generation failed", 502);
   } catch (e) {
     return err(e?.message || "Cover generation failed", 500);
   }
