@@ -283,30 +283,27 @@ function styleGuard(style = "cartoon") {
 }
 
 const OUTLINE_SYS = `
-Skriv en svensk dispositions-JSON för en bilderbok om en HJÄLTE (enligt användarens beskrivning).
-Returnera exakt:{
- "outline": {
-   "logline": string,
-   "theme": string,
-   "reading_age": number,
-   "tone": string,
-   "motif": string,
-   "beats": [
-     {"id":"setup","summary":string},
-     {"id":"inciting","summary":string},
-     {"id":"progress","summary":string},
-     {"id":"midpoint","summary":string},
-     {"id":"setback","summary":string},
-     {"id":"plan","summary":string},
-     {"id":"climax","summary":string},
-     {"id":"resolution","summary":string}
-   ]
- }
+Skriv en engagerande, fantasifull disposition ("outline") för en bilderbok om hjälten som användaren beskriver.
+
+Returnera exakt:
+{
+  "outline": {
+    "logline": string,
+    "theme": string,
+    "reading_age": number,
+    "tone": string,
+    "motif": string,
+    "chapters": [
+      {"title": string, "summary": string}
+    ]
+  }
 }
-REGLER(lätta):
-- Skriv engagerande och händelserikt.
-- Tema och lärdom finns i bakgrunden, inte moraliserande.
-- Anpassa språk till reading_age.
+
+Regler:
+- Hjälten är den typ användaren anger (barn eller husdjur).
+- Historien ska ha tydlig början, mitt och slut – men du får välja struktur fritt.
+- Skapa naturliga vändpunkter och känslomässiga ögonblick.
+- Låt lärdomen framträda i handlingen, inte i texten.
 - Endast giltig JSON.
 `;
 
@@ -334,9 +331,10 @@ Du är en svensk barnboksförfattare som får en outline för en svensk bildbok.
 }}
 HÅRDA FORMATREGLER:
 - EXAKT 14 sidor (page 1..14).
-- 2–4 meningar per sida i "text" (svenska).
+- 3–4 meningar per sida i "text" (svenska).
 - "scene_en" ska vara kort, filmisk, levande och konkret (inte dialog).
-- Varje sida ska vara visuellt distinkt.
+- Varje sida måste vara visuellt distinkt.
+- Varje sida måste vara en naturlig progression i story - undvik delmål, barriärer och att stanna för länge i samma scen. 
 
 - Endast giltig JSON i exakt format ovan.
 `;
@@ -1135,7 +1133,7 @@ Returnera enbart json.`.trim();
 OUTLINE:
 ${JSON.stringify(outline)}
 Skriv en engagerande, händelserik saga som är rolig att läsa högt.
-Variera miljöer och visuella ögonblick mellan sidorna.
+Variera miljöer och visuella ögonblick mellan varje sida.
 ${heroDescriptor({ category, name, age, traits })}
 Läsålder: ${targetAge}. **Sidor: 14**. Stil: ${style || "cartoon"}. Kategori: ${category || "kids"}.
 Returnera enbart JSON i exakt formatet.
@@ -1324,7 +1322,7 @@ if (req.method === "POST" && url.pathname === "/api/images/next") {
     const prompt = [
       styleGuard(style),
       // identitet & kläder
-      `Use the exact same main character as in the reference (${heroName}). Keep hair color and length identical. Do not change age/proportions.`,
+      `Use the exact same main character as in the reference (${heroName}). Keep hair color and length identical. Do not change age/proportions. Do not add extra limbs.`,
       deriveWardrobeSignature(story)
         ? `WARDROBE: ${deriveWardrobeSignature(story)}. Keep outfit and base color identical on every page.`
         : "",
@@ -1337,9 +1335,9 @@ if (req.method === "POST" && url.pathname === "/api/images/next") {
       `SCENE (EN): ${sceneEN}`,
       `SHOT: ${shotLine(frame)}.`,
       // format
-      "Square composition (1:1). Avoid accidental limb cropping.",
+      "Square composition (1:1).",
       // mild anti-repeat
-      "Avoid reusing the exact same pose/composition from the previous image."
+      "DO NOT reuse the exact same pose/composition from the previous image."
     ].filter(Boolean).join("\n");
 
     const payload = {
