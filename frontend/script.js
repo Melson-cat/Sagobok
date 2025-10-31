@@ -339,7 +339,7 @@ async function fillCard(page, imgUrl, providerLabel = "") {
 
   const tmp = new Image();
   // (valfritt) tmp.crossOrigin = "anonymous";
-  tmp.loading = "lazy";
+  tmp.loading = "eager";
   tmp.referrerPolicy = "no-referrer"; // minimerar CORS-strul för vissa CDN
 
   const show = () => {
