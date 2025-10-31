@@ -781,7 +781,6 @@ async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
   tr(trace, "font:fallback", { label, standard: standardName });
   return await pdfDoc.embedFont(standardName);
 }
-
 /* ---------------------------- Build PDF ------------------------------ */
 async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }, env, trace) {
   tr(trace, "pdf:start");
@@ -918,13 +917,55 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
         y -= subM.lineH;
       }
     }
-
-    
   } catch (e) {
     tr(trace, "cover:error", { error: String(e?.message || e) });
     const p = pdfDoc.addPage([pageW, pageH]);
     p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8,0.1,0.1) });
   }
+
+  /* -------- TITELSIDA (efter omslag) -------- */
+try {
+  const titlePage = pdfDoc.addPage([pageW, pageH]);
+  titlePage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.98, 0.99, 1) });
+  const cx = contentX + trimWpt / 2;
+  const cy = contentY + trimHpt / 2 + mmToPt(4);
+
+  const mainTitle = String(story?.book?.title || "Min Sagobok");
+  const subLine = String(story?.book?.bible?.main_character?.name ? `av ${story.book.bible.main_character.name}` : "Skapad med BokPiloten");
+
+  const mainSize = Math.min(trimWpt, trimHpt) * 0.08;
+  const subSize  = mainSize * 0.45;
+
+  // Titel
+  const titleW = nunitoSemi.widthOfTextAtSize(mainTitle, mainSize);
+  titlePage.drawText(mainTitle, {
+    x: cx - titleW / 2,
+    y: cy + mainSize * 0.4,
+    size: mainSize,
+    font: nunitoSemi,
+    color: rgb(0.15, 0.15, 0.25)
+  });
+
+  // Underrad
+  const subW = nunito.widthOfTextAtSize(subLine, subSize);
+  const subY = cy - subSize * 1.4;
+  titlePage.drawText(subLine, {
+    x: cx - subW / 2,
+    y: subY,
+    size: subSize,
+    font: nunito,
+    color: rgb(0.35, 0.35, 0.45)
+  });
+
+  // 💜 HJÄRTA (matchar slut-sidan)
+  const gap       = mmToPt(6);
+  const heartSize = mmToPt(14);
+  const heartY    = subY - heartSize - gap;
+  drawHeart(titlePage, cx, heartY, heartSize, rgb(0.50, 0.36, 0.82));
+} catch (e) {
+  tr(trace, "titlepage:error", { error: String(e?.message || e) });
+}
+
 
   /* -------- 14 uppslag: bild vänster, text höger + vine -------- */
   const outer = mmToPt(GRID.outer_mm);
@@ -965,11 +1006,11 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     const pnW = nunito.widthOfTextAtSize(pn, 10);
     right.drawText(pn, { x: contentX + trimWpt - outer - pnW, y: contentY + mmToPt(6), size: 10, font: nunito, color: rgb(0.35, 0.35, 0.45) });
 
-  
+    // Vine dekor
     drawVineSafe(right, cx, contentY + trimHpt * 0.34, trimWpt * 0.80, rgb(0.25,0.32,0.55), 2.4);
   }
 
-  /* -------- [30] SLUT -------- */
+  /* -------- SLUT -------- */
   {
     const page = pdfDoc.addPage([pageW, pageH]);
     page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
@@ -986,11 +1027,9 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     );
 
     drawHeart(page, cx, contentY + trimHpt * 0.38, mmToPt(14), rgb(0.50, 0.36, 0.82));
-
-  
   }
 
-  /* -------- [31] BACK COVER -------- */
+  /* -------- BACK COVER -------- */
   try {
     const page = pdfDoc.addPage([pageW, pageH]);
     const bg = rgb(0.58, 0.54, 0.86);
@@ -998,7 +1037,6 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     const centerX = contentX + trimWpt / 2;
     const centerY = contentY + trimHpt / 2;
     drawWrappedCenterColor(page, blurb, centerX, centerY, trimWpt * 0.72, trimHpt * 0.36, nunito, 14, 1.42, 12, rgb(1,1,1), "center");
-    
   } catch (e) {
     tr(trace, "back:error", { error: String(e?.message || e) });
     const page = pdfDoc.addPage([pageW, pageH]);

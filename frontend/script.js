@@ -323,33 +323,43 @@ function buildCards(pages, visibleCount) {
   smoothScrollTo(els.previewSection);
 }
 
-async function fillCard(pageNum, url, provider = "Gemini") {
-  const card = els.previewGrid.querySelector(`.imgwrap[data-page="${pageNum}"]`)
-    ?.parentElement;
-  if (!card) return;
-  const imgEl = card.querySelector("img");
-  const sk = card.querySelector(".skeleton");
-  await new Promise((resolve) => {
-    const tmp = new Image();
-    tmp.onload = () => {
-      imgEl.src = tmp.src;
-      imgEl.style.opacity = "1";
-      sk?.remove();
-      const prov = card.querySelector(".img-provider");
-      if (prov) {
-        prov.textContent = `🎨 ${provider}`;
-        prov.classList.remove("hidden");
-      }
-      card.querySelector(".retry-wrap")?.classList.add("hidden");
-      resolve();
-    };
-    tmp.onerror = () => {
-      sk?.remove();
-      resolve();
-    };
-    tmp.src = url;
-  });
+async function fillCard(pg, imgUrl, txt, retryFn) {
+  const el = document.createElement("div");
+  el.className = "thumb";
+  el.innerHTML = `
+    <div class="imgwrap">
+      <div class="skeleton"></div>
+      <img alt="Page ${pg}" loading="lazy" />
+    </div>
+    <div class="txt">${txt || ""}</div>
+  `;
+
+  const imgEl = el.querySelector("img");
+  const sk = el.querySelector(".skeleton");
+
+  // Lazy-load + smooth animation
+  const tmp = new Image();
+  tmp.onload = () => {
+    imgEl.src = tmp.src;
+    imgEl.classList.add("loaded"); // triggers fade-in animation
+    sk?.remove();
+  };
+  tmp.onerror = () => {
+    sk?.remove();
+    const fb = document.createElement("div");
+    fb.className = "img-fallback";
+    fb.innerHTML = `
+      <p>Misslyckades att ladda sidan.</p>
+      <button class="retry">Försök igen</button>
+    `;
+    fb.querySelector(".retry").onclick = retryFn;
+    el.querySelector(".imgwrap").appendChild(fb);
+  };
+  tmp.src = imgUrl;
+
+  els.previewGrid.appendChild(el);
 }
+
 
 /* --------------------------- CF Images upload --------------------------- */
 async function uploadToCF(items) {
@@ -414,6 +424,23 @@ async function onCreatePdf() {
 
 async function onSubmit(e) {
   e.preventDefault();
+
+  if (state.abortController) state.abortController.abort();
+  state.abortController = new AbortController();
+  const signal = state.abortController.signal;
+
+
+   // full reset
+  state.story = null;
+  state.plan = null;
+  state.ref_b64 = null;
+  state.images_by_page.clear();
+  state.cover_preview_url = null;
+  state.cover_image_id = null;
+
+  els.previewGrid.innerHTML = "";
+  setStatus(null);
+  stopQuips();
 
   // validera
   readForm();
@@ -602,6 +629,9 @@ if (state.cover_preview_url && !state.cover_image_id) {
 
 
     stopQuips();
+    URL.revokeObjectURL(state.previewUrl || "");
+state.previewUrl = null;
+
     setStatus("✅ Klart! Förhandsvisning redo.", 100);
     els.pdfBtn && (els.pdfBtn.disabled = false);
   } catch (e) {

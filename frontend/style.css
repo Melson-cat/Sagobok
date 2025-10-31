@@ -178,16 +178,6 @@ input:focus, select:focus, textarea:focus{
 .thumb img{ width:100%; height:100%; object-fit:cover; display:block; }
 .thumb .txt{ padding:12px; font-size:.98rem; }
 
-/* Låsta sidor (styr via body.no-lock för test) */
-.thumb.locked .imgwrap{ filter:blur(var(--lock-blur)); }
-.thumb.locked .txt{ filter:blur(2px); }
-.thumb.locked{ position:relative; }
-.thumb.locked::after{
-  content:"Lås upp genom att skapa boken";
-  position:absolute; inset:auto 8px 8px 8px;
-  background:rgba(30,40,45,.85); color:white; font-weight:700; text-align:center; border-radius:12px; padding:10px 8px;
-  font-size:.92rem;
-}
 /* Testläge: stäng av lås */
 body.no-lock .thumb.locked::after,
 body.no-lock .thumb.locked .imgwrap,
@@ -238,6 +228,25 @@ body.no-lock .thumb.locked{ all:unset; }
 .mobile-menu nav{ display:flex; flex-direction:column; gap:12px; }
 .mobile-menu a{ color:var(--text); text-decoration:none; font-weight:700; }
 
+@keyframes imageFadeIn {
+  0% { opacity: 0; transform: scale(0.97); filter: blur(3px); }
+  100% { opacity: 1; transform: scale(1); filter: blur(0); }
+}
+
+.thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+.thumb img.loaded {
+  animation: imageFadeIn 0.6s ease forwards;
+}
+
+
 /* ========= Hjälpklasser ========= */
 .hidden{ display:none !important; }
 
@@ -269,3 +278,4 @@ body.no-lock .thumb.locked{ all:unset; }
   .panel{ border:0; box-shadow:none; background:white; }
   .thumb{ page-break-inside:avoid; }
 }
+
