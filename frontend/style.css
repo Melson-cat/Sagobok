@@ -279,3 +279,7 @@ body.no-lock .thumb.locked{ all:unset; }
   .thumb{ page-break-inside:avoid; }
 }
 
+/* Bilden börjar gömd i HTML (style="opacity:0") och fades in när src sätts */
+.thumb .imgwrap img{
+  transition: opacity .25s ease;
+}

@@ -323,42 +323,63 @@ function buildCards(pages, visibleCount) {
   smoothScrollTo(els.previewSection);
 }
 
-async function fillCard(pg, imgUrl, txt, retryFn) {
-  const el = document.createElement("div");
-  el.className = "thumb";
-  el.innerHTML = `
-    <div class="imgwrap">
-      <div class="skeleton"></div>
-      <img alt="Page ${pg}" loading="lazy" />
-    </div>
-    <div class="txt">${txt || ""}</div>
-  `;
+// Ersätt hela fillCard med denna version
+async function fillCard(page, imgUrl, providerLabel = "") {
+  // Hitta befintlig "slot" (cover = 0, interiör = 1..14)
+  const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${page}"]`);
+  if (!wrap) return; // om något gått snett
 
-  const imgEl = el.querySelector("img");
-  const sk = el.querySelector(".skeleton");
+  const imgEl = wrap.querySelector("img");
+  const sk    = wrap.querySelector(".skeleton");
+  const prov  = wrap.querySelector(".img-provider");
 
-  // Lazy-load + smooth animation
+  // Lazy-load med mjuk in-fade
   const tmp = new Image();
+  tmp.loading = "lazy";
+
   tmp.onload = () => {
+    // sätt bild och visa mjukt
     imgEl.src = tmp.src;
-    imgEl.classList.add("loaded"); // triggers fade-in animation
+    imgEl.style.opacity = "1";
     sk?.remove();
+
+    if (prov) {
+      prov.textContent = providerLabel || "";
+      prov.classList.toggle("hidden", !providerLabel);
+    }
   };
+
   tmp.onerror = () => {
     sk?.remove();
+    // fallback i SAMMA slot (inte ett nytt kort)
     const fb = document.createElement("div");
     fb.className = "img-fallback";
     fb.innerHTML = `
-      <p>Misslyckades att ladda sidan.</p>
-      <button class="retry">Försök igen</button>
+      <p>Misslyckades att ladda bilden.</p>
+      <button class="retry" data-page="${page}">Försök igen</button>
     `;
-    fb.querySelector(".retry").onclick = retryFn;
-    el.querySelector(".imgwrap").appendChild(fb);
+    // enkel retry: trigga din befintliga regenerateOne om inte cover
+    const btn = fb.querySelector(".retry");
+    if (btn && page) {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        fb.remove();
+        const sk2 = document.createElement("div");
+        sk2.className = "skeleton";
+        wrap.prepend(sk2);
+        if (page === 0) {
+          generateCoverAsync().catch(() => {});
+        } else {
+          regenerateOne(page);
+        }
+      });
+    }
+    wrap.appendChild(fb);
   };
-  tmp.src = imgUrl;
 
-  els.previewGrid.appendChild(el);
+  tmp.src = imgUrl;
 }
+
 
 
 /* --------------------------- CF Images upload --------------------------- */
