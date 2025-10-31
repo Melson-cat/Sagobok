@@ -919,7 +919,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
       }
     }
 
-    if (mode === "preview" && watermark_text) drawWatermark(coverPage, watermark_text);
+    
   } catch (e) {
     tr(trace, "cover:error", { error: String(e?.message || e) });
     const p = pdfDoc.addPage([pageW, pageH]);
@@ -948,7 +948,6 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
       tr(trace, "page:image:error", { page: scene?.page, error: String(e?.message || e) });
       left.drawText("Bildfel", { x: contentX + mmToPt(4), y: contentY + mmToPt(6), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
     }
-    if (mode === "preview" && watermark_text) drawWatermark(left, watermark_text);
 
     // Höger: text
     const right = pdfDoc.addPage([pageW, pageH]);
@@ -966,8 +965,8 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     const pnW = nunito.widthOfTextAtSize(pn, 10);
     right.drawText(pn, { x: contentX + trimWpt - outer - pnW, y: contentY + mmToPt(6), size: 10, font: nunito, color: rgb(0.35, 0.35, 0.45) });
 
-    if (mode === "preview" && watermark_text) drawWatermark(right, watermark_text);
-    drawVineSafe(right, cx, contentY + trimHpt * 0.36, trimWpt * 0.80, rgb(0.25,0.32,0.55), 2.4);
+  
+    drawVineSafe(right, cx, contentY + trimHpt * 0.36, mmToPt(2), trimWpt * 0.80, rgb(0.25,0.32,0.55), 2.4);
   }
 
   /* -------- [30] SLUT -------- */
@@ -988,7 +987,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
 
     drawHeart(page, cx, contentY + trimHpt * 0.38, mmToPt(14), rgb(0.50, 0.36, 0.82));
 
-    if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
+  
   }
 
   /* -------- [31] BACK COVER -------- */
@@ -999,7 +998,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     const centerX = contentX + trimWpt / 2;
     const centerY = contentY + trimHpt / 2;
     drawWrappedCenterColor(page, blurb, centerX, centerY, trimWpt * 0.72, trimHpt * 0.36, nunito, 14, 1.42, 12, rgb(1,1,1), "center");
-    if (mode === "preview" && watermark_text) drawWatermark(page, watermark_text);
+    
   } catch (e) {
     tr(trace, "back:error", { error: String(e?.message || e) });
     const page = pdfDoc.addPage([pageW, pageH]);
