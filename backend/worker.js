@@ -533,24 +533,45 @@ function buildCoverPrompt({ style, story, characterName, wardrobe_signature, coh
   const hero        = story?.book?.bible?.main_character || {};
   const age         = hero?.age || 5;
   const firstScene  = story?.book?.pages?.[0]?.scene_en || "";
+  const category    = story?.book?.category || "kids";
 
   const hairMatch = (hero?.physique || "").match(/\b(blond|blonde|brown|black|dark|light|red|ginger)\b/i);
   const hairCue   = hairMatch ? ` Hair color: ${hairMatch[0].toLowerCase()}.` : "";
 
+  // --- 🧒 Barnbok (default) ---
+  if (category !== "pets") {
+    return [
+      sGuard,
+      "BOOK COVER — Create a cinematic front cover that MATCHES the interior style and identity 1:1.",
+      `Always include the main hero (${characterName}). Follow the reference EXACTLY: same face structure, hairstyle, hair length, and child proportions, age ≈ ${age}.${hairCue}`,
+      "Do NOT change hair color/length. Do NOT age the hero into a teen/adult. No makeup.",
+      wardrobe_signature
+        ? `WARDROBE: ${wardrobe_signature}. Keep the identical outfit and base color; do not redesign or recolor.`
+        : "Keep outfit/identity identical to the reference; do not redesign or recolor.",
+      "Square (1:1). No text or logos.",
+      firstScene ? `Background/environment should resemble: ${firstScene} (opening wide shot variant).` : "",
+      "Imagine this as the opening shot of the same animated movie as the interior pages (same lighting/tone/palette).",
+      `COHERENCE_CODE:${coh}`
+    ].filter(Boolean).join("\n");
+  }
+
+  // --- 🐾 Husdjur ---
   return [
     sGuard,
-  "BOOK COVER — Create a cinematic front cover that MATCHES the interior style and identity 1:1.",
- `Always include the main hero (${characterName}). Follow the reference EXACTLY: same face structure, hairstyle, hair length, and child proportions, age ≈ ${age}.${hairCue}`,
- "Do NOT change hair color/length. Do NOT age the hero into a teen/adult. No makeup.",
+    "BOOK COVER — Create a cinematic, cozy front cover that MATCHES the interior style and world 1:1.",
+    `The protagonist is a pet (animal) named ${characterName}. Focus clearly on the animal; it should be the central figure of the scene.`,
+    "Do NOT include human children or adults unless specifically part of the story.",
+    "Keep the animal identical to the interior reference: same breed, fur color, proportions, and expression.",
     wardrobe_signature
-      ? `WARDROBE: ${wardrobe_signature}. Keep the identical outfit and base color; do not redesign or recolor.`
-      : "Keep outfit/identity identical to the reference; do not redesign or recolor.",
+      ? `WARDROBE / ACCESSORY (if applicable): ${wardrobe_signature}. Keep consistent with interiors.`
+      : "",
     "Square (1:1). No text or logos.",
-   firstScene ? `Background/environment should resemble: ${firstScene} (opening wide shot variant).` : "",
-    "Imagine this as the opening shot of the same animated movie as the interior pages (same lighting/tone/palette).",
+    firstScene ? `Environment hint: ${firstScene}` : "",
+    "Mood: warm, soft light, heartwarming, inviting composition suitable for a storybook about animals.",
     `COHERENCE_CODE:${coh}`
   ].filter(Boolean).join("\n");
 }
+
 
 
 

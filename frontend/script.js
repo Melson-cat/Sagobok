@@ -562,7 +562,7 @@ for (const pg of pages) {
     if (!res.ok || j?.error || !j?.image_url) throw new Error(j?.error || `HTTP ${res.status}`);
 
     // visa direkt
-    await fillCard(pg.page, j.image_url, "Gemini");
+    fillCard(pg.page, j.image_url, "Gemini");
     state.images_by_page.set(pg.page, { image_url: j.image_url });
 
     // för nästa sida: gör om till bare b64
@@ -576,7 +576,7 @@ for (const pg of pages) {
       const u = uploads?.find(x => x.page === pg.page);
       if (u?.image_id) {
         state.images_by_page.set(pg.page, { image_id: u.image_id, image_url: u.url });
-        await fillCard(pg.page, u.url || j.image_url, "CF");
+        fillCard(pg.page, u.url || j.image_url, "CF");
       }
     }
 
