@@ -966,7 +966,7 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     right.drawText(pn, { x: contentX + trimWpt - outer - pnW, y: contentY + mmToPt(6), size: 10, font: nunito, color: rgb(0.35, 0.35, 0.45) });
 
   
-    drawVineSafe(right, cx, contentY + trimHpt * 0.36, mmToPt(2), trimWpt * 0.80, rgb(0.25,0.32,0.55), 2.4);
+    drawVineSafe(right, cx, contentY + trimHpt * 0.34, trimWpt * 0.80, rgb(0.25,0.32,0.55), 2.4);
   }
 
   /* -------- [30] SLUT -------- */
