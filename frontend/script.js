@@ -323,61 +323,63 @@ function buildCards(pages, visibleCount) {
   smoothScrollTo(els.previewSection);
 }
 
-// Ersätt hela fillCard med denna version
+// Stabil slot-updaterare (cover=0, interiör=1..14)
 async function fillCard(page, imgUrl, providerLabel = "") {
-  // Hitta befintlig "slot" (cover = 0, interiör = 1..14)
   const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${page}"]`);
-  if (!wrap) return; // om något gått snett
+  if (!wrap || !imgUrl) return;
 
   const imgEl = wrap.querySelector("img");
   const sk    = wrap.querySelector(".skeleton");
   const prov  = wrap.querySelector(".img-provider");
+  wrap.querySelector(".img-fallback")?.remove();
 
-  // Lazy-load med mjuk in-fade
+  // undvik dubblettarbete
+  if (wrap.dataset.currentUrl === imgUrl) return;
+  wrap.dataset.currentUrl = imgUrl;
+
   const tmp = new Image();
+  // (valfritt) tmp.crossOrigin = "anonymous";
   tmp.loading = "lazy";
+  tmp.referrerPolicy = "no-referrer"; // minimerar CORS-strul för vissa CDN
 
-  tmp.onload = () => {
-    // sätt bild och visa mjukt
+  const show = () => {
     imgEl.src = tmp.src;
-    imgEl.style.opacity = "1";
+    imgEl.classList.add("is-ready");     // triggar fade-in via CSS
     sk?.remove();
-
     if (prov) {
       prov.textContent = providerLabel || "";
       prov.classList.toggle("hidden", !providerLabel);
     }
   };
 
+  tmp.onload = show;
   tmp.onerror = () => {
     sk?.remove();
-    // fallback i SAMMA slot (inte ett nytt kort)
     const fb = document.createElement("div");
     fb.className = "img-fallback";
     fb.innerHTML = `
       <p>Misslyckades att ladda bilden.</p>
       <button class="retry" data-page="${page}">Försök igen</button>
     `;
-    // enkel retry: trigga din befintliga regenerateOne om inte cover
-    const btn = fb.querySelector(".retry");
-    if (btn && page) {
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        fb.remove();
-        const sk2 = document.createElement("div");
-        sk2.className = "skeleton";
-        wrap.prepend(sk2);
-        if (page === 0) {
-          generateCoverAsync().catch(() => {});
-        } else {
-          regenerateOne(page);
-        }
-      });
-    }
+    fb.querySelector(".retry")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      fb.remove();
+      const sk2 = document.createElement("div");
+      sk2.className = "skeleton";
+      wrap.prepend(sk2);
+      if (page === 0) generateCoverAsync().catch(() => {});
+      else regenerateOne(page);
+    });
     wrap.appendChild(fb);
   };
 
+  // starta laddning
   tmp.src = imgUrl;
+
+  // snabbare paint på moderna browsers
+  if (tmp.decode) {
+    try { await tmp.decode(); show(); } catch {}
+  }
 }
 
 
