@@ -1,76 +1,89 @@
+<!-- success.html (minimalt) -->
 <!doctype html>
 <html lang="sv">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Tack för ditt köp!</title>
-  <link rel="stylesheet" href="./styles.css" />
+  <title>Tack!</title>
+  <!-- Se CSS-fix nedan -->
+  <link rel="stylesheet" href="./style.css">
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 24px; max-width: 680px; margin: auto; }
+    .hidden{display:none}
+    .btn{padding:10px 14px;border-radius:10px;border:0;background:#1f6feb;color:#fff}
+  </style>
 </head>
-<body class="no-lock">
-  <div class="container">
-    <div class="panel">
-      <h1>Tack! 🎉</h1>
-      <p>Vi bekräftar betalningen och förbereder din nedladdning…</p>
-      <p id="msg" class="preview-note"></p>
-      <div class="actions">
-        <a id="dlLink" class="btn btn-primary" href="#" target="_blank" style="display:none">Öppna din PDF</a>
-        <a class="btn btn-secondary" href="./">Tillbaka till startsidan</a>
-      </div>
-    </div>
-  </div>
+<body>
+  <h1>Tack! 🎉</h1>
+  <p>Vi bekräftar betalningen och förbereder din nedladdning…</p>
+  <p id="err" class="hidden" style="color:#b00020"></p>
+  <p><button id="dlBtn" class="btn hidden">Ladda ner igen</button></p>
 
-  <script>
-    const API = "https://bokpilot-backend.sebastian-runell.workers.dev";
+<script>
+const API = "https://bokpilot-backend.sebastian-runell.workers.dev";
+const CHECKOUT_DRAFT_KEY = "bp_checkout_draft_v1";
 
-    (async function init(){
-      const p = new URLSearchParams(location.search);
-      const sid = p.get("session_id");
-      const msg = document.getElementById("msg");
-      const dl  = document.getElementById("dlLink");
+async function verifyPaid(session_id){
+  const r = await fetch(`${API}/api/checkout/verify?session_id=${encodeURIComponent(session_id)}`);
+  if (!r.ok) throw new Error("Kunde inte verifiera betalning");
+  const j = await r.json();
+  if (!j.paid) throw new Error("Betalningen är inte markerad som betald än");
+  return j;
+}
 
-      if (!sid) {
-        msg.textContent = "Saknar session_id – kontakta support så hjälper vi dig.";
-        return;
-      }
+async function buildAndDownload(draft){
+  const r = await fetch(`${API}/api/pdf`,{
+    method:"POST",
+    headers:{"content-type":"application/json"},
+    body: JSON.stringify({
+      story: draft.story,
+      images: draft.images,
+      mode: "final",             // skarp PDF
+      trim: draft.trim || "square210",
+      watermark_text: ""         // ingen watermark
+    })
+  });
+  if(!r.ok) throw new Error(`PDF misslyckades (HTTP ${r.status})`);
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = (draft.story?.book?.title || "Sagobok") + ".pdf";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
 
-      try {
-        // 1) verifiera betalning
-        const vr = await fetch(`${API}/api/checkout/verify?session_id=${encodeURIComponent(sid)}`);
-        const vj = await vr.json().catch(()=> ({}));
-        if (!vr.ok || !vj.paid) throw new Error("Köpet är inte bekräftat ännu.");
+async function init(){
+  const params = new URLSearchParams(location.search);
+  const sid = params.get("session_id");
+  const errEl = document.getElementById("err");
+  const dlBtn = document.getElementById("dlBtn");
 
-        msg.textContent = "Betalningen är godkänd. Din PDF genereras nu…";
+  try {
+    if(!sid) throw new Error("Saknar session_id");
+    await verifyPaid(sid);
 
-        // 2) hämta payload (sparad före redirect)
-        const raw = localStorage.getItem("bp_checkout_payload");
-        if (!raw) throw new Error("Hittar inte bokdata. Skapa boken igen och kontakta support vid problem.");
-        const payload = JSON.parse(raw);
+    const raw = localStorage.getItem(CHECKOUT_DRAFT_KEY);
+    if(!raw) throw new Error("Hittar inte bokdata. Skapa boken igen och kontakta support vid problem.");
+    const draft = JSON.parse(raw);
 
-        // 3) bygg PDF via backend
-        const pdfRes = await fetch(`${API}/api/pdf`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (!pdfRes.ok) {
-          const t = await pdfRes.text().catch(()=> "");
-          throw new Error(`PDF misslyckades (HTTP ${pdfRes.status}). ${t}`);
-        }
+    // bygg & ladda ner
+    await buildAndDownload(draft);
 
-        const blob = await pdfRes.blob();
-        const url = URL.createObjectURL(blob);
-        dl.href = url;
-        dl.style.display = "inline-flex";
-        dl.click(); // auto-öppna
+    // valfritt: spara “kvitto” lokalt, sen rensa draft
+    localStorage.removeItem(CHECKOUT_DRAFT_KEY);
 
-        msg.textContent = "Klart! Din PDF har öppnats i en ny flik. Du kan även spara länken ovan.";
-        // valfritt: rensa payload (eller spara i 72h enligt din policy)
-        // localStorage.removeItem("bp_checkout_payload");
-      } catch (e) {
-        msg.textContent = e?.message || "Något gick fel efter betalning. Kontakta support.";
-        console.error(e);
-      }
-    })();
-  </script>
+    // visa “ladda ner igen”-knapp (bygg från sparat utkast, här borttaget)
+    dlBtn.classList.remove("hidden");
+    dlBtn.onclick = ()=> buildAndDownload(draft);
+
+  } catch(e){
+    console.error(e);
+    errEl.textContent = e.message || String(e);
+    errEl.classList.remove("hidden");
+  }
+}
+init();
+</script>
 </body>
 </html>

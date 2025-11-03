@@ -5,6 +5,10 @@
    =================================================================== */
 const API = "https://bokpilot-backend.sebastian-runell.workers.dev";
 
+const CHECKOUT_DRAFT_KEY = "bp_checkout_draft_v1";
+const PRICE_ID = "price_1SPKvpLrEazOnLLm28yfGijH"; 
+
+
 // Cover-strategi: "skip" = generera inte omslag alls, "async" = generera i bakgrunden (rekommenderas)
 const COVER_STRATEGY = "async";
 
@@ -148,6 +152,23 @@ function dataUrlToBareB64(dataUrl){
   if(!dataUrl || !dataUrl.startsWith("data:image/")) return null;
   const m = dataUrl.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
   return m ? m[1] : null;
+}
+function buildImagesPayload() {
+  const images = [];
+  if (state.cover_image_id) images.push({ kind: "cover", image_id: state.cover_image_id });
+  else if (state.cover_preview_url) images.push({ kind: "cover", data_url: state.cover_preview_url });
+
+  const pages = state.story?.book?.pages || [];
+  for (const p of pages) {
+    const row = state.images_by_page.get(p.page);
+    if (!row) continue;
+    images.push(
+      row.image_id ? { page: p.page, image_id: row.image_id } :
+      row.data_url ? { page: p.page, data_url: row.data_url } :
+      row.image_url ? { page: p.page, url: row.image_url } : null
+    );
+  }
+  return images.filter(Boolean);
 }
 
 /* --------------------------- Status/Progress --------------------------- */
@@ -453,52 +474,29 @@ async function onCreatePdf() {
 // Byt detta till ditt riktiga test- eller live-Price-ID från Stripe Dashboard
 const STRIPE_PRICE_ID = "price_1SPKvpLrEazOnLLm28yfGijH";
 
-async function onBuyPdf(e) {
-  try {
-    if (e?.preventDefault) e.preventDefault();
-    if (!STRIPE_PRICE_ID || STRIPE_PRICE_ID.startsWith("price_xxx")) {
-      throw new Error("Saknar giltigt Stripe price_id. Uppdatera STRIPE_PRICE_ID i script.js.");
-    }
+async function onBuyPdf() {
+  if (!state.story) { alert("Skapa förhandsvisning först."); return; }
 
-    // UI: disable + spinner
-    const btn = els.buyPdfBtn;
-    if (btn) {
-      btn.disabled = true;
-      btn.dataset._label = btn.textContent;
-      btn.innerHTML = 'Öppnar betalning… <span class="spinner"></span>';
-    }
+  // 1) Spara draft lokalt (hämtas av success.html)
+  const draft = {
+    story: state.story,
+    images: buildImagesPayload(),
+    trim: "square210",
+    mode: "final"
+  };
+  try { localStorage.setItem(CHECKOUT_DRAFT_KEY, JSON.stringify(draft)); } catch {}
 
-    // Anropa din backend
-    const r = await fetch(`${API}/api/checkout/pdf`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      // Om du vill skicka e-postfält senare: customer_email: state.form?.email
-      body: JSON.stringify({ price_id: STRIPE_PRICE_ID })
-    });
-
-    // Hantera svar
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j?.error) {
-      const msg = j?.error || `Checkout misslyckades (HTTP ${r.status})`;
-      throw new Error(msg);
-    }
-    if (!j.url) throw new Error("Checkout-svar saknar URL.");
-
-    // Redirect till Stripe Checkout
-    window.location.href = j.url;
-
-  } catch (err) {
-    console.error(err);
-    alert(err?.message || "Kunde inte starta betalning.");
-  } finally {
-    // UI reset om något gick fel (vid lyckad redirect körs inte detta)
-    const btn = els.buyPdfBtn;
-    if (btn) {
-      btn.disabled = false;
-      if (btn.dataset._label) btn.textContent = btn.dataset._label;
-    }
-  }
+  // 2) Skapa checkout-session (Stripe)
+  const r = await fetch(`${API}/api/checkout/pdf`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ price_id: PRICE_ID, customer_email: "" })
+  });
+  if (!r.ok) throw new Error(`Checkout misslyckades (HTTP ${r.status})`);
+  const { url } = await r.json();
+  location.href = url; // redirect till Stripe
 }
+
 
 async function onSubmit(e) {
   e.preventDefault();
