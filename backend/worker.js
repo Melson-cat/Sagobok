@@ -1186,6 +1186,21 @@ export default {
 
       // Diag
       if (req.method === "GET" && url.pathname === "/api/diag") return handleDiagRequest(req, env);
+      
+      // Checkout diagnostics
+if (req.method === "GET" && url.pathname === "/api/checkout/ping") {
+  return handleCheckoutPing(req, env);
+}
+if (req.method === "GET" && url.pathname === "/api/checkout/price") {
+  return handleCheckoutPrice(req, env);
+}
+if (req.method === "POST" && url.pathname === "/api/checkout/pdf") {
+  return handleCheckoutPdf(req, env);
+}
+if (req.method === "GET" && url.pathname === "/api/checkout/verify") {
+  return handleCheckoutVerify(req, env);
+}
+
 
 // Checkout (DIGITAL PDF)
 if (req.method === "POST" && url.pathname === "/api/checkout/pdf") {
@@ -1392,15 +1407,47 @@ async function handleCheckoutPdf(req, env) {
       success_url: success,
       cancel_url: cancel,
       allow_promotion_codes: "true",
-      ...(customer_email ? { customer_email } : {})
+      ...(customer_email ? { customer_email } : {}),
     });
 
-    const session = await stripe(env, "checkout/sessions", { body });
+    // Stripe-anrop med bättre felinfo
+    let session;
+    try {
+      session = await stripe(env, "checkout/sessions", { body });
+    } catch (e) {
+      return err(e?.message || "Stripe checkout failed", 500, {
+        where: "stripe.checkout.sessions",
+        hint: "Kontrollera STRIPE_SECRET_KEY, PRICE_ID och att price tillhör samma Stripe-konto.",
+      });
+    }
+
     return ok({ url: session.url, id: session.id });
   } catch (e) {
-    return err(e?.message || "checkout create failed", 500);
+    return err(e?.message || "checkout create failed", 500, { where: "handleCheckoutPdf" });
   }
 }
+
+async function handleCheckoutPing(_req, env) {
+  return ok({
+    has_secret: !!env.STRIPE_SECRET_KEY,     // true/false
+    frontend_origin: env.FRONTEND_ORIGIN || null,
+    success_url: env.SUCCESS_URL || null,
+    cancel_url: env.CANCEL_URL || null,
+  });
+}
+
+async function handleCheckoutPrice(req, env) {
+  const url = new URL(req.url);
+  const id = url.searchParams.get("id");
+  if (!id) return err("Missing id", 400);
+  try {
+    const j = await stripe(env, `prices/${encodeURIComponent(id)}`, { method: "GET" });
+    return ok({ id: j.id, currency: j.currency, active: j.active, product: j.product, unit_amount: j.unit_amount });
+  } catch (e) {
+    return err(e?.message || "Stripe price lookup failed", 500, { where: "stripe.prices.get" });
+  }
+}
+
 
 
 async function handleCheckoutVerify(req, env) {
