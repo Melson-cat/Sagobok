@@ -1359,6 +1359,37 @@ if (req.method === "POST" && url.pathname === "/api/images") {
   }
 }
 
+async function handleCheckoutPdf(req, env) {
+  const url = new URL(req.url);
+  const { price_id, customer_email } = await req.json().catch(()=> ({}));
+  if (!price_id) return err("Missing price_id", 400);
+
+  const success = (env.SUCCESS_URL || `${env.FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
+  const cancel  = env.CANCEL_URL  || `${env.FRONTEND_ORIGIN}/`;
+
+  const body = formEncode({
+    mode: "payment",
+    "line_items[0][price]": price_id,
+    "line_items[0][quantity]": 1,
+    success_url: success,
+    cancel_url: cancel,
+    allow_promotion_codes: "true",
+    ...(customer_email ? { customer_email } : {})
+  });
+
+  const session = await stripe(env, "checkout/sessions", { body });
+  return ok({ url: session.url, id: session.id });
+}
+
+async function handleCheckoutVerify(req, env) {
+  const url = new URL(req.url);
+  const sid = url.searchParams.get("session_id");
+  if (!sid) return err("Missing session_id", 400);
+  const session = await stripe(env, `checkout/sessions/${encodeURIComponent(sid)}`, { method: "GET" });
+  const paid = session.payment_status === "paid";
+  return ok({ paid, amount_total: session.amount_total, currency: session.currency });
+}
+
 // Generate ONE interior image, sequential (keeps context via prev_b64)
 // Generate ONE interior image, sequentially, with previous-image guidance
 if (req.method === "POST" && url.pathname === "/api/images/next") {
@@ -1521,36 +1552,6 @@ if (req.method === "POST" && url.pathname === "/api/cover") {
   }
 }
 
-async function handleCheckoutPdf(req, env) {
-  const url = new URL(req.url);
-  const { price_id, customer_email } = await req.json().catch(()=> ({}));
-  if (!price_id) return err("Missing price_id", 400);
-
-  const success = (env.SUCCESS_URL || `${env.FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
-  const cancel  = env.CANCEL_URL  || `${env.FRONTEND_ORIGIN}/`;
-
-  const body = formEncode({
-    mode: "payment",
-    "line_items[0][price]": price_id,
-    "line_items[0][quantity]": 1,
-    success_url: success,
-    cancel_url: cancel,
-    allow_promotion_codes: "true",
-    ...(customer_email ? { customer_email } : {})
-  });
-
-  const session = await stripe(env, "checkout/sessions", { body });
-  return ok({ url: session.url, id: session.id });
-}
-
-async function handleCheckoutVerify(req, env) {
-  const url = new URL(req.url);
-  const sid = url.searchParams.get("session_id");
-  if (!sid) return err("Missing session_id", 400);
-  const session = await stripe(env, `checkout/sessions/${encodeURIComponent(sid)}`, { method: "GET" });
-  const paid = session.payment_status === "paid";
-  return ok({ paid, amount_total: session.amount_total, currency: session.currency });
-}
 
 
 
