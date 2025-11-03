@@ -1186,7 +1186,12 @@ export default {
 
       // Diag
       if (req.method === "GET" && url.pathname === "/api/diag") return handleDiagRequest(req, env);
-
+if (req.method === "POST" && url.pathname === "/api/checkout/pdf") {
+  return handleCheckoutPdf(req, env);
+}
+if (req.method === "GET" && url.pathname === "/api/checkout/verify") {
+  return handleCheckoutVerify(req, env);
+}
       // Story
       if (req.method === "POST" && url.pathname === "/api/story") {
         try {
