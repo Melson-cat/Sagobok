@@ -1186,12 +1186,25 @@ export default {
 
       // Diag
       if (req.method === "GET" && url.pathname === "/api/diag") return handleDiagRequest(req, env);
+
+// Checkout (DIGITAL PDF)
 if (req.method === "POST" && url.pathname === "/api/checkout/pdf") {
-  return handleCheckoutPdf(req, env);
+  try {
+    return await handleCheckoutPdf(req, env);
+  } catch (e) {
+    return err(e?.message || "checkout create failed", 500);
+  }
 }
+
+// Verify checkout
 if (req.method === "GET" && url.pathname === "/api/checkout/verify") {
-  return handleCheckoutVerify(req, env);
+  try {
+    return await handleCheckoutVerify(req, env);
+  } catch (e) {
+    return err(e?.message || "checkout verify failed", 500);
+  }
 }
+
       // Story
       if (req.method === "POST" && url.pathname === "/api/story") {
         try {
@@ -1365,26 +1378,30 @@ if (req.method === "POST" && url.pathname === "/api/images") {
 }
 
 async function handleCheckoutPdf(req, env) {
-  const url = new URL(req.url);
-  const { price_id, customer_email } = await req.json().catch(()=> ({}));
-  if (!price_id) return err("Missing price_id", 400);
+  try {
+    const { price_id, customer_email } = await req.json().catch(()=> ({}));
+    if (!price_id) return err("Missing price_id", 400);
 
-  const success = (env.SUCCESS_URL || `${env.FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
-  const cancel  = env.CANCEL_URL  || `${env.FRONTEND_ORIGIN}/`;
+    const success = (env.SUCCESS_URL || `${env.FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
+    const cancel  = env.CANCEL_URL  || `${env.FRONTEND_ORIGIN}/`;
 
-  const body = formEncode({
-    mode: "payment",
-    "line_items[0][price]": price_id,
-    "line_items[0][quantity]": 1,
-    success_url: success,
-    cancel_url: cancel,
-    allow_promotion_codes: "true",
-    ...(customer_email ? { customer_email } : {})
-  });
+    const body = formEncode({
+      mode: "payment",
+      "line_items[0][price]": price_id,
+      "line_items[0][quantity]": 1,
+      success_url: success,
+      cancel_url: cancel,
+      allow_promotion_codes: "true",
+      ...(customer_email ? { customer_email } : {})
+    });
 
-  const session = await stripe(env, "checkout/sessions", { body });
-  return ok({ url: session.url, id: session.id });
+    const session = await stripe(env, "checkout/sessions", { body });
+    return ok({ url: session.url, id: session.id });
+  } catch (e) {
+    return err(e?.message || "checkout create failed", 500);
+  }
 }
+
 
 async function handleCheckoutVerify(req, env) {
   const url = new URL(req.url);
