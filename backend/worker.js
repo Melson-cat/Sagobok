@@ -8,25 +8,29 @@ import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 
 // Stripe minimal client (fetch-baserad)
+
 async function stripe(env, path, init = {}) {
+  const method = (init.method || "POST").toUpperCase();
+  const headers = { "authorization": `Bearer ${env.STRIPE_SECRET_KEY}` };
+
+  let body = init.body;
+  if (method === "GET" || method === "HEAD") {
+    body = undefined; // ⬅️ kritiskt: ingen body för GET/HEAD
+  } else {
+    headers["content-type"] = "application/x-www-form-urlencoded";
+    if (typeof body !== "string") body = ""; // tillåt tom
+  }
+
   const r = await fetch(`https://api.stripe.com/v1/${path}`, {
-    method: init.method || "POST",
-    headers: {
-      "authorization": `Bearer ${env.STRIPE_SECRET_KEY}`,
-      "content-type": "application/x-www-form-urlencoded",
-    },
-    body: init.body || ""
+    method,
+    headers,
+    body,
   });
   const j = await r.json();
   if (!r.ok) throw new Error(j.error?.message || `Stripe ${r.status}`);
   return j;
 }
 
-function formEncode(obj) {
-  return Object.entries(obj)
-    .map(([k,v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
-    .join("&");
-}
 
 /* ------------------------------ Globals ------------------------------ */
 const OPENAI_MODEL = "gpt-4o-mini";
@@ -1186,7 +1190,7 @@ export default {
 
       // Diag
       if (req.method === "GET" && url.pathname === "/api/diag") return handleDiagRequest(req, env);
-      
+
       // Checkout diagnostics
 if (req.method === "GET" && url.pathname === "/api/checkout/ping") {
   return handleCheckoutPing(req, env);
