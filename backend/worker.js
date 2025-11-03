@@ -7,6 +7,27 @@
 import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 
+// Stripe minimal client (fetch-baserad)
+async function stripe(env, path, init = {}) {
+  const r = await fetch(`https://api.stripe.com/v1/${path}`, {
+    method: init.method || "POST",
+    headers: {
+      "authorization": `Bearer ${env.STRIPE_SECRET_KEY}`,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: init.body || ""
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error?.message || `Stripe ${r.status}`);
+  return j;
+}
+
+function formEncode(obj) {
+  return Object.entries(obj)
+    .map(([k,v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+    .join("&");
+}
+
 /* ------------------------------ Globals ------------------------------ */
 const OPENAI_MODEL = "gpt-4o-mini";
 
@@ -1521,4 +1542,44 @@ if (req.method === "POST" && url.pathname === "/api/cover") {
   },
 };
 
+// Create checkout session for DIGITAL PDF
+if (req.method === "POST" && url.pathname === "/api/checkout/pdf") {
+  try {
+    const { price_id, customer_email } = await req.json().catch(()=> ({}));
+    if (!price_id) return err("Missing price_id", 400);
+
+    const success = (env.SUCCESS_URL || `${env.FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
+    const cancel  = env.CANCEL_URL  || `${env.FRONTEND_ORIGIN}/`;
+
+    const body = formEncode({
+      mode: "payment",
+      "line_items[0][price]": price_id,
+      "line_items[0][quantity]": 1,
+      success_url: success,
+      cancel_url: cancel,
+      allow_promotion_codes: "true",
+      // Rek. att sätta för kvitto:
+      ...(customer_email ? { customer_email } : {})
+    });
+
+    const session = await stripe(env, "checkout/sessions", { body });
+    return ok({ url: session.url, id: session.id });
+  } catch (e) {
+    return err(e?.message || "checkout create failed", 500);
+  }
+}
+
+// Verify success (paid?) -> används av success.html
+if (req.method === "GET" && url.pathname === "/api/checkout/verify") {
+  try {
+    const sid = url.searchParams.get("session_id");
+    if (!sid) return err("Missing session_id", 400);
+    const session = await stripe(env, `checkout/sessions/${encodeURIComponent(sid)}`, { method: "GET" });
+    const paid = session.payment_status === "paid";
+    // Du kan returnera mer om du vill (amount_total etc)
+    return ok({ paid, amount_total: session.amount_total, currency: session.currency });
+  } catch (e) {
+    return err(e?.message || "verify failed", 500);
+  }
+}
 

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Tack för ditt köp!</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body class="no-lock">
+  <div class="container">
+    <div class="panel">
+      <h1>Tack! 🎉</h1>
+      <p>Vi bekräftar betalningen och förbereder din nedladdning…</p>
+      <p id="msg" class="preview-note"></p>
+      <div class="actions">
+        <a id="dlLink" class="btn btn-primary" href="#" target="_blank" style="display:none">Öppna din PDF</a>
+        <a class="btn btn-secondary" href="./">Tillbaka till startsidan</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = "https://bokpilot-backend.sebastian-runell.workers.dev";
+
+    (async function init(){
+      const p = new URLSearchParams(location.search);
+      const sid = p.get("session_id");
+      const msg = document.getElementById("msg");
+      const dl  = document.getElementById("dlLink");
+
+      if (!sid) {
+        msg.textContent = "Saknar session_id – kontakta support så hjälper vi dig.";
+        return;
+      }
+
+      try {
+        // 1) verifiera betalning
+        const vr = await fetch(`${API}/api/checkout/verify?session_id=${encodeURIComponent(sid)}`);
+        const vj = await vr.json().catch(()=> ({}));
+        if (!vr.ok || !vj.paid) throw new Error("Köpet är inte bekräftat ännu.");
+
+        msg.textContent = "Betalningen är godkänd. Din PDF genereras nu…";
+
+        // 2) hämta payload (sparad före redirect)
+        const raw = localStorage.getItem("bp_checkout_payload");
+        if (!raw) throw new Error("Hittar inte bokdata. Skapa boken igen och kontakta support vid problem.");
+        const payload = JSON.parse(raw);
+
+        // 3) bygg PDF via backend
+        const pdfRes = await fetch(`${API}/api/pdf`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!pdfRes.ok) {
+          const t = await pdfRes.text().catch(()=> "");
+          throw new Error(`PDF misslyckades (HTTP ${pdfRes.status}). ${t}`);
+        }
+
+        const blob = await pdfRes.blob();
+        const url = URL.createObjectURL(blob);
+        dl.href = url;
+        dl.style.display = "inline-flex";
+        dl.click(); // auto-öppna
+
+        msg.textContent = "Klart! Din PDF har öppnats i en ny flik. Du kan även spara länken ovan.";
+        // valfritt: rensa payload (eller spara i 72h enligt din policy)
+        // localStorage.removeItem("bp_checkout_payload");
+      } catch (e) {
+        msg.textContent = e?.message || "Något gick fel efter betalning. Kontakta support.";
+        console.error(e);
+      }
+    })();
+  </script>
+</body>
+</html>

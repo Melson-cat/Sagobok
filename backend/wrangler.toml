@@ -12,3 +12,7 @@ CF_ACCOUNT_ID = "54ac54fed54dbb3692953f74fb7a3498"
 CF_IMAGES_ACCOUNT_HASH = "JHrhPeCvgX2JnGnpk89sUA"
 CF_IMAGES_VARIANT = "public"
 FONT_BASE_URL = "https://sagobok.pages.dev/fonts"
+
+FRONTEND_ORIGIN = "https://sagobok.pages.dev"
+SUCCESS_URL = "https://sagobok.pages.dev/success.html"
+CANCEL_URL  = "https://sagobok.pages.dev/"

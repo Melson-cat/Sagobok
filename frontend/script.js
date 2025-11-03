@@ -39,6 +39,9 @@ const els = {
 };
 const readingAgeSeg = Array.from(document.querySelectorAll("[data-readage]"));
 
+
+els.buyPdfBtn = document.getElementById("buyPdfBtn");
+
 /* --------------------------- State --------------------------- */
 const STORAGE_KEY = "bokpiloten_form_v6";
 const MAX_AGE = 120;
@@ -139,6 +142,37 @@ async function urlToDataURL(url) {
     fr.readAsDataURL(blob);
   });
 }
+
+function snapshotForPDF() {
+  if (!state.story) throw new Error("Ingen story i minnet.");
+
+  const images = [];
+  // cover först
+  if (state.cover_image_id) {
+    images.push({ kind: "cover", image_id: state.cover_image_id });
+  } else if (state.cover_preview_url) {
+    images.push({ kind: "cover", data_url: state.cover_preview_url });
+  }
+
+  // interiör
+  const pages = state.story?.book?.pages || [];
+  for (const p of pages) {
+    const row = state.images_by_page.get(p.page);
+    if (!row) continue;
+    if (row.image_id) images.push({ page: p.page, image_id: row.image_id });
+    else if (row.data_url) images.push({ page: p.page, data_url: row.data_url });
+    else if (row.image_url) images.push({ page: p.page, url: row.image_url });
+  }
+
+  return {
+    story: state.story,
+    images,
+    mode: "preview",        // eller "print" om du vill ta betalt för tryckredo
+    trim: "square210",
+    watermark_text: null,   // sätt ev. watermark i checkout-flödet
+  };
+}
+
 function dataUrlToBareB64(dataUrl){
   if(!dataUrl || !dataUrl.startsWith("data:image/")) return null;
   const m = dataUrl.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
@@ -444,6 +478,41 @@ async function onCreatePdf() {
   }
 }
 
+async function onBuyPdf() {
+  try {
+    // UI-lås
+    els.buyPdfBtn.disabled = true;
+    els.buyPdfBtn.textContent = "Öppnar betalning…";
+    setStatus("🧾 Förbereder köp…", 12);
+
+    // Bygg payload av det du redan genererat
+    const snapshot = snapshotForPDF();
+
+    // Skapa Stripe Checkout-session via vår Worker
+    const res = await fetch(`${API}/api/checkout/pdf`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ snapshot }),
+    });
+
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || j?.error || !j?.url) {
+      const msg = j?.error || `Checkout misslyckades (HTTP ${res.status})`;
+      throw new Error(msg);
+    }
+
+    // Redirect till Stripe
+    setStatus("🔁 Skickar dig till säker betalning…", 26);
+    window.location.href = j.url;
+  } catch (e) {
+    console.error(e);
+    alert(e?.message || "Kunde inte starta betalning.");
+  } finally {
+    els.buyPdfBtn.disabled = false;
+    els.buyPdfBtn.textContent = "Köp digital bok";
+    setStatus(null);
+  }
+}
 
 async function onSubmit(e) {
   e.preventDefault();
@@ -825,6 +894,8 @@ function bindEvents() {
 
   els.pdfBtn?.addEventListener("click", onCreatePdf);
   if (els.pdfBtn) els.pdfBtn.disabled = false;
+  els.buyPdfBtn?.addEventListener("click", onBuyPdf);
+
 }
 
 (function init() {
