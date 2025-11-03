@@ -64,6 +64,14 @@ const ok = (data, init = {}) =>
 const err = (message, code = 500, extra = {}) =>
   ok({ error: String(message || "error"), ...extra }, { status: code });
 
+// URL-encode body för Stripe (application/x-www-form-urlencoded)
+function formEncode(obj) {
+  return Object.entries(obj)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join("&");
+}
+
+
 /* -------------------------- Trace / Diag log ------------------------- */
 const traceStart = () => [];
 const tr = (trace, step, extra = {}) =>
@@ -94,6 +102,40 @@ async function fetchJSON(url, opts) {
   if (!r.ok) throw new Error(`${url} ${r.status} ${JSON.stringify(j)}`);
   return j;
 }
+
+async function handleCheckoutPdf(req, env) {
+  const { price_id, customer_email } = await req.json().catch(() => ({}));
+  if (!price_id) return err("Missing price_id", 400, { where: "handleCheckoutPdf" });
+
+  const success = (env.SUCCESS_URL || `${env.FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
+  const cancel  =  env.CANCEL_URL  || `${env.FRONTEND_ORIGIN}/`;
+
+  const body = formEncode({
+    mode: "payment",
+    "line_items[0][price]": price_id,
+    "line_items[0][quantity]": 1,
+    success_url: success,
+    cancel_url: cancel,
+    allow_promotion_codes: "true",
+    ...(customer_email ? { customer_email } : {}),
+  });
+
+  const session = await stripe(env, "checkout/sessions", { body });
+  return ok({ url: session.url, id: session.id });
+}
+
+async function handleCheckoutVerify(req, env) {
+  const url = new URL(req.url);
+  const sid = url.searchParams.get("session_id");
+  if (!sid) return err("Missing session_id", 400, { where: "handleCheckoutVerify" });
+  const session = await stripe(env, `checkout/sessions/${encodeURIComponent(sid)}`, { method: "GET" });
+  return ok({
+    paid: session.payment_status === "paid",
+    amount_total: session.amount_total,
+    currency: session.currency,
+  });
+}
+
 
 /* --------------------- OpenAI JSON-only helper ----------------------- */
 async function openaiJSON(env, system, user) {
@@ -1192,36 +1234,44 @@ export default {
       if (req.method === "GET" && url.pathname === "/api/diag") return handleDiagRequest(req, env);
 
       // Checkout diagnostics
+// Checkout diag
 if (req.method === "GET" && url.pathname === "/api/checkout/ping") {
-  return handleCheckoutPing(req, env);
+  return ok({
+    has_secret: !!env.STRIPE_SECRET_KEY,
+    frontend_origin: env.FRONTEND_ORIGIN,
+    success_url: env.SUCCESS_URL,
+    cancel_url: env.CANCEL_URL,
+  });
 }
+
+// Pris-lookup
 if (req.method === "GET" && url.pathname === "/api/checkout/price") {
-  return handleCheckoutPrice(req, env);
-}
-if (req.method === "POST" && url.pathname === "/api/checkout/pdf") {
-  return handleCheckoutPdf(req, env);
-}
-if (req.method === "GET" && url.pathname === "/api/checkout/verify") {
-  return handleCheckoutVerify(req, env);
-}
-
-
-// Checkout (DIGITAL PDF)
-if (req.method === "POST" && url.pathname === "/api/checkout/pdf") {
   try {
-    return await handleCheckoutPdf(req, env);
+    const id = new URL(req.url).searchParams.get("id");
+    if (!id) return err("Missing id", 400, { where: "stripe.prices.get" });
+    const p = await stripe(env, `prices/${encodeURIComponent(id)}`, { method: "GET" });
+    return ok({
+      id: p.id,
+      currency: p.currency,
+      active: p.active,
+      product: typeof p.product === "string" ? p.product : p.product?.id,
+      unit_amount: p.unit_amount,
+    });
   } catch (e) {
-    return err(e?.message || "checkout create failed", 500);
+    return err(e.message || "price lookup failed", 500, { where: "stripe.prices.get" });
   }
 }
 
-// Verify checkout
+// Skapa checkout-session (DIGITAL PDF)
+if (req.method === "POST" && url.pathname === "/api/checkout/pdf") {
+  try { return await handleCheckoutPdf(req, env); }
+  catch (e) { return err(e?.message || "checkout create failed", 500, { where: "handleCheckoutPdf" }); }
+}
+
+// Verifiera checkout
 if (req.method === "GET" && url.pathname === "/api/checkout/verify") {
-  try {
-    return await handleCheckoutVerify(req, env);
-  } catch (e) {
-    return err(e?.message || "checkout verify failed", 500);
-  }
+  try { return await handleCheckoutVerify(req, env); }
+  catch (e) { return err(e?.message || "checkout verify failed", 500, { where: "handleCheckoutVerify" }); }
 }
 
       // Story
