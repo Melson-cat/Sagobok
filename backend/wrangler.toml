@@ -1,12 +1,14 @@
-name = "bokpilot-backend"     # exakt samma namn som din befintliga worker
-main = "worker.js"            # entrypoint relativt den här 'backend/'-mappen
+name = "bokpilot-backend"     # Samma som din befintliga Worker
+main = "worker.js"            # Entrypoint relativt 'backend/'-mappen
 compatibility_date = "2025-10-14"
+
 [observability]
 [observability.logs]
 enabled = false
 head_sampling_rate = 1
 invocation_logs = true
 persist = true
+
 [vars]
 CF_ACCOUNT_ID = "54ac54fed54dbb3692953f74fb7a3498"
 CF_IMAGES_ACCOUNT_HASH = "JHrhPeCvgX2JnGnpk89sUA"
@@ -16,3 +18,8 @@ FONT_BASE_URL = "https://sagobok.pages.dev/fonts"
 FRONTEND_ORIGIN = "https://sagobok.pages.dev"
 SUCCESS_URL = "https://sagobok.pages.dev/success.html"
 CANCEL_URL  = "https://sagobok.pages.dev/"
+
+kv_namespaces = [
+  { binding = "ORDERS", id = "0e26ac0291c741708ba2b02394b163db" }
+  # , { binding = "ORDERS", preview_id = "<preview-id-for-local-dev>" }  # valfritt
+]
