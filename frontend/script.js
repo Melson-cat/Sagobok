@@ -8,6 +8,12 @@ const API = "https://bokpilot-backend.sebastian-runell.workers.dev";
 const CHECKOUT_DRAFT_KEY = "bp_checkout_draft_v1";
 const PRICE_ID = "price_1SPKvpLrEazOnLLm28yfGijH"; 
 
+// === Checkout (KV/Webhook) ===
+const ORDER_ID_KEY    = "bp_last_order_id";  // sessionStorage
+const POLL_INTERVAL_MS = 2000;
+const POLL_TIMEOUT_MS  = 120000;
+
+
 
 // Cover-strategi: "skip" = generera inte omslag alls, "async" = generera i bakgrunden (rekommenderas)
 const COVER_STRATEGY = "async";
@@ -153,6 +159,25 @@ function dataUrlToBareB64(dataUrl){
   const m = dataUrl.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
   return m ? m[1] : null;
 }
+
+function saveOrderId(id){ try { sessionStorage.setItem(ORDER_ID_KEY, id); } catch {} }
+function loadOrderId(){ try { return sessionStorage.getItem(ORDER_ID_KEY) || null; } catch { return null; } }
+
+async function pollOrderPaid(orderId, { intervalMs = POLL_INTERVAL_MS, timeoutMs = POLL_TIMEOUT_MS } = {}) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    try {
+      const r = await fetch(`${API}/api/orders/status?id=${encodeURIComponent(orderId)}`, { cache: "no-store" });
+      if (r.ok) {
+        const j = await r.json();
+        if (j?.status === "paid") return j;
+      }
+    } catch {}
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  throw new Error("Timeout: betalning ej verifierad ännu.");
+}
+
 function buildImagesPayload() {
   const images = [];
   if (state.cover_image_id) images.push({ kind: "cover", image_id: state.cover_image_id });
@@ -477,25 +502,40 @@ const STRIPE_PRICE_ID = "price_1SPKvpLrEazOnLLm28yfGijH";
 async function onBuyPdf() {
   if (!state.story) { alert("Skapa förhandsvisning först."); return; }
 
-  // 1) Spara draft lokalt (hämtas av success.html)
   const draft = {
     story: state.story,
     images: buildImagesPayload(),
     trim: "square210",
     mode: "final"
   };
+
   try { localStorage.setItem(CHECKOUT_DRAFT_KEY, JSON.stringify(draft)); } catch {}
 
-  // 2) Skapa checkout-session (Stripe)
+  setStatus("🧾 Startar checkout…", 92);
+
   const r = await fetch(`${API}/api/checkout/pdf`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ price_id: PRICE_ID, customer_email: "" })
+    body: JSON.stringify({ price_id: PRICE_ID, customer_email: "", draft })
   });
-  if (!r.ok) throw new Error(`Checkout misslyckades (HTTP ${r.status})`);
-  const { url } = await r.json();
-  location.href = url; // redirect till Stripe
+
+  if (!r.ok) {
+    const body = await r.text().catch(()=> "");
+    setStatus(null);
+    throw new Error(`Checkout misslyckades (HTTP ${r.status})\n${body}`);
+  }
+
+  const { url, order_id, id: stripe_session_id, error } = await r.json();
+  if (error) { setStatus(null); throw new Error(error); }
+
+  // ⬅️ kritiskt för webhook-flödet: spara order_id så vi kan polla KV på success-sidan
+  if (order_id) saveOrderId(order_id);
+
+  // Öppna Stripe
+  location.href = url;
 }
+
+
 
 
 async function onSubmit(e) {
@@ -816,6 +856,63 @@ async function generateCoverAsync() {
   }
 }
 
+async function handleStripeReturnIfAny() {
+  const u = new URL(location.href);
+  const sid = u.searchParams.get("session_id");
+
+  // Kör endast på success-sidan eller om session_id finns i URL
+  const looksLikeSuccessPage = /success/i.test(location.pathname) || !!sid;
+  if (!looksLikeSuccessPage) return;
+
+  try {
+    setStatus("🔎 Verifierar betalning…", 96);
+
+    // 1) Snabbvägen: fråga Stripe via backend
+    if (sid) {
+      const v = await fetch(`${API}/api/checkout/verify?session_id=${encodeURIComponent(sid)}`, { cache: "no-store" });
+      if (v.ok) {
+        const j = await v.json();
+        if (j?.paid) {
+          setStatus("✅ Betalning bekräftad!", 100);
+          return;
+        }
+      }
+    }
+
+    // 2) Fallback: polla KV efter webhook
+    const oid = loadOrderId();
+    if (oid) {
+      const st = await pollOrderPaid(oid);
+      setStatus("✅ Betalning bekräftad!", 100);
+
+      // (valfritt) Autogenerera FINAL-PDF från sparat draft
+      const draftRaw = localStorage.getItem(CHECKOUT_DRAFT_KEY);
+      if (draftRaw) {
+        try {
+          const draft = JSON.parse(draftRaw);
+          const res = await fetch(`${API}/api/pdf`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ story: draft.story, images: draft.images, trim: draft.trim || "square210", mode: "final" })
+          });
+          if (res.ok) {
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            // Öppna i ny flik så användaren kan ladda ner
+            window.open(url, "_blank");
+          }
+        } catch(e) { console.warn("Auto-final PDF misslyckades:", e); }
+      }
+
+      return;
+    }
+
+    setStatus("ℹ️ Betalning ej verifierad ännu.", 100);
+  } catch (e) {
+    console.warn(e);
+    setStatus("⚠️ Kunde inte verifiera betalning just nu.", 100);
+  }
+}
 
 /* --------------------------- Events & Init --------------------------- */
 function bindEvents() {
@@ -887,6 +984,10 @@ function bindEvents() {
   if (state.form.refMode !== "photo" && state.form.refMode !== "desc")
     state.form.refMode = "photo";
   writeForm();
+
+  // ⬅️ NYTT: om vi landar på success-sidan, verifiera betalning nu
+  handleStripeReturnIfAny();
+
   bindEvents();
   setStatus(null);
 })();

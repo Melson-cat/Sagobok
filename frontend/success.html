@@ -1,81 +1,59 @@
-<!-- success.html (minimalt) -->
-<!doctype html>
-<html lang="sv">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Tack!</title>
-  <!-- Se CSS-fix nedan -->
-  <link rel="stylesheet" href="./style.css">
-  <style>
-    body { font-family: system-ui, sans-serif; padding: 24px; max-width: 680px; margin: auto; }
-    .hidden{display:none}
-    .btn{padding:10px 14px;border-radius:10px;border:0;background:#1f6feb;color:#fff}
-  </style>
-</head>
-<body>
-  <h1>Tack! 🎉</h1>
-  <p>Vi bekräftar betalningen och förbereder din nedladdning…</p>
-  <p id="err" class="hidden" style="color:#b00020"></p>
-  <p><button id="dlBtn" class="btn hidden">Ladda ner igen</button></p>
-
 <script>
 const API = "https://bokpilot-backend.sebastian-runell.workers.dev";
-const CHECKOUT_DRAFT_KEY = "bp_checkout_draft_v1";
 
-async function verifyPaid(session_id){
-  const r = await fetch(`${API}/api/checkout/verify?session_id=${encodeURIComponent(session_id)}`);
-  if (!r.ok) throw new Error("Kunde inte verifiera betalning");
+async function getOrderIdFromSession(session_id){
+  const r = await fetch(`${API}/api/checkout/order-id?session_id=${encodeURIComponent(session_id)}`);
+  if (!r.ok) throw new Error("Kunde inte hämta order-id");
   const j = await r.json();
-  if (!j.paid) throw new Error("Betalningen är inte markerad som betald än");
-  return j;
+  return j.order_id || null;
+}
+async function getStatus(order_id){
+  const r = await fetch(`${API}/api/orders/${encodeURIComponent(order_id)}/status`);
+  if (!r.ok) throw new Error("order-status misslyckades");
+  return await r.json(); // { order_id, status, updated_at }
 }
 
-async function buildAndDownload(draft){
-  const r = await fetch(`${API}/api/pdf`,{
-    method:"POST",
-    headers:{"content-type":"application/json"},
-    body: JSON.stringify({
-      story: draft.story,
-      images: draft.images,
-      mode: "final",             // skarp PDF
-      trim: draft.trim || "square210",
-      watermark_text: ""         // ingen watermark
-    })
-  });
-  if(!r.ok) throw new Error(`PDF misslyckades (HTTP ${r.status})`);
-  const blob = await r.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = (draft.story?.book?.title || "Sagobok") + ".pdf";
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+async function waitForPaid(order_id, timeoutMs = 90000){
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    const s = await getStatus(order_id);
+    if (s.status === "paid" || s.status === "ready") return s.status;
+    await new Promise(res => setTimeout(res, 1500));
+  }
+  throw new Error("Betalningen är inte bekräftad ännu. Uppdatera sidan om en stund.");
+}
+
+async function download(order_id){
+  // Triggar servern att bygga & streama PDF (om ej redan klar)
+  const url = `${API}/api/orders/${encodeURIComponent(order_id)}/download`;
+  // Öppna i ny flik för att inte tappa sidan
+  window.open(url, "_blank");
 }
 
 async function init(){
   const params = new URLSearchParams(location.search);
-  const sid = params.get("session_id");
+  let order_id = params.get("order_id");
+  const session_id = params.get("session_id");
+
   const errEl = document.getElementById("err");
   const dlBtn = document.getElementById("dlBtn");
 
   try {
-    if(!sid) throw new Error("Saknar session_id");
-    await verifyPaid(sid);
+    if (!session_id) throw new Error("Saknar session_id i URL:en");
 
-    const raw = localStorage.getItem(CHECKOUT_DRAFT_KEY);
-    if(!raw) throw new Error("Hittar inte bokdata. Skapa boken igen och kontakta support vid problem.");
-    const draft = JSON.parse(raw);
+    // Om order_id saknas (t.ex. om Stripe inte returnerade), hämta via KV-mappningen
+    if (!order_id) order_id = await getOrderIdFromSession(session_id);
+    if (!order_id) throw new Error("Kunde inte slå upp order (order_id saknas)");
 
-    // bygg & ladda ner
-    await buildAndDownload(draft);
+    // Vänta tills webbhooken satt status=paid, eller bygg ändå när status blir paid
+    await waitForPaid(order_id);
 
-    // valfritt: spara “kvitto” lokalt, sen rensa draft
-    localStorage.removeItem(CHECKOUT_DRAFT_KEY);
+    // Ladda ner serverstyrt (PDF byggs om det behövs)
+    await download(order_id);
 
-    // visa “ladda ner igen”-knapp (bygg från sparat utkast, här borttaget)
+    // “ladda ner igen”
     dlBtn.classList.remove("hidden");
-    dlBtn.onclick = ()=> buildAndDownload(draft);
+    dlBtn.onclick = () => download(order_id);
 
   } catch(e){
     console.error(e);
@@ -85,5 +63,3 @@ async function init(){
 }
 init();
 </script>
-</body>
-</html>

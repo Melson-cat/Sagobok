@@ -129,6 +129,90 @@ async function kvUpdateStatus(env, id, status, patch = {}) {
   return next;
 }
 
+/* --------------------- Stripe Webhook verifiering --------------------- */
+// Verifiera Stripe-signatur (v1) i Cloudflare Workers
+async function verifyStripeSignature(rawPayload, sigHeader, secret, toleranceSec = 300) {
+  if (!sigHeader) return false;
+  const parts = Object.fromEntries(
+    sigHeader.split(",").map(s => {
+      const [k, v] = s.split("=");
+      return [k.trim(), v];
+    })
+  );
+  const ts = parts.t;
+  const v1 = parts.v1;
+  if (!ts || !v1) return false;
+
+  // tidsfönster
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - Number(ts)) > toleranceSec) return false;
+
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign", "verify"]
+  );
+
+  const signedPayload = `${ts}.${rawPayload}`;
+  const sigBytes = await crypto.subtle.sign("HMAC", key, encoder.encode(signedPayload));
+  const hex = [...new Uint8Array(sigBytes)].map(b => b.toString(16).padStart(2,"0")).join("");
+
+  // timing-safe jämförelse
+  if (hex.length !== v1.length) return false;
+  let ok = 0;
+  for (let i = 0; i < hex.length; i++) ok |= hex.charCodeAt(i) ^ v1.charCodeAt(i);
+  return ok === 0;
+}
+
+/* --------------------- Stripe Webhook handler ------------------------- */
+// POST /api/stripe/webhook
+async function handleStripeWebhook(req, env) {
+  // Läs rå body (måste vara text, inte json()) för signatur
+  const sig = req.headers.get("stripe-signature");
+  const raw = await req.text();
+
+  const valid = await verifyStripeSignature(raw, sig, env.STRIPE_WEBHOOK_SECRET);
+  if (!valid) return new Response("Invalid signature", { status: 400, headers: CORS });
+
+  let event;
+  try { event = JSON.parse(raw); }
+  catch { return new Response("Bad JSON", { status: 400, headers: CORS }); }
+
+  try {
+    switch (event.type) {
+      case "checkout.session.completed": {
+        const session = event.data.object;
+        const orderId = session?.metadata?.order_id || session?.id;
+        const exist = await kvGetOrder(env, orderId);
+        const patch = {
+          status: "paid",
+          paid_at: Date.now(),
+          stripe_session_id: session?.id,
+          amount_total: session?.amount_total ?? null,
+          currency: session?.currency ?? null,
+          email: session?.customer_details?.email ?? exist?.customer_email ?? null,
+        };
+        if (exist) {
+          await kvUpdateStatus(env, orderId, "paid", patch);
+        } else {
+          await kvPutOrder(env, { id: orderId, created_at: Date.now(), updated_at: Date.now(), ...patch });
+        }
+        break;
+      }
+      // (valfritt) fler fall: 'payment_intent.succeeded', etc.
+      default:
+        // log-only
+        break;
+    }
+    return new Response("ok", { status: 200, headers: CORS });
+  } catch (e) {
+    return new Response("Webhook handler error: " + (e?.message || e), { status: 500, headers: CORS });
+  }
+}
+
 
 /* --------------------- OpenAI JSON-only helper ----------------------- */
 async function openaiJSON(env, system, user) {
@@ -1285,6 +1369,12 @@ if (req.method === "GET" && url.pathname === "/api/checkout/verify") {
   try { return await handleCheckoutVerify(req, env); }
   catch (e) { return err(e?.message || "checkout verify failed", 500, { where: "handleCheckoutVerify" }); }
 }
+
+// Stripe webhook – måste vara POST
+if (req.method === "POST" && url.pathname === "/api/stripe/webhook") {
+  return handleStripeWebhook(req, env);
+}
+
 
       // Story
       if (req.method === "POST" && url.pathname === "/api/story") {
