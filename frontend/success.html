@@ -1,65 +1,200 @@
-<script>
-const API = "https://bokpilot-backend.sebastian-runell.workers.dev";
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Tack för ditt köp! – BokPiloten</title>
+  <link rel="icon" href="images/pilot-logo.png">
+  <link rel="stylesheet" href="./style.css">
 
-async function getOrderIdFromSession(session_id){
-  const r = await fetch(`${API}/api/checkout/order-id?session_id=${encodeURIComponent(session_id)}`);
-  if (!r.ok) throw new Error("Kunde inte hämta order-id");
-  const j = await r.json();
-  return j.order_id || null;
-}
-async function getStatus(order_id){
-  const r = await fetch(`${API}/api/orders/${encodeURIComponent(order_id)}/status`);
-  if (!r.ok) throw new Error("order-status misslyckades");
-  return await r.json(); // { order_id, status, updated_at }
-}
+  <style>
+    body {
+      font-family: "Quicksand", system-ui, sans-serif;
+      background: #fafafa;
+      color: #333;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    h1 {
+      font-size: 1.8rem;
+      margin-bottom: 0.5rem;
+      color: #1f6feb;
+    }
+    p {
+      font-size: 1rem;
+      margin: 0.4rem 0;
+    }
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 4px solid #cce0ff;
+      border-top-color: #1f6feb;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 20px auto;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .btn {
+      display: inline-block;
+      padding: 10px 18px;
+      border-radius: 8px;
+      background: #1f6feb;
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-size: 1rem;
+      margin-top: 20px;
+      transition: background 0.2s;
+    }
+    .btn:hover {
+      background: #1458c0;
+    }
+    .hidden {
+      display: none;
+    }
+    #err {
+      color: #b00020;
+      font-weight: 600;
+      margin-top: 16px;
+    }
+  </style>
+</head>
 
-async function waitForPaid(order_id, timeoutMs = 90000){
-  const t0 = Date.now();
-  while (Date.now() - t0 < timeoutMs) {
-    const s = await getStatus(order_id);
-    if (s.status === "paid" || s.status === "ready") return s.status;
-    await new Promise(res => setTimeout(res, 1500));
-  }
-  throw new Error("Betalningen är inte bekräftad ännu. Uppdatera sidan om en stund.");
-}
+<body>
+  <h1>Tack för ditt köp! 🎉</h1>
+  <p id="status">Din betalning verifieras och boken byggs just nu...</p>
+  <div class="spinner" id="spinner"></div>
 
-async function download(order_id){
-  // Triggar servern att bygga & streama PDF (om ej redan klar)
-  const url = `${API}/api/orders/${encodeURIComponent(order_id)}/download`;
-  // Öppna i ny flik för att inte tappa sidan
-  window.open(url, "_blank");
-}
+  <p id="orderInfo" class="hidden">
+    <strong>Order-ID:</strong> <span id="orderId">—</span><br>
+    <strong>Belopp:</strong> <span id="amount">—</span> <span id="currency"></span>
+  </p>
 
-async function init(){
-  const params = new URLSearchParams(location.search);
-  let order_id = params.get("order_id");
-  const session_id = params.get("session_id");
+  <p id="err" class="hidden"></p>
+  <button id="dlBtn" class="btn hidden">Ladda ner boken igen</button>
 
-  const errEl = document.getElementById("err");
-  const dlBtn = document.getElementById("dlBtn");
+  <script>
+    const API = "https://bokpilot-backend.sebastian-runell.workers.dev";
+    const DRAFT_KEY = "bp_checkout_draft_v1"; // samma som i frontend
 
-  try {
-    if (!session_id) throw new Error("Saknar session_id i URL:en");
+    const $ = (id) => document.getElementById(id);
+    const qs = (name) => new URLSearchParams(location.search).get(name);
 
-    // Om order_id saknas (t.ex. om Stripe inte returnerade), hämta via KV-mappningen
-    if (!order_id) order_id = await getOrderIdFromSession(session_id);
-    if (!order_id) throw new Error("Kunde inte slå upp order (order_id saknas)");
+    async function verifySession(session_id) {
+      const r = await fetch(`${API}/api/checkout/verify?session_id=${encodeURIComponent(session_id)}`);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+      return j; // { paid, order_id, amount_total, currency }
+    }
 
-    // Vänta tills webbhooken satt status=paid, eller bygg ändå när status blir paid
-    await waitForPaid(order_id);
+    async function getOrderIdFromSession(session_id) {
+      const r = await fetch(`${API}/api/checkout/order-id?session_id=${encodeURIComponent(session_id)}`);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+      return j.order_id || null;
+    }
 
-    // Ladda ner serverstyrt (PDF byggs om det behövs)
-    await download(order_id);
+    async function getStatus(order_id) {
+      const url = `${API}/api/orders/status?id=${encodeURIComponent(order_id)}`;
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`status ${r.status}`);
+      return await r.json();
+    }
 
-    // “ladda ner igen”
-    dlBtn.classList.remove("hidden");
-    dlBtn.onclick = () => download(order_id);
+    async function waitForPaid(order_id, timeoutMs = 90000, intervalMs = 1500) {
+      const t0 = Date.now();
+      while (Date.now() - t0 < timeoutMs) {
+        try {
+          const s = await getStatus(order_id);
+          if (s?.status === "paid" || s?.status === "ready") return s?.status;
+        } catch (_) {}
+        await new Promise(res => setTimeout(res, intervalMs));
+      }
+      throw new Error("Betalningen är inte bekräftad ännu. Prova att uppdatera sidan om en stund.");
+    }
 
-  } catch(e){
-    console.error(e);
-    errEl.textContent = e.message || String(e);
-    errEl.classList.remove("hidden");
-  }
-}
-init();
-</script>
+    async function buildFinalPdfFromDraft() {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (!raw) throw new Error("Ingen sparad draft hittades (kunde inte skapa PDF).");
+      const draft = JSON.parse(raw);
+
+      const r = await fetch(`${API}/api/pdf`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          story: draft.story,
+          images: draft.images || [],
+          mode: "final",
+          trim: draft.trim || "square210",
+          watermark_text: ""
+        })
+      });
+      if (!r.ok) throw new Error(`PDF misslyckades (${r.status})`);
+      const blob = await r.blob();
+      const url  = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+    }
+
+    async function init() {
+      const errEl = $("err");
+      const dlBtn = $("dlBtn");
+      const spinner = $("spinner");
+      const orderInfo = $("orderInfo");
+      const orderIdEl = $("orderId");
+      const amountEl = $("amount");
+      const currencyEl = $("currency");
+      const statusEl = $("status");
+
+      try {
+        const session_id = qs("session_id");
+        if (!session_id) throw new Error("Saknar session_id i URL:en.");
+
+        // Försök hämta orderinfo
+        let order_id = null, amount = null, currency = null;
+        try {
+          const v = await verifySession(session_id);
+          order_id = v.order_id;
+          amount = v.amount_total;
+          currency = v.currency;
+        } catch {
+          order_id = await getOrderIdFromSession(session_id);
+        }
+
+        if (order_id) {
+          orderInfo.classList.remove("hidden");
+          orderIdEl.textContent = order_id;
+          if (amount) amountEl.textContent = (amount / 100).toFixed(2);
+          if (currency) currencyEl.textContent = currency.toUpperCase();
+        }
+
+        statusEl.textContent = "Verifierar betalning...";
+        await waitForPaid(order_id);
+        statusEl.textContent = "Betalning bekräftad! Din bok laddas ner nu.";
+        spinner.classList.add("hidden");
+
+        await buildFinalPdfFromDraft();
+
+        dlBtn.classList.remove("hidden");
+        dlBtn.onclick = () => buildFinalPdfFromDraft();
+
+      } catch (e) {
+        console.error(e);
+        spinner.classList.add("hidden");
+        statusEl.textContent = "Ett fel uppstod.";
+        if (errEl) {
+          errEl.textContent = e.message || String(e);
+          errEl.classList.remove("hidden");
+        }
+      }
+    }
+    init();
+  </script>
+</body>
+</html>

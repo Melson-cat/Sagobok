@@ -1375,6 +1375,22 @@ if (req.method === "POST" && url.pathname === "/api/stripe/webhook") {
   return handleStripeWebhook(req, env);
 }
 
+// Hämta order_id från session (kompat med äldre success-sidor)
+if (req.method === "GET" && url.pathname === "/api/checkout/order-id") {
+  try {
+    const url = new URL(req.url);
+    const sid = url.searchParams.get("session_id");
+    if (!sid) return err("Missing session_id", 400);
+
+    const session = await stripe(env, `checkout/sessions/${encodeURIComponent(sid)}`, { method: "GET" });
+    const order_id = session.metadata?.order_id || null;
+
+    return ok({ order_id });
+  } catch (e) {
+    return err(e?.message || "order-id lookup failed", 500, { where: "stripe.checkout.sessions.get" });
+  }
+}
+
 
       // Story
       if (req.method === "POST" && url.pathname === "/api/story") {
@@ -1634,10 +1650,20 @@ async function handleCheckoutVerify(req, env) {
   const url = new URL(req.url);
   const sid = url.searchParams.get("session_id");
   if (!sid) return err("Missing session_id", 400);
+
   const session = await stripe(env, `checkout/sessions/${encodeURIComponent(sid)}`, { method: "GET" });
+
   const paid = session.payment_status === "paid";
-  return ok({ paid, amount_total: session.amount_total, currency: session.currency });
+  const order_id = session.metadata?.order_id || null;
+
+  return ok({
+    paid,
+    order_id,
+    amount_total: session.amount_total,
+    currency: session.currency,
+  });
 }
+
 
 // Generate ONE interior image, sequential (keeps context via prev_b64)
 // Generate ONE interior image, sequentially, with previous-image guidance
