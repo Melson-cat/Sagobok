@@ -541,9 +541,36 @@ async function onBuyPrint() {
     //    eller generera båda via backend och få publika URLs tillbaka.
 
     // (Här illustrerar vi att du redan har publika URLs – byt till ditt riktiga sätt:)
-    const interiorPdfUrl = prompt("URL till inlaga.pdf (publik)");    // t.ex. R2/Pages
-    const coverPdfUrl    = prompt("URL till omslag.pdf (publik)");
-    if (!interiorPdfUrl || !coverPdfUrl) return;
+  // 1) Generera inlaga (FINAL, utan omslag)
+const interiorRes = await fetch(`${API}/api/pdf/interior`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    story: state.story,
+    images: buildImagesPayload(),
+    trim: "square210",
+    mode: "final"
+  })
+});
+const { url: interiorPdfUrl } = await interiorRes.json();
+
+// 2) Generera omslag (FINAL full-spread)
+const coverRes = await fetch(`${API}/api/pdf/cover`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    story: state.story,
+    // Skicka gärna titel/namn och ev. cover-bild (image_id/data_url) om du vill dekorera
+    coverImage: state.cover_image_id ? { image_id: state.cover_image_id } 
+                                     : { data_url: state.cover_preview_url },
+    productUid: "PHOTOBOOK_20X20_HARDCOVER",  // byt till din valda produkt
+    pages: /* totalt antal inlagesidor (ej omslag!) */ (state.story?.book?.pages?.length ?? 0) * 2
+  })
+});
+const { url: coverPdfUrl } = await coverRes.json();
+
+// 3) Quote -> Order (som i skelettet du redan har)
+
 
     // 2) Mottagarinfo (ersätt med din adress-dialog)
     const shipTo = {
