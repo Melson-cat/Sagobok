@@ -983,7 +983,7 @@ async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
   return await pdfDoc.embedFont(standardName);
 }
 /* ---------------------------- Build PDF ------------------------------ */
-sync function buildPdf(
+async function buildPdf(
   { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text,
    include_front_cover = true, include_back_cover = true },
   env, trace

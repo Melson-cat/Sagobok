@@ -7,7 +7,6 @@ compatibility_date = "2025-10-14"
 enabled = false
 head_sampling_rate = 1
 invocation_logs = true
-persist = true
 
 [vars]
 CF_ACCOUNT_ID = "54ac54fed54dbb3692953f74fb7a3498"
@@ -18,8 +17,7 @@ FRONTEND_ORIGIN = "https://sagobok.pages.dev"
 SUCCESS_URL = "https://sagobok.pages.dev/success.html"
 CANCEL_URL  = "https://sagobok.pages.dev/"
 
-# ⬇️ KV-bindning ska INTE ligga under [vars]
 [[kv_namespaces]]
 binding = "ORDERS"
 id = "0e26ac0291c741708ba2b02394b163db"
-# preview_id = "XXXXXXXXXXXXXXX"   # valfritt för wrangler dev/preview
+
