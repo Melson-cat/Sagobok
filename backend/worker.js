@@ -984,9 +984,8 @@ async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
 }
 /* ---------------------------- Build PDF ------------------------------ */
 async function buildPdf(
-  { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text,
-   include_front_cover = true, include_back_cover = true },
-  env, trace
+  { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text, part = "full" },
+   env, trace
 ) {
   tr(trace, "pdf:start");
   const trimSpec = TRIMS[trim] || TRIMS.square210;
@@ -1055,7 +1054,7 @@ async function buildPdf(
   tr(trace, "pdf:scene-pages", { count: scenePages.length });
 
   /* -------- FRONT COVER (valbar) -------- */
- if (include_front_cover) try {
+  if (part === "full" || part === "cover") try {
     const coverPage = pdfDoc.addPage([pageW, pageH]);
     if (!coverSrc) coverSrc = imgByPage.get(1) || null;
 
@@ -1129,7 +1128,7 @@ async function buildPdf(
   }
 
   /* -------- TITELSIDA (efter omslag) -------- */
-try {
+if (part === "full") try {
   const titlePage = pdfDoc.addPage([pageW, pageH]);
   titlePage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.98, 0.99, 1) });
   const cx = contentX + trimWpt / 2;
@@ -1173,8 +1172,9 @@ try {
 
 
   /* -------- 14 uppslag: bild vänster, text höger + vine -------- */
-  const outer = mmToPt(GRID.outer_mm);
-  for (let i = 0; i < 14; i++) {
+if (part === "full" || part === "interior") {
+    const outer = mmToPt(GRID.outer_mm);
+   for (let i = 0; i < 14; i++) {
     const scene = scenePages[i] || {};
     const mainText = String(scene.text || "").trim();
 
@@ -1216,7 +1216,7 @@ try {
   }
 
   /* -------- SLUT -------- */
-  {
+  if (part === "full") {
     const page = pdfDoc.addPage([pageW, pageH]);
     page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
 
@@ -1236,7 +1236,7 @@ try {
 
   /* -------- BACK COVER -------- */
  /* -------- BACK COVER (valbar) -------- */
- if (include_back_cover) try {
+if (part === "full") try {
     const page = pdfDoc.addPage([pageW, pageH]);
     const bg = rgb(0.58, 0.54, 0.86);
     page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: bg });
@@ -1321,6 +1321,48 @@ async function handlePdfRequest(req, env) {
     return new Response(body, { status: 500, headers: { "content-type": "application/json", "x-request-id": reqId, ...CORS } });
   }
 }
+
+async function handlePdfPartRequest(req, env, part) {
+  const url = new URL(req.url);
+  const debug = url.searchParams.get("debug") === "1";
+  const trace = traceStart();
+  const reqId = req.headers.get("cf-ray") || crypto.randomUUID();
+
+  try {
+    const body = await req.json().catch(() => ({}));
+    const { story, images, mode = "print", trim = "square210", bleed_mm, watermark_text } = body || {};
+    if (!story || !Array.isArray(story?.book?.pages)) {
+      return new Response(JSON.stringify({ error: "Missing story" }), {
+        status: 400,
+        headers: { ...JSON_HEADERS, "x-request-id": reqId },
+      });
+    }
+
+    const bytes = await buildPdf(
+      { story, images: images || [], mode, trim, bleed_mm, watermark_text, part },
+      env, trace
+    );
+    const baseTitle = String(story?.book?.title || "BokPiloten").replace(/[^\wåäöÅÄÖ\-]+/g, "_");
+    const filename =
+      part === "cover"    ? `${baseTitle}_COVER.pdf` :
+      part === "interior" ? `${baseTitle}_INTERIOR.pdf` :
+                            `${baseTitle}.pdf`;
+
+    const headers = new Headers({
+      "content-type": "application/pdf",
+      "content-disposition": `inline; filename="${filename}"`,
+      "x-request-id": reqId,
+      ...CORS,
+    });
+    return new Response(bytes, { status: 200, headers });
+  } catch (e) {
+    const body = debug
+      ? JSON.stringify({ error: e?.message || String(e), trace }, null, 2)
+      : JSON.stringify({ error: "PDF failed" });
+    return new Response(body, { status: 500, headers: { "content-type": "application/json", "x-request-id": reqId, ...CORS } });
+  }
+}
+
 
 /* --------------------------- /api/diag ------------------------------- */
 async function handleDiagRequest(_req, env) {
@@ -2085,6 +2127,13 @@ if (req.method === "POST" && url.pathname === "/api/gelato/order") {
   }
 }
 
+// PRINT PARTS for Gelato
+ if (req.method === "POST" && url.pathname === "/api/pdf/interior") {
+   return handlePdfPartRequest(req, env, "interior");
+ }
+ if (req.method === "POST" && url.pathname === "/api/pdf/cover") {
+   return handlePdfPartRequest(req, env, "cover");
+ }
 
       // Uploads
       if (req.method === "POST" && url.pathname === "/api/images/upload") {
