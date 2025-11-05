@@ -1975,19 +1975,6 @@ if (req.method === "POST" && url.pathname === "/api/gelato/quote") {
   }
 }
 
-    if (bytes) {
-      let img = null;
-      try { img = await pdfDoc.embedPng(bytes); } catch {}
-      if (!img) try { img = await pdfDoc.embedJpg(bytes); } catch {}
-      if (img) {
-        // fill-crop hela ytan
-        const iw = img.width, ih = img.height;
-        const scale = Math.max(totalWpt/iw, totalHpt/ih);
-        const w = iw*scale, h = ih*scale;
-        const x = (totalWpt - w)/2, y = (totalHpt - h)/2;
-        page.drawImage(img, { x, y, width: w, height: h });
-      }
-    }
 
     // (valfritt) rita ut ryggmarkering (hjälplinje – inte tryck)
     const spineX = (trimW_mm + bleed) * PT_PER_MM;
