@@ -31,6 +31,31 @@ async function stripe(env, path, init = {}) {
   return j;
 }
 
+// --- Gelato minimal client ---
+async function gelato(env, path, init = {}) {
+  const base = env.GELATO_BASE || "https://api.gelato.com";
+  const url = `${base}/v4/${path.replace(/^\/?v4\/?/, "")}`;
+  const headers = {
+    "x-api-key": env.GELATO_API_KEY,
+    "content-type": "application/json",
+  };
+  const r = await fetch(url, { ...init, headers: { ...headers, ...(init.headers || {}) }});
+  const txt = await r.text();
+  let j = {};
+  try { j = txt ? JSON.parse(txt) : {}; } catch { /* leave as text */ }
+  if (!r.ok) throw new Error(`Gelato ${r.status} ${txt || ""}`);
+  return j;
+}
+
+const GELATO_TTL = 30 * 24 * 60 * 60; // 30 dagar, tryckt bok tar längre tid än PDF
+
+async function kvPutGelato(env, id, data) {
+  await env.ORDERS.put(`gelato:${id}`, JSON.stringify(data), { expirationTtl: GELATO_TTL });
+}
+async function kvGetGelato(env, id) {
+  return await env.ORDERS.get(`gelato:${id}`, { type: "json" });
+}
+
 
 /* ------------------------------ Globals ------------------------------ */
 const OPENAI_MODEL = "gpt-4o-mini";
@@ -1851,6 +1876,112 @@ if (req.method === "POST" && url.pathname === "/api/cover") {
 }
 
 
+// GET /api/gelato/shipment-methods?country=SE&productUid=...
+if (req.method === "GET" && url.pathname === "/api/gelato/shipment-methods") {
+  try {
+    const country = url.searchParams.get("country") || "SE";
+    const productUid = url.searchParams.get("productUid");
+    if (!productUid) return err("Missing productUid", 400);
+    const j = await gelato(env, `shipment-methods?country=${encodeURIComponent(country)}&productUid=${encodeURIComponent(productUid)}`, { method: "GET" });
+    return ok({ methods: j?.shipmentMethods || j || [] });
+  } catch (e) {
+    return err(e.message || "gelato shipment-methods failed", 500, { where: "gelato.shipment-methods" });
+  }
+}
+
+// POST /api/gelato/quote
+// body: { shipTo:{ name,email,phone,address1,city,zip,country }, productUid, shipmentMethodUid?, quantity, currency, pages? }
+if (req.method === "POST" && url.pathname === "/api/gelato/quote") {
+  try {
+    const b = await req.json().catch(()=> ({}));
+    const ship = b?.shipTo || {};
+    const productUid = b?.productUid;
+    if (!productUid) return err("Missing productUid", 400);
+
+    // Om shipmentMethodUid inte skickas, hämta en lista och ta första “Standard”
+    let shipmentMethodUid = b?.shipmentMethodUid;
+    if (!shipmentMethodUid) {
+      const m = await gelato(env, `shipment-methods?country=${encodeURIComponent(ship.country || "SE")}&productUid=${encodeURIComponent(productUid)}`, { method:"GET" });
+      const list = m?.shipmentMethods || [];
+      // välj “standard” fallback, annars första
+      shipmentMethodUid = (list.find(x => /standard/i.test(x.name)) || list[0] || {}).shipmentMethodUid;
+      if (!shipmentMethodUid) return err("No shipment methods for product/country", 400);
+    }
+
+    const payload = {
+      currency: b?.currency || "SEK",
+      shipmentMethodUid,
+      recipient: {
+        address: {
+          addressLine1: ship.address1,
+          addressLine2: ship.address2 || "",
+          city: ship.city, postalCode: ship.zip, country: ship.country || "SE"
+        }
+      },
+      items: [{ productUid, quantity: b?.quantity || 1 }]
+    };
+
+    const q = await gelato(env, "orders/quotes", { method: "POST", body: JSON.stringify(payload) });
+    return ok({ quote: q, shipmentMethodUid });
+  } catch (e) {
+    return err(e.message || "gelato quote failed", 500, { where: "gelato.orders.quotes" });
+  }
+}
+
+// POST /api/gelato/order
+// body: { shipTo, productUid, shipmentMethodUid, files:{ interiorPdfUrl, coverPdfUrl }, quantity, currency, referenceId, email, phone }
+if (req.method === "POST" && url.pathname === "/api/gelato/order") {
+  try {
+    const b = await req.json().catch(()=> ({}));
+    const ship = b?.shipTo || {};
+    if (!b?.productUid) return err("Missing productUid", 400);
+    if (!b?.files?.interiorPdfUrl || !b?.files?.coverPdfUrl) return err("Missing files urls", 400);
+    if (!b?.shipmentMethodUid) return err("Missing shipmentMethodUid", 400);
+
+    const orderPayload = {
+      currency: b?.currency || "SEK",
+      contactEmail: b?.email || ship.email || "",
+      shippingAddress: {
+        firstName: (ship.name || "").split(" ")[0] || ship.name || "Kund",
+        lastName:  (ship.name || "").split(" ").slice(1).join(" ") || "-",
+        phone: b?.phone || ship.phone || "",
+        addressLine1: ship.address1, addressLine2: ship.address2 || "",
+        city: ship.city, postalCode: ship.zip, country: ship.country || "SE"
+      },
+      shipmentMethodUid: b.shipmentMethodUid,
+      items: [
+        {
+          productUid: b.productUid,
+          quantity: b?.quantity || 1,
+          files: [
+            { type: "content", sourceUrl: b.files.interiorPdfUrl },
+            { type: "cover",   sourceUrl: b.files.coverPdfUrl }
+          ]
+        }
+      ],
+      referenceId: b?.referenceId || `bp_${crypto.randomUUID()}`
+    };
+
+    const created = await gelato(env, "orders", { method: "POST", body: JSON.stringify(orderPayload) });
+
+    // spara i KV för spårning
+    const gid = created?.orderId || created?.id || orderPayload.referenceId;
+    await kvPutGelato(env, gid, {
+      id: gid,
+      status: created?.status || "created",
+      ref: orderPayload.referenceId,
+      productUid: b.productUid,
+      shipmentMethodUid: b.shipmentMethodUid,
+      created_at: Date.now(),
+      shipTo: { ...ship, email: orderPayload.contactEmail },
+      files: b.files
+    });
+
+    return ok({ ok: true, order: created });
+  } catch (e) {
+    return err(e.message || "gelato order failed", 500, { where: "gelato.orders.create" });
+  }
+}
 
 
       // Uploads

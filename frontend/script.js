@@ -531,6 +531,74 @@ async function onBuyPdf() {
   location.href = url;
 }
 
+async function onBuyPrint() {
+  try {
+    if (!state.story) { alert("Skapa förhandsvisning först."); return; }
+
+    // 1) Bygg FINAL inlaga + omslag – här antar vi att du redan kan göra final-PDF.
+    //    Du har idag /api/pdf “final”; men för Gelato krävs SEPARAT omslag.pdf och inlaga.pdf.
+    //    Om du inte hunnit: kalla din nuvarande final-PDF "interior" och gör en snabb cover-builder,
+    //    eller generera båda via backend och få publika URLs tillbaka.
+
+    // (Här illustrerar vi att du redan har publika URLs – byt till ditt riktiga sätt:)
+    const interiorPdfUrl = prompt("URL till inlaga.pdf (publik)");    // t.ex. R2/Pages
+    const coverPdfUrl    = prompt("URL till omslag.pdf (publik)");
+    if (!interiorPdfUrl || !coverPdfUrl) return;
+
+    // 2) Mottagarinfo (ersätt med din adress-dialog)
+    const shipTo = {
+      name: prompt("Namn") || "För- och efternamn",
+      email: prompt("E-post") || "",
+      phone: prompt("Telefon (+46...)") || "",
+      address1: prompt("Adress") || "",
+      city: prompt("Stad") || "",
+      zip: prompt("Postnummer") || "",
+      country: "SE"
+    };
+
+    // 3) Produkt och frakt
+    //    – sätt productUid hårdkodat nu (20x20 hardcover fotobok) eller bygg en selector senare.
+    const productUid = prompt("productUid (Gelato)") || "";
+    if (!productUid) { alert("productUid saknas."); return; }
+
+    setStatus("🚚 Hämtar frakt & pris…", 40);
+    const qRes = await fetch(`${API}/api/gelato/quote`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ shipTo, productUid, quantity: 1, currency: "SEK" })
+    });
+    const q = await qRes.json();
+    if (!qRes.ok || q?.error) throw new Error(q?.error || `HTTP ${qRes.status}`);
+    // visa pris/ETA snabbt:
+    const ask = confirm(`Pris (hela ordern): ${(q.quote?.totals?.grandTotal?.amount || "okänt")} ${q.quote?.totals?.grandTotal?.currency || "SEK"}\nETA: ${q.quote?.estimatedDeliveryDate || "–"}\n\nFortsätt beställning?`);
+    if (!ask) { setStatus(null); return; }
+
+    // 4) Skapa order
+    setStatus("🖨️ Lägger tryckorder…", 78);
+    const oRes = await fetch(`${API}/api/gelato/order`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        shipTo,
+        productUid,
+        shipmentMethodUid: q.shipmentMethodUid,  // från quote-steget
+        files: { interiorPdfUrl, coverPdfUrl },
+        quantity: 1, currency: "SEK",
+        referenceId: `bp_${Date.now()}`
+      })
+    });
+    const o = await oRes.json();
+    if (!oRes.ok || o?.error) throw new Error(o?.error || `HTTP ${oRes.status}`);
+
+    setStatus("✅ Order lagd! (Gelato)", 100);
+    alert(`Order skapad!\nGelato ID: ${o?.order?.orderId || o?.order?.id || "okänt"}`);
+
+  } catch (e) {
+    console.error(e);
+    setStatus(null);
+    alert(e?.message || "Kunde inte lägga tryckorder.");
+  }
+}
 
 
 
@@ -1018,6 +1086,10 @@ function bindEvents() {
   els.pdfBtn?.addEventListener("click", onCreatePdf);
   if (els.pdfBtn) els.pdfBtn.disabled = false;
   els.buyPdfBtn?.addEventListener("click", onBuyPdf);
+
+  els.buyPrintBtn = document.getElementById("buyPrintBtn");
+els.buyPrintBtn?.addEventListener("click", onBuyPrint);
+
 
 }
 
