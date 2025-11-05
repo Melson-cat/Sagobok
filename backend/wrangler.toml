@@ -1,6 +1,7 @@
 name = "bokpilot-backend"
 main = "worker.js"
-compatibility_date = "2025-10-14"
+compatibility_date = "2025-10-14"  # funkar
+workers_dev = true
 
 [vars]
 CF_ACCOUNT_ID = "54ac54fed54dbb3692953f74fb7a3498"
@@ -14,6 +15,3 @@ CANCEL_URL  = "https://sagobok.pages.dev/"
 [[kv_namespaces]]
 binding = "ORDERS"
 id = "0e26ac0291c741708ba2b02394b163db"
-
-[build]
-upload.format = "modules"     # ← KRITISKT för `export default { fetch() {} }`
