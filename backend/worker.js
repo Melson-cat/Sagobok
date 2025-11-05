@@ -1976,12 +1976,6 @@ if (req.method === "POST" && url.pathname === "/api/gelato/quote") {
 }
 
 
-    // (valfritt) rita ut ryggmarkering (hjälplinje – inte tryck)
-    const spineX = (trimW_mm + bleed) * PT_PER_MM;
-    page.drawLine({ start:{x: spineX, y: 0}, end:{x: spineX, y: totalHpt}, thickness: 0.5, color: rgb(0.9,0.9,0.9) });
-    page.drawLine({ start:{x: spineX + spine_mm*PT_PER_MM, y: 0}, end:{x: spineX + spine_mm*PT_PER_MM, y: totalHpt},
-                    thickness: 0.5, color: rgb(0.9,0.9,0.9) });
-
     const bytesOut = await pdfDoc.save();
     const headers = new Headers({
       "content-type": "application/pdf",
@@ -1989,9 +1983,7 @@ if (req.method === "POST" && url.pathname === "/api/gelato/quote") {
       ...CORS,
     });
     return new Response(bytesOut, { status: 200, headers });
-  } catch (e) {
-    return err(e?.message || "Cover build failed", 500);
-  }
+  } 
 }
 
 // body: { shipTo, productUid, shipmentMethodUid, files:{ interiorPdfUrl, coverPdfUrl }, quantity, currency, referenceId, email, phone }
@@ -2047,14 +2039,6 @@ if (req.method === "POST" && url.pathname === "/api/gelato/order") {
     return err(e.message || "gelato order failed", 500, { where: "gelato.orders.create" });
   }
 }
-
-// PRINT PARTS for Gelato
- if (req.method === "POST" && url.pathname === "/api/pdf/interior") {
-   return handlePdfPartRequest(req, env, "interior");
- }
- if (req.method === "POST" && url.pathname === "/api/pdf/cover") {
-   return handlePdfPartRequest(req, env, "cover");
- }
 
       // Uploads
       if (req.method === "POST" && url.pathname === "/api/images/upload") {
