@@ -2,12 +2,6 @@ name = "bokpilot-backend"
 main = "worker.js"
 compatibility_date = "2025-10-14"
 
-[observability]
-[observability.logs]
-enabled = false
-head_sampling_rate = 1
-invocation_logs = true
-
 [vars]
 CF_ACCOUNT_ID = "54ac54fed54dbb3692953f74fb7a3498"
 CF_IMAGES_ACCOUNT_HASH = "JHrhPeCvgX2JnGnpk89sUA"
