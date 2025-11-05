@@ -1,5 +1,5 @@
-name = "bokpilot-backend"     # Samma som din befintliga Worker
-main = "worker.js"            # Entrypoint relativt 'backend/'-mappen
+name = "bokpilot-backend"
+main = "worker.js"
 compatibility_date = "2025-10-14"
 
 [observability]
@@ -14,12 +14,12 @@ CF_ACCOUNT_ID = "54ac54fed54dbb3692953f74fb7a3498"
 CF_IMAGES_ACCOUNT_HASH = "JHrhPeCvgX2JnGnpk89sUA"
 CF_IMAGES_VARIANT = "public"
 FONT_BASE_URL = "https://sagobok.pages.dev/fonts"
-
 FRONTEND_ORIGIN = "https://sagobok.pages.dev"
 SUCCESS_URL = "https://sagobok.pages.dev/success.html"
 CANCEL_URL  = "https://sagobok.pages.dev/"
 
-kv_namespaces = [
-  { binding = "ORDERS_KV", id = "0e26ac0291c741708ba2b02394b163db" }
-  # , { binding = "ORDERS_KV", preview_id = "<preview-id-for-local-dev>" }  # valfritt
-]
+# ⬇️ KV-bindning ska INTE ligga under [vars]
+[[kv_namespaces]]
+binding = "ORDERS"
+id = "0e26ac0291c741708ba2b02394b163db"
+# preview_id = "XXXXXXXXXXXXXXX"   # valfritt för wrangler dev/preview
