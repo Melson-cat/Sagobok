@@ -983,7 +983,11 @@ async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
   return await pdfDoc.embedFont(standardName);
 }
 /* ---------------------------- Build PDF ------------------------------ */
-async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }, env, trace) {
+sync function buildPdf(
+  { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text,
+   include_front_cover = true, include_back_cover = true },
+  env, trace
+) {
   tr(trace, "pdf:start");
   const trimSpec = TRIMS[trim] || TRIMS.square210;
   const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
@@ -1050,8 +1054,8 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
   const scenePages = mapTo14ScenePages();
   tr(trace, "pdf:scene-pages", { count: scenePages.length });
 
-  /* -------- FRONT COVER -------- */
-  try {
+  /* -------- FRONT COVER (valbar) -------- */
+ if (include_front_cover) try {
     const coverPage = pdfDoc.addPage([pageW, pageH]);
     if (!coverSrc) coverSrc = imgByPage.get(1) || null;
 
@@ -1231,7 +1235,8 @@ try {
   }
 
   /* -------- BACK COVER -------- */
-  try {
+ /* -------- BACK COVER (valbar) -------- */
+ if (include_back_cover) try {
     const page = pdfDoc.addPage([pageW, pageH]);
     const bg = rgb(0.58, 0.54, 0.86);
     page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: bg });
@@ -1928,7 +1933,104 @@ if (req.method === "POST" && url.pathname === "/api/gelato/quote") {
   }
 }
 
-// POST /api/gelato/order
+// POST /api/pdf/interior  → bygger enbart inlagan (utan front/back cover)
+if (req.method === "POST" && url.pathname === "/api/pdf/interior") {
+  const trace = traceStart();
+  try {
+    const body = await req.json().catch(()=> ({}));
+    const { story, images, trim = "square210", bleed_mm } = body || {};
+    if (!story?.book?.pages) return err("Missing story", 400);
+
+    const bytes = await buildPdf(
+      { story, images: images || [], mode: "final", trim, bleed_mm,
+        include_front_cover: false, include_back_cover: false },
+      env, trace
+    );
+
+    // NOTE: nu returnerar vi PDF bytes direkt.
+    // Gelato vill ha en publik URL – tills vi har R2/hosting får frontend
+    // ladda ner och/eller du kan temporärt ladda upp den manuellt.
+    const headers = new Headers({
+      "content-type": "application/pdf",
+      "content-disposition": `inline; filename="interior.pdf"`,
+      ...CORS,
+    });
+    return new Response(bytes, { status: 200, headers });
+  } catch (e) {
+    return err(e?.message || "Interior build failed", 500);
+  }
+}
+// POST /api/pdf/cover  → bygger ett full-spread-cover (fram + rygg + bak) som EN PDF-sida
+if (req.method === "POST" && url.pathname === "/api/pdf/cover") {
+  try {
+    const body = await req.json().catch(()=> ({}));
+    const { story, coverImage, productUid = "PHOTOBOOK_20X20_HARDCOVER", pages = 28, bleed_mm } = body || {};
+    // 20x20 cm hårdkodat – byt senare mot dynamik från Gelato-spec:
+    const trimW_mm = 200, trimH_mm = 200;
+    const bleed = Number.isFinite(bleed_mm) ? bleed_mm : 3;
+
+    // quick spine approx: 6 mm för ~30 sidor – ersätt med riktig formel när vi kopplar spec
+    const spine_mm = 6;
+
+    const PT_PER_MM = 72/25.4;
+    const totalWpt = (trimW_mm*2 + spine_mm + 2*bleed) * PT_PER_MM;
+    const totalHpt = (trimH_mm + 2*bleed) * PT_PER_MM;
+
+    const pdfDoc = await PDFDocument.create();
+    pdfDoc.registerFontkit(fontkit);
+    const page = pdfDoc.addPage([totalWpt, totalHpt]);
+
+    // bakgrund
+    page.drawRectangle({ x: 0, y: 0, width: totalWpt, height: totalHpt, color: rgb(1,1,1) });
+
+    // lägg omslagsbild över hela spreaden (enkelt – snyggare layout kan göras sen)
+    let bytes = null;
+    if (coverImage?.image_id) {
+      const url = cfImagesDeliveryURL(env, coverImage.image_id, undefined, "jpeg");
+      if (url) {
+        const r = await fetch(url, { cf: { cacheTtl: 1200, cacheEverything: true } });
+        if (r.ok) bytes = new Uint8Array(await r.arrayBuffer());
+      }
+    } else if (coverImage?.data_url) {
+      const m = coverImage.data_url.match(/^data:([^;]+);base64,(.+)$/i);
+      if (m) {
+        const bin = atob(m[2]); bytes = new Uint8Array(bin.length);
+        for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+      }
+    }
+
+    if (bytes) {
+      let img = null;
+      try { img = await pdfDoc.embedPng(bytes); } catch {}
+      if (!img) try { img = await pdfDoc.embedJpg(bytes); } catch {}
+      if (img) {
+        // fill-crop hela ytan
+        const iw = img.width, ih = img.height;
+        const scale = Math.max(totalWpt/iw, totalHpt/ih);
+        const w = iw*scale, h = ih*scale;
+        const x = (totalWpt - w)/2, y = (totalHpt - h)/2;
+        page.drawImage(img, { x, y, width: w, height: h });
+      }
+    }
+
+    // (valfritt) rita ut ryggmarkering (hjälplinje – inte tryck)
+    const spineX = (trimW_mm + bleed) * PT_PER_MM;
+    page.drawLine({ start:{x: spineX, y: 0}, end:{x: spineX, y: totalHpt}, thickness: 0.5, color: rgb(0.9,0.9,0.9) });
+    page.drawLine({ start:{x: spineX + spine_mm*PT_PER_MM, y: 0}, end:{x: spineX + spine_mm*PT_PER_MM, y: totalHpt},
+                    thickness: 0.5, color: rgb(0.9,0.9,0.9) });
+
+    const bytesOut = await pdfDoc.save();
+    const headers = new Headers({
+      "content-type": "application/pdf",
+      "content-disposition": `inline; filename="cover-spread.pdf"`,
+      ...CORS,
+    });
+    return new Response(bytesOut, { status: 200, headers });
+  } catch (e) {
+    return err(e?.message || "Cover build failed", 500);
+  }
+}
+
 // body: { shipTo, productUid, shipmentMethodUid, files:{ interiorPdfUrl, coverPdfUrl }, quantity, currency, referenceId, email, phone }
 if (req.method === "POST" && url.pathname === "/api/gelato/order") {
   try {

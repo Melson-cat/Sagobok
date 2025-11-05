@@ -46,6 +46,7 @@ const els = {
   navToggle: document.getElementById("navToggle"),
   mobileMenu: document.getElementById("mobileMenu"),
   pdfBtn: document.getElementById("pdfBtn"),
+  buyPrintBtn: document.getElementById("buyPrintBtn"),
 };
 const readingAgeSeg = Array.from(document.querySelectorAll("[data-readage]"));
 
