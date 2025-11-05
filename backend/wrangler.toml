@@ -20,6 +20,6 @@ SUCCESS_URL = "https://sagobok.pages.dev/success.html"
 CANCEL_URL  = "https://sagobok.pages.dev/"
 
 kv_namespaces = [
-  { binding = "ORDERS", id = "0e26ac0291c741708ba2b02394b163db" }
-  # , { binding = "ORDERS", preview_id = "<preview-id-for-local-dev>" }  # valfritt
+  { binding = "ORDERS_KV", id = "0e26ac0291c741708ba2b02394b163db" }
+  # , { binding = "ORDERS_KV", preview_id = "<preview-id-for-local-dev>" }  # valfritt
 ]

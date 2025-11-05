@@ -129,6 +129,17 @@ async function kvUpdateStatus(env, id, status, patch = {}) {
   return next;
 }
 
+// --- Session → Order mapping (för snabb lookup från success-sida) ---
+async function kvMapSessionToOrder(env, session_id, order_id, ttlSec = 24 * 60 * 60) {
+  // 24h räcker – success-sidan ropas direkt efter betalning
+  await env.ORDERS.put(`session:${session_id}`, order_id, { expirationTtl: ttlSec });
+}
+async function kvGetOrderFromSession(env, session_id) {
+  if (!session_id) return null;
+  return await env.ORDERS.get(`session:${session_id}`);
+}
+
+
 /* --------------------- Stripe Webhook verifiering --------------------- */
 // Verifiera Stripe-signatur (v1) i Cloudflare Workers
 async function verifyStripeSignature(rawPayload, sigHeader, secret, toleranceSec = 300) {
@@ -1375,21 +1386,27 @@ if (req.method === "POST" && url.pathname === "/api/stripe/webhook") {
   return handleStripeWebhook(req, env);
 }
 
-// Hämta order_id från session (kompat med äldre success-sidor)
+// Hämta order_id från session (KV först, Stripe fallback)
 if (req.method === "GET" && url.pathname === "/api/checkout/order-id") {
   try {
-    const url = new URL(req.url);
-    const sid = url.searchParams.get("session_id");
+    const urlObj = new URL(req.url);
+    const sid = urlObj.searchParams.get("session_id");
     if (!sid) return err("Missing session_id", 400);
 
+    // 1) KV-fast path
+    const kvOid = await kvGetOrderFromSession(env, sid);
+    if (kvOid) return ok({ order_id: kvOid, source: "kv" });
+
+    // 2) Fallback: fråga Stripe
     const session = await stripe(env, `checkout/sessions/${encodeURIComponent(sid)}`, { method: "GET" });
     const order_id = session.metadata?.order_id || null;
 
-    return ok({ order_id });
+    return ok({ order_id, source: "stripe" });
   } catch (e) {
     return err(e?.message || "order-id lookup failed", 500, { where: "stripe.checkout.sessions.get" });
   }
 }
+
 
 
       // Story
@@ -1566,15 +1583,18 @@ if (req.method === "POST" && url.pathname === "/api/images") {
 
 async function handleCheckoutPdf(req, env) {
   try {
-    const { price_id, customer_email, order_id, draft } = await req.json().catch(()=> ({}));
-    if (!price_id) return err("Missing price_id", 400);
+    // === Guard/diag (för att slippa "undefined put/get") ===
+    if (!env.ORDERS) return err("ORDERS KV not bound", 500, { where: "handleCheckoutPdf" });
+    if (!env.STRIPE_SECRET_KEY) return err("STRIPE_SECRET_KEY missing", 500, { where: "handleCheckoutPdf" });
 
-    // 1) Säkerställ order i KV (antingen använd inkommen order_id, annars skapa ny)
+    const { price_id, customer_email, order_id, draft } = await req.json().catch(()=> ({}));
+    if (!price_id) return err("Missing price_id", 400, { where: "handleCheckoutPdf" });
+
+    // 1) Säkerställ order i KV
     let oid = order_id;
     if (oid) {
       const ex = await kvGetOrder(env, oid);
       if (!ex) {
-        // om order_id kom men inte finns – skapa den för säkerhets skull
         const o = newOrder(draft);
         o.id = oid;
         await kvPutOrder(env, o);
@@ -1585,9 +1605,10 @@ async function handleCheckoutPdf(req, env) {
       oid = o.id;
     }
 
-    // 2) Bygg Stripe checkout med metadata.order_id
-    const success = (env.SUCCESS_URL || `${env.FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
-    const cancel  = env.CANCEL_URL  || `${env.FRONTEND_ORIGIN}/`;
+    // 2) Bygg Stripe checkout (metadata.order_id är kritiskt)
+    const FRONTEND_ORIGIN = env.FRONTEND_ORIGIN || "https://example.com";
+    const success = (env.SUCCESS_URL || `${FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
+    const cancel  = env.CANCEL_URL  || `${FRONTEND_ORIGIN}/`;
 
     const base = {
       mode: "payment",
@@ -1596,7 +1617,7 @@ async function handleCheckoutPdf(req, env) {
       success_url: success,
       cancel_url: cancel,
       allow_promotion_codes: "true",
-      "metadata[order_id]": oid,            // ⬅️ kritiskt för webhook-steget
+      "metadata[order_id]": oid,
     };
     if (customer_email) base.customer_email = customer_email;
 
@@ -1609,12 +1630,13 @@ async function handleCheckoutPdf(req, env) {
     } catch (e) {
       return err(e?.message || "Stripe checkout failed", 500, {
         where: "stripe.checkout.sessions",
-        hint: "Kontrollera STRIPE_SECRET_KEY, PRICE_ID och att price tillhör samma Stripe-konto.",
+        hint: "Kontrollera STRIPE_SECRET_KEY/PRICE_ID och att priset ligger i samma Stripe-konto.",
       });
     }
 
-    // 4) Uppdatera orderstatus → 'draft' finns redan, men vi kan spara stripe session id som hint
-    await kvUpdateStatus(env, oid, "draft", { stripe_session_id: session.id });
+    // 4) Uppdatera orderstatus + spara session → order (viktigt för success/verify)
+    await kvUpdateStatus(env, oid, "pending", { stripe_session_id: session.id });
+    await kvMapSessionToOrder(env, session.id, oid); // ← NYCKELRAD
 
     // 5) Returnera både url och order_id
     return ok({ url: session.url, id: session.id, order_id: oid });
@@ -1622,6 +1644,7 @@ async function handleCheckoutPdf(req, env) {
     return err(e?.message || "checkout create failed", 500, { where: "handleCheckoutPdf" });
   }
 }
+
 
 async function handleCheckoutPing(_req, env) {
   return ok({

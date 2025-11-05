@@ -495,10 +495,6 @@ async function onCreatePdf() {
   }
 }
 
-/* --------------------------- Checkout (Stripe) --------------------------- */
-// Byt detta till ditt riktiga test- eller live-Price-ID från Stripe Dashboard
-const STRIPE_PRICE_ID = "price_1SPKvpLrEazOnLLm28yfGijH";
-
 async function onBuyPdf() {
   if (!state.story) { alert("Skapa förhandsvisning först."); return; }
 
@@ -856,36 +852,47 @@ async function generateCoverAsync() {
   }
 }
 
+async function fetchOrderIdFromSessionId(sessionId) {
+  if (!sessionId) return null;
+  try {
+    const r = await fetch(`${API}/api/checkout/order-id?session_id=${encodeURIComponent(sessionId)}`, { cache: "no-store" });
+    if (!r.ok) return null;
+    const j = await r.json().catch(() => ({}));
+    return j?.order_id || null;
+  } catch { return null; }
+}
+
+
 async function handleStripeReturnIfAny() {
   const u = new URL(location.href);
   const sid = u.searchParams.get("session_id");
 
-  // Kör endast på success-sidan eller om session_id finns i URL
   const looksLikeSuccessPage = /success/i.test(location.pathname) || !!sid;
   if (!looksLikeSuccessPage) return;
 
   try {
     setStatus("🔎 Verifierar betalning…", 96);
 
-    // 1) Snabbvägen: fråga Stripe via backend
+    // 1) Verifiera betalning via backend (Stripe)
+    let paid = false;
     if (sid) {
       const v = await fetch(`${API}/api/checkout/verify?session_id=${encodeURIComponent(sid)}`, { cache: "no-store" });
       if (v.ok) {
         const j = await v.json();
-        if (j?.paid) {
-          setStatus("✅ Betalning bekräftad!", 100);
-          return;
+        paid = !!j?.paid;
+
+        // ⬅️ NYTT: hämta & spara order_id så vi kan polla/visa kvitto även vid refresh
+        if (j?.order_id) saveOrderId(j.order_id);
+        else {
+          const oid = await fetchOrderIdFromSessionId(sid);
+          if (oid) saveOrderId(oid);
         }
       }
     }
 
-    // 2) Fallback: polla KV efter webhook
-    const oid = loadOrderId();
-    if (oid) {
-      const st = await pollOrderPaid(oid);
+    if (paid) {
       setStatus("✅ Betalning bekräftad!", 100);
-
-      // (valfritt) Autogenerera FINAL-PDF från sparat draft
+      // (valfritt) auto-final PDF från sparat draft
       const draftRaw = localStorage.getItem(CHECKOUT_DRAFT_KEY);
       if (draftRaw) {
         try {
@@ -893,17 +900,51 @@ async function handleStripeReturnIfAny() {
           const res = await fetch(`${API}/api/pdf`, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ story: draft.story, images: draft.images, trim: draft.trim || "square210", mode: "final" })
+            body: JSON.stringify({
+              story: draft.story,
+              images: draft.images,
+              trim: draft.trim || "square210",
+              mode: "final"
+            })
           });
           if (res.ok) {
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
-            // Öppna i ny flik så användaren kan ladda ner
             window.open(url, "_blank");
           }
         } catch(e) { console.warn("Auto-final PDF misslyckades:", e); }
       }
+      return;
+    }
 
+    // 2) Fallback: polla KV (webhooken uppdaterar order->paid)
+    const oid = loadOrderId();
+    if (oid) {
+      const st = await pollOrderPaid(oid);
+      setStatus("✅ Betalning bekräftad!", 100);
+
+      // (valfritt) auto-final PDF
+      const draftRaw = localStorage.getItem(CHECKOUT_DRAFT_KEY);
+      if (draftRaw) {
+        try {
+          const draft = JSON.parse(draftRaw);
+          const res = await fetch(`${API}/api/pdf`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              story: draft.story,
+              images: draft.images,
+              trim: draft.trim || "square210",
+              mode: "final"
+            })
+          });
+          if (res.ok) {
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            window.open(url, "_blank");
+          }
+        } catch(e) { console.warn("Auto-final PDF misslyckades:", e); }
+      }
       return;
     }
 
@@ -913,6 +954,7 @@ async function handleStripeReturnIfAny() {
     setStatus("⚠️ Kunde inte verifiera betalning just nu.", 100);
   }
 }
+
 
 /* --------------------------- Events & Init --------------------------- */
 function bindEvents() {
