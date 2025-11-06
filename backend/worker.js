@@ -2080,7 +2080,13 @@ if (req.method === "POST" && url.pathname === "/api/pdf/cover-url") {
 
     const bytes = await buildFinalCoverPdf(env, story, images || []);
     const ts = Date.now();
-    const safeTitle = String(story?.book?.title || "bok").replace/[^\wåäöÅÄÖ\-]+/g, "_");
+   const title = story?.book?.title ?? "bok";
+const safeTitle = title
+  .normalize("NFKD")                               // dela accenter
+  .replace(/[^\p{L}\p{N}-]+/gu, "_")              // behåll bokstäver/siffror/-
+  .replace(/_{2,}/g, "_")                         // komprimera __
+  .replace(/^_|_$/g, "");                         // trimma _
+
     const key = `${safeTitle}_${ts}_COVER.pdf`;
 
     const publicUrl = await r2PutPublic(env, key, bytes);
