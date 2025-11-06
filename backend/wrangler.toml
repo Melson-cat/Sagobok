@@ -15,3 +15,7 @@ CANCEL_URL  = "https://sagobok.pages.dev/"
 [[kv_namespaces]]
 binding = "ORDERS"
 id = "0e26ac0291c741708ba2b02394b163db"
+
+[[r2_buckets]]
+binding = "PDF_R2"
+bucket_name = "bokpiloten-pdfs"

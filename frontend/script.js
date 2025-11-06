@@ -18,8 +18,11 @@ const POLL_TIMEOUT_MS  = 120000;
 // Cover-strategi: "skip" = generera inte omslag alls, "async" = generera i bakgrunden (rekommenderas)
 const COVER_STRATEGY = "async";
 
-// Fast antal story-sidor (ger 32-sidors bok: framsida + 30 blad + baksida)
+// Fast antal story-sidor 
 const STORY_PAGES = 14;
+
+const HAS_PRINT_PDF_ENDPOINTS = true; // sätt till false om /api/pdf/interior /api/pdf/cover inte är på plats
+
 
 /* --------------------------- Elements --------------------------- */
 const els = {
@@ -536,6 +539,11 @@ async function onBuyPrint() {
   try {
     if (!state.story) { alert("Skapa förhandsvisning först."); return; }
 
+    if (!HAS_PRINT_PDF_ENDPOINTS) {
+      alert("Tryck-PDF är inte aktiverad ännu.");
+      return;
+    }
+
     // 1) Bygg FINAL inlaga + omslag – här antar vi att du redan kan göra final-PDF.
     //    Du har idag /api/pdf “final”; men för Gelato krävs SEPARAT omslag.pdf och inlaga.pdf.
     //    Om du inte hunnit: kalla din nuvarande final-PDF "interior" och gör en snabb cover-builder,
@@ -804,6 +812,10 @@ const items = [];
 for (const p of pages) {
   const row = state.images_by_page.get(p.page);
   if (!row) continue;
+
+  // SKIPPA om redan uppladdad (vi laddade ev. upp per sida tidigare)
+  if (row.image_id) continue;
+
   const du = row.data_url || (row.image_url ? await urlToDataURL(row.image_url) : null);
   if (du) items.push({ page: p.page, data_url: du });
 }
@@ -812,6 +824,7 @@ if (items.length) {
   const uploads = await uploadToCF(items);
   const byPage = new Map();
   for (const u of uploads) if (Number.isFinite(u.page)) byPage.set(u.page, u);
+
   for (const p of pages) {
     const u = byPage.get(p.page);
     if (u?.image_id) {
@@ -821,24 +834,9 @@ if (items.length) {
   }
 }
 
-// 5.5) Catch-up: om omslaget redan kom men inte hunnit till CF → ladda upp nu
-if (state.cover_preview_url && !state.cover_image_id) {
-  const duCover = await urlToDataURL(state.cover_preview_url);
-  if (duCover) {
-    const ups = await uploadToCF([{ kind: "cover", data_url: duCover }]).catch(() => []);
-    const uc = ups?.find(x => x.kind === "cover" || x.page === 0);
-    if (uc?.image_id) {
-      state.cover_image_id = uc.image_id;
-      state.cover_preview_url = uc.url || state.cover_preview_url;
-      await fillCard(0, state.cover_preview_url, "CF");
-    }
-  }
-}
-
 
     stopQuips();
-    URL.revokeObjectURL(state.previewUrl || "");
-state.previewUrl = null;
+  
 
     setStatus("✅ Klart! Förhandsvisning redo.", 100);
     els.pdfBtn && (els.pdfBtn.disabled = false);
@@ -977,17 +975,18 @@ async function handleStripeReturnIfAny() {
         const j = await v.json();
         paid = !!j?.paid;
 
-        // ⬅️ NYTT: hämta & spara order_id så vi kan polla/visa kvitto även vid refresh
+        // hämta & spara order_id så vi kan polla/visa kvitto även vid refresh
         if (j?.order_id) saveOrderId(j.order_id);
         else {
-          const oid = await fetchOrderIdFromSessionId(sid);
-          if (oid) saveOrderId(oid);
+          const oidGuess = await fetchOrderIdFromSessionId(sid);
+          if (oidGuess) saveOrderId(oidGuess);
         }
       }
     }
 
     if (paid) {
       setStatus("✅ Betalning bekräftad!", 100);
+
       // (valfritt) auto-final PDF från sparat draft
       const draftRaw = localStorage.getItem(CHECKOUT_DRAFT_KEY);
       if (draftRaw) {
@@ -1008,48 +1007,57 @@ async function handleStripeReturnIfAny() {
             const url = URL.createObjectURL(blob);
             window.open(url, "_blank");
           }
-        } catch(e) { console.warn("Auto-final PDF misslyckades:", e); }
+        } catch (e) {
+          console.warn("Auto-final PDF misslyckades:", e);
+        }
       }
-      return;
+      return; // klart
     }
 
     // 2) Fallback: polla KV (webhooken uppdaterar order->paid)
     const oid = loadOrderId();
     if (oid) {
       const st = await pollOrderPaid(oid);
-      setStatus("✅ Betalning bekräftad!", 100);
+      if (st?.status === "paid") {
+        setStatus("✅ Betalning bekräftad!", 100);
 
-      // (valfritt) auto-final PDF
-      const draftRaw = localStorage.getItem(CHECKOUT_DRAFT_KEY);
-      if (draftRaw) {
-        try {
-          const draft = JSON.parse(draftRaw);
-          const res = await fetch(`${API}/api/pdf`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              story: draft.story,
-              images: draft.images,
-              trim: draft.trim || "square210",
-              mode: "final"
-            })
-          });
-          if (res.ok) {
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            window.open(url, "_blank");
+        // (valfritt) auto-final PDF från sparat draft
+        const draftRaw = localStorage.getItem(CHECKOUT_DRAFT_KEY);
+        if (draftRaw) {
+          try {
+            const draft = JSON.parse(draftRaw);
+            const res = await fetch(`${API}/api/pdf`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                story: draft.story,
+                images: draft.images,
+                trim: draft.trim || "square210",
+                mode: "final"
+              })
+            });
+            if (res.ok) {
+              const blob = await res.blob();
+              const url = URL.createObjectURL(blob);
+              window.open(url, "_blank");
+            }
+          } catch (e) {
+            console.warn("Auto-final PDF misslyckades:", e);
           }
-        } catch(e) { console.warn("Auto-final PDF misslyckades:", e); }
+        }
+        return; // klart
       }
-      return;
     }
 
+    // 3) Varken verify eller KV sa paid
     setStatus("ℹ️ Betalning ej verifierad ännu.", 100);
+
   } catch (e) {
     console.warn(e);
     setStatus("⚠️ Kunde inte verifiera betalning just nu.", 100);
   }
 }
+
 
 
 /* --------------------------- Events & Init --------------------------- */

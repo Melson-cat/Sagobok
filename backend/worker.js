@@ -1,11 +1,11 @@
 // ============================================================================
-// BokPiloten – Worker v28 "Smart Wardrobe (Kids Only) + Pet Anatomy Guard + Cover Fallback"
-// Endpoints: story, ref-image, images, image/regenerate, images/upload, cover, pdf, diag
-// Env: API_KEY, GEMINI_API_KEY, IMAGES_API_TOKEN, CF_ACCOUNT_ID,
-//      CF_IMAGES_ACCOUNT_HASH, CF_IMAGES_VARIANT, FONT_BASE_URL
+// BokPiloten – Worker v29 
+// Endpoints: 
 // ============================================================================
 import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
+
+
 
 // Stripe minimal client (fetch-baserad)
 
@@ -249,6 +249,50 @@ async function handleStripeWebhook(req, env) {
   }
 }
 
+// ---------- R2 helpers (PDF) ----------
+async function r2PutPublic(env, key, bytes, contentType = "application/pdf") {
+  if (!env.PDF_BUCKET) throw new Error("PDF_BUCKET not bound");
+  if (!env.PDF_PUBLIC_BASE) throw new Error("PDF_PUBLIC_BASE missing");
+  await env.PDF_BUCKET.put(key, bytes, {
+    httpMetadata: { contentType }
+  });
+  const base = env.PDF_PUBLIC_BASE.replace(/\/+$/, "");
+  return `${base}/${encodeURIComponent(key)}`;
+}
+
+// ---------- PDF split helpers ----------
+async function buildFinalInteriorPdf(env, story, images) {
+  // Bygg "full" PDF först med din befintliga motor (print-läge och bleed om du vill)
+  const fullBytes = await buildPdf({ story, images, mode: "print" }, env, null);
+  const src = await PDFDocument.load(fullBytes);
+  const out = await PDFDocument.create();
+
+  const total = src.getPageCount();
+  // Din nuvarande buildPdf-order:
+  // 0: front cover
+  // 1: title page
+  // 2..(2+28-1): 14× (bild vänster + text höger) => 28 sidor
+  // 30: "slut"-sida
+  // 31: back cover
+  // => interior = sidor 1..(total-2) (dvs ALLT utom första (omslag) och sista (baksida))
+  const first = 1;
+  const last = total - 2;
+  if (last <= first) throw new Error("PDF structure unexpected for interior split");
+
+  const pages = await out.copyPages(src, Array.from({ length: last - first + 1 }, (_, i) => i + first));
+  pages.forEach(p => out.addPage(p));
+  return await out.save();
+}
+
+async function buildFinalCoverPdf(env, story, images) {
+  // Bygg "full" PDF och plocka bara första sidan (framsidan)
+  const fullBytes = await buildPdf({ story, images, mode: "print" }, env, null);
+  const src = await PDFDocument.load(fullBytes);
+  const out = await PDFDocument.create();
+  const [cover] = await out.copyPages(src, [0]); // första sidan = front cover
+  out.addPage(cover);
+  return await out.save();
+}
 
 /* --------------------- OpenAI JSON-only helper ----------------------- */
 async function openaiJSON(env, system, user) {
@@ -1277,6 +1321,8 @@ async function handleUploadRequest(req, env) {
   }
 }
 
+
+
 /* --------------------------- /api/pdf -------------------------------- */
 async function handlePdfRequest(req, env) {
   const url = new URL(req.url);
@@ -1789,6 +1835,28 @@ if (req.method === "POST" && url.pathname === "/api/images/next") {
   }
 }
 
+function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
+  const mc = bible?.main_character || {};
+  const name = mc.name || "Hero";
+  const age  = mc.age  || 5;
+  const physique = mc.physique || "";
+  const identity = Array.isArray(mc.identity_keys) ? mc.identity_keys.join(", ") : "";
+
+  const styleGuardText = styleGuard(style);
+
+  return [
+    styleGuardText,
+    "Create a square (1:1) **character reference card** for the main hero.",
+    `Name: ${name}. Age: ≈${age} (child proportions if human).`,
+    physique ? `Physique: ${physique}.` : "",
+    identity ? `Personality: ${identity}.` : "",
+    traits ? `Extra traits: ${traits}.` : "",
+    "Neutral, even lighting. Plain, uncluttered background.",
+    "Show full body front-facing + a clear look at the face.",
+    "This image will be used as the identity reference for all later illustrations.",
+    "No text or logos in the image."
+  ].filter(Boolean).join("\n");
+}
 
 
       // Regenerate single image
@@ -1980,6 +2048,45 @@ if (req.method === "POST" && url.pathname === "/api/gelato/order") {
     return ok({ ok: true, order: created });
   } catch (e) {
     return err(e.message || "gelato order failed", 500, { where: "gelato.orders.create" });
+  }
+}
+
+// POST /api/pdf/interior-url
+// body: { story, images }
+if (req.method === "POST" && url.pathname === "/api/pdf/interior-url") {
+  try {
+    const { story, images } = await req.json().catch(() => ({}));
+    if (!story?.book?.pages) return err("Missing story", 400);
+
+    const bytes = await buildFinalInteriorPdf(env, story, images || []);
+    const ts = Date.now();
+    const safeTitle = String(story?.book?.title || "bok").replace(/[^\wåäöÅÄÖ\-]+/g, "_");
+
+    const key = `${safeTitle}_${ts}_INTERIOR.pdf`;
+
+    const publicUrl = await r2PutPublic(env, key, bytes);
+    return ok({ url: publicUrl, key });
+  } catch (e) {
+    return err(e?.message || "interior-url failed", 500);
+  }
+}
+
+// POST /api/pdf/cover-url
+// body: { story, images }
+if (req.method === "POST" && url.pathname === "/api/pdf/cover-url") {
+  try {
+    const { story, images } = await req.json().catch(() => ({}));
+    if (!story?.book?.pages) return err("Missing story", 400);
+
+    const bytes = await buildFinalCoverPdf(env, story, images || []);
+    const ts = Date.now();
+    const safeTitle = String(story?.book?.title || "bok").replace/[^\wåäöÅÄÖ\-]+/g, "_");
+    const key = `${safeTitle}_${ts}_COVER.pdf`;
+
+    const publicUrl = await r2PutPublic(env, key, bytes);
+    return ok({ url: publicUrl, key });
+  } catch (e) {
+    return err(e?.message || "cover-url failed", 500);
   }
 }
 
