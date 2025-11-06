@@ -983,10 +983,7 @@ async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
   return await pdfDoc.embedFont(standardName);
 }
 /* ---------------------------- Build PDF ------------------------------ */
-async function buildPdf(
-  { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text, part = "full" },
-   env, trace
-) {
+async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }, env, trace) {
   tr(trace, "pdf:start");
   const trimSpec = TRIMS[trim] || TRIMS.square210;
   const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
@@ -1053,8 +1050,8 @@ async function buildPdf(
   const scenePages = mapTo14ScenePages();
   tr(trace, "pdf:scene-pages", { count: scenePages.length });
 
-  /* -------- FRONT COVER (valbar) -------- */
-  if (part === "full" || part === "cover") try {
+  /* -------- FRONT COVER -------- */
+  try {
     const coverPage = pdfDoc.addPage([pageW, pageH]);
     if (!coverSrc) coverSrc = imgByPage.get(1) || null;
 
@@ -1128,7 +1125,7 @@ async function buildPdf(
   }
 
   /* -------- TITELSIDA (efter omslag) -------- */
-if (part === "full") try {
+try {
   const titlePage = pdfDoc.addPage([pageW, pageH]);
   titlePage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.98, 0.99, 1) });
   const cx = contentX + trimWpt / 2;
@@ -1172,9 +1169,8 @@ if (part === "full") try {
 
 
   /* -------- 14 uppslag: bild vänster, text höger + vine -------- */
-if (part === "full" || part === "interior") {
-    const outer = mmToPt(GRID.outer_mm);
-   for (let i = 0; i < 14; i++) {
+  const outer = mmToPt(GRID.outer_mm);
+  for (let i = 0; i < 14; i++) {
     const scene = scenePages[i] || {};
     const mainText = String(scene.text || "").trim();
 
@@ -1216,7 +1212,7 @@ if (part === "full" || part === "interior") {
   }
 
   /* -------- SLUT -------- */
-  if (part === "full") {
+  {
     const page = pdfDoc.addPage([pageW, pageH]);
     page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
 
@@ -1235,8 +1231,7 @@ if (part === "full" || part === "interior") {
   }
 
   /* -------- BACK COVER -------- */
- /* -------- BACK COVER (valbar) -------- */
-if (part === "full") try {
+  try {
     const page = pdfDoc.addPage([pageW, pageH]);
     const bg = rgb(0.58, 0.54, 0.86);
     page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: bg });
@@ -1322,48 +1317,6 @@ async function handlePdfRequest(req, env) {
   }
 }
 
-async function handlePdfPartRequest(req, env, part) {
-  const url = new URL(req.url);
-  const debug = url.searchParams.get("debug") === "1";
-  const trace = traceStart();
-  const reqId = req.headers.get("cf-ray") || crypto.randomUUID();
-
-  try {
-    const body = await req.json().catch(() => ({}));
-    const { story, images, mode = "print", trim = "square210", bleed_mm, watermark_text } = body || {};
-    if (!story || !Array.isArray(story?.book?.pages)) {
-      return new Response(JSON.stringify({ error: "Missing story" }), {
-        status: 400,
-        headers: { ...JSON_HEADERS, "x-request-id": reqId },
-      });
-    }
-
-    const bytes = await buildPdf(
-      { story, images: images || [], mode, trim, bleed_mm, watermark_text, part },
-      env, trace
-    );
-    const baseTitle = String(story?.book?.title || "BokPiloten").replace(/[^\wåäöÅÄÖ\-]+/g, "_");
-    const filename =
-      part === "cover"    ? `${baseTitle}_COVER.pdf` :
-      part === "interior" ? `${baseTitle}_INTERIOR.pdf` :
-                            `${baseTitle}.pdf`;
-
-    const headers = new Headers({
-      "content-type": "application/pdf",
-      "content-disposition": `inline; filename="${filename}"`,
-      "x-request-id": reqId,
-      ...CORS,
-    });
-    return new Response(bytes, { status: 200, headers });
-  } catch (e) {
-    const body = debug
-      ? JSON.stringify({ error: e?.message || String(e), trace }, null, 2)
-      : JSON.stringify({ error: "PDF failed" });
-    return new Response(body, { status: 500, headers: { "content-type": "application/json", "x-request-id": reqId, ...CORS } });
-  }
-}
-
-
 /* --------------------------- /api/diag ------------------------------- */
 async function handleDiagRequest(_req, env) {
   const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(/\/+$/, "");
@@ -1381,120 +1334,108 @@ async function handleDiagRequest(_req, env) {
 }
 
 /* --------------------------- Story endpoints ------------------------- */
-/* --------------------------- API Router (clean) --------------------------- */
 export default {
   async fetch(req, env) {
     try {
-      // CORS preflight
-      if (req.method === "OPTIONS") {
-        return new Response(null, { status: 204, headers: CORS });
-      }
-
+      if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
       const url = new URL(req.url);
-      const { pathname, searchParams } = url;
 
-      /* ---------- Health ---------- */
-      if (req.method === "GET" && pathname === "/") {
-        return ok({ ok: true, ts: Date.now() });
-      }
+      // Health
+      if (req.method === "GET" && url.pathname === "/") return ok({ ok: true, ts: Date.now() });
 
-      /* ---------- Diag ---------- */
-      if (req.method === "GET" && pathname === "/api/diag") {
-        return handleDiagRequest(req, env);
-      }
+      // Diag
+      if (req.method === "GET" && url.pathname === "/api/diag") return handleDiagRequest(req, env);
 
-      /* ---------- Orders (KV) ---------- */
-      // Create draft order -> { order_id }
-      if (req.method === "POST" && pathname === "/api/orders/draft") {
-        try {
-          const body = await req.json().catch(() => ({}));
-          const order = newOrder(body?.draft);
-          await kvPutOrder(env, order);
-          return ok({ order_id: order.id });
-        } catch (e) {
-          return err(e?.message || "order draft failed", 500);
-        }
-      }
+      // Create draft order (returns {order_id})
+if (req.method === "POST" && url.pathname === "/api/orders/draft") {
+  try {
+    const body = await req.json().catch(() => ({}));
+    const order = newOrder(body?.draft);
+    await kvPutOrder(env, order);
+    return ok({ order_id: order.id });
+  } catch (e) {
+    return err(e?.message || "order draft failed", 500);
+  }
+}
 
-      // Read order status
-      if (req.method === "GET" && pathname === "/api/orders/status") {
-        const id = searchParams.get("id");
-        const data = id ? await kvGetOrder(env, id) : null;
-        if (!data) return err("Not found", 404);
-        return ok(data);
-      }
+// Read order status
+if (req.method === "GET" && url.pathname === "/api/orders/status") {
+  const id = url.searchParams.get("id");
+  const data = await kvGetOrder(env, id);
+  if (!data) return err("Not found", 404);
+  return ok(data);
+}
 
-      /* ---------- Checkout (Stripe) ---------- */
-      // Ping (diag)
-      if (req.method === "GET" && pathname === "/api/checkout/ping") {
-        return ok({
-          has_secret: !!env.STRIPE_SECRET_KEY,
-          frontend_origin: env.FRONTEND_ORIGIN,
-          success_url: env.SUCCESS_URL,
-          cancel_url: env.CANCEL_URL,
-        });
-      }
+// Checkout diag
+if (req.method === "GET" && url.pathname === "/api/checkout/ping") {
+  return ok({
+    has_secret: !!env.STRIPE_SECRET_KEY,
+    frontend_origin: env.FRONTEND_ORIGIN,
+    success_url: env.SUCCESS_URL,
+    cancel_url: env.CANCEL_URL,
+  });
+}
 
-      // Price lookup
-      if (req.method === "GET" && pathname === "/api/checkout/price") {
-        try {
-          const id = searchParams.get("id");
-          if (!id) return err("Missing id", 400, { where: "stripe.prices.get" });
-          const p = await stripe(env, `prices/${encodeURIComponent(id)}`, { method: "GET" });
-          return ok({
-            id: p.id,
-            currency: p.currency,
-            active: p.active,
-            product: typeof p.product === "string" ? p.product : p.product?.id,
-            unit_amount: p.unit_amount,
-          });
-        } catch (e) {
-          return err(e?.message || "price lookup failed", 500, { where: "stripe.prices.get" });
-        }
-      }
+// Pris-lookup
+if (req.method === "GET" && url.pathname === "/api/checkout/price") {
+  try {
+    const id = new URL(req.url).searchParams.get("id");
+    if (!id) return err("Missing id", 400, { where: "stripe.prices.get" });
+    const p = await stripe(env, `prices/${encodeURIComponent(id)}`, { method: "GET" });
+    return ok({
+      id: p.id,
+      currency: p.currency,
+      active: p.active,
+      product: typeof p.product === "string" ? p.product : p.product?.id,
+      unit_amount: p.unit_amount,
+    });
+  } catch (e) {
+    return err(e.message || "price lookup failed", 500, { where: "stripe.prices.get" });
+  }
+}
 
-      // Create checkout session (digital PDF)
-      if (req.method === "POST" && pathname === "/api/checkout/pdf") {
-        try {
-          return await handleCheckoutPdf(req, env);
-        } catch (e) {
-          return err(e?.message || "checkout create failed", 500, { where: "handleCheckoutPdf" });
-        }
-      }
+// Skapa checkout-session (DIGITAL PDF)
+if (req.method === "POST" && url.pathname === "/api/checkout/pdf") {
+  try { return await handleCheckoutPdf(req, env); }
+  catch (e) { return err(e?.message || "checkout create failed", 500, { where: "handleCheckoutPdf" }); }
+}
 
-      // Verify checkout session
-      if (req.method === "GET" && pathname === "/api/checkout/verify") {
-        try {
-          return await handleCheckoutVerify(req, env);
-        } catch (e) {
-          return err(e?.message || "checkout verify failed", 500, { where: "handleCheckoutVerify" });
-        }
-      }
+// Verifiera checkout
+if (req.method === "GET" && url.pathname === "/api/checkout/verify") {
+  try { return await handleCheckoutVerify(req, env); }
+  catch (e) { return err(e?.message || "checkout verify failed", 500, { where: "handleCheckoutVerify" }); }
+}
 
-      // Stripe webhook (POST)
-      if (req.method === "POST" && pathname === "/api/stripe/webhook") {
-        return handleStripeWebhook(req, env);
-      }
+// Stripe webhook – måste vara POST
+if (req.method === "POST" && url.pathname === "/api/stripe/webhook") {
+  return handleStripeWebhook(req, env);
+}
 
-      // Resolve order_id from session (KV first, Stripe fallback)
-      if (req.method === "GET" && pathname === "/api/checkout/order-id") {
-        try {
-          const sid = searchParams.get("session_id");
-          if (!sid) return err("Missing session_id", 400);
-          // Fast path: KV
-          const kvOid = await kvGetOrderFromSession(env, sid);
-          if (kvOid) return ok({ order_id: kvOid, source: "kv" });
-          // Fallback: Stripe
-          const session = await stripe(env, `checkout/sessions/${encodeURIComponent(sid)}`, { method: "GET" });
-          const order_id = session.metadata?.order_id || null;
-          return ok({ order_id, source: "stripe" });
-        } catch (e) {
-          return err(e?.message || "order-id lookup failed", 500, { where: "stripe.checkout.sessions.get" });
-        }
-      }
+// Hämta order_id från session (KV först, Stripe fallback)
+if (req.method === "GET" && url.pathname === "/api/checkout/order-id") {
+  try {
+    const urlObj = new URL(req.url);
+    const sid = urlObj.searchParams.get("session_id");
+    if (!sid) return err("Missing session_id", 400);
 
-      /* ---------- Story ---------- */
-      if (req.method === "POST" && pathname === "/api/story") {
+    // 1) KV-fast path
+    const kvOid = await kvGetOrderFromSession(env, sid);
+    if (kvOid) return ok({ order_id: kvOid, source: "kv" });
+
+    // 2) Fallback: fråga Stripe
+    const session = await stripe(env, `checkout/sessions/${encodeURIComponent(sid)}`, { method: "GET" });
+    const order_id = session.metadata?.order_id || null;
+
+    return ok({ order_id, source: "stripe" });
+  } catch (e) {
+    return err(e?.message || "order-id lookup failed", 500, { where: "stripe.checkout.sessions.get" });
+  }
+}
+
+
+
+      // Story
+      if (req.method === "POST" && url.pathname === "/api/story") {
         try {
           const body = await req.json().catch(() => ({}));
           const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
@@ -1514,7 +1455,7 @@ Returnera enbart json.`.trim();
 
           const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
 
-          const storyUser = `
+      const storyUser = `
 OUTLINE:
 ${JSON.stringify(outline)}
 Skriv en engagerande, händelserik saga som är rolig att läsa högt.
@@ -1524,203 +1465,334 @@ Läsålder: ${targetAge}. **Sidor: 14**. Stil: ${style || "cartoon"}. Kategori: 
 Returnera enbart JSON i exakt formatet.
 `.trim();
 
-          const story = await openaiJSON(env, STORY_SYS, storyUser);
 
-          // Fallback: fyll scene_en om saknas
-          try {
-            const pgs = Array.isArray(story?.book?.pages) ? story.book.pages : [];
-            const needs = pgs.some(p => !p.scene_en || !String(p.scene_en).trim());
-            if (needs && pgs.length) {
-              const toTranslate = pgs.map(p => ({ page: p.page, sv: p.scene || p.text || "" }));
-              const tprompt = `
+        const story = await openaiJSON(env, STORY_SYS, storyUser);
+
+
+// Fallback: om storyn skulle sakna scene_en (bakåtkomp eller modellglitch)
+try {
+  const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
+  const needs = pages.some(p => !p.scene_en || !String(p.scene_en).trim());
+  if (needs && pages.length) {
+    const toTranslate = pages.map(p => ({ page: p.page, sv: p.scene || p.text || "" }));
+    const tprompt = `
 Översätt följande scenangivelser till **kort** engelsk, visuell beskrivning (1–2 meningar, inga repliker).
 Returnera exakt: { "items":[{"page":number,"scene_en":string}, ...] } och inget mer.
 SVENSKA:
 ${JSON.stringify(toTranslate)}
 `.trim();
-              const t = await openaiJSON(
-                env,
-                "Du är en saklig översättare. Returnera endast giltig JSON.",
-                tprompt
-              );
-              const map = new Map((t?.items || []).map(x => [x.page, x.scene_en]));
-              story.book.pages = pgs.map(p => ({ ...p, scene_en: p.scene_en || map.get(p.page) || "" }));
-            }
-          } catch { /* ignore */ }
+    const t = await openaiJSON(env,
+      "Du är en saklig översättare. Returnera endast giltig JSON.",
+      tprompt
+    );
+    const map = new Map((t?.items || []).map(x => [x.page, x.scene_en]));
+    story.book.pages = pages.map(p => ({ ...p, scene_en: p.scene_en || map.get(p.page) || "" }));
+  }
+} catch { /* ignore graceful */ }
 
-          // Kamerahints → plan
-          const camHints = await getCameraHints(env, story);
-          const plan = normalizePlan(story?.book?.pages || [], camHints.shots);
+// ⬇️ NYTT: hämta kamerahints och bygg plan med hints
+const camHints = await getCameraHints(env, story);
+const plan = normalizePlan(story?.book?.pages || [], camHints.shots);
 
-          const coherence_code = makeCoherenceCode(story);
-          const wardrobe_signature = deriveWardrobeSignature(story);
+const coherence_code = makeCoherenceCode(story);
+const wardrobe_signature = deriveWardrobeSignature(story);
 
-          return ok({ outline, story, plan, coherence_code, wardrobe_signature });
+return ok({ outline, story, plan, coherence_code, wardrobe_signature });
+
+
         } catch (e) {
           return err(e?.message || "Story generation failed", 500);
         }
       }
 
-      /* ---------- Ref image ---------- */
-      if (req.method === "POST" && pathname === "/api/ref-image") {
+ // Ref image (v27-kompatibel, enkel prompt, platt payload)
+if (req.method === "POST" && url.pathname === "/api/ref-image") {
+  try {
+    const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
+
+    // Client-supplied photo wins
+    if (photo_b64) {
+      const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
+      if (b64.length > 64) return ok({ ref_image_b64: b64, provider: "client" });
+      return err("Provided photo_b64 looked invalid", 400);
+    }
+
+    // Minimal, robust prompt – exakt som v27
+    const prompt = characterCardPrompt({ style, bible, traits });
+
+    // Anropa Gemini utan extra parts
+    const g = await geminiImage(env, { prompt }, 70000, 2);
+    if (g?.b64) return ok({ ref_image_b64: g.b64, provider: g.provider || "google" });
+
+    // Tillbaka-kompatibelt svar (frontend hanterar null)
+    return ok({ ref_image_b64: null });
+  } catch (e) {
+    return err(e?.message || "Ref generation failed", 500);
+  }
+}
+
+// Generate interior images (plural endpoint expected by frontend)
+if (req.method === "POST" && url.pathname === "/api/images") {
+  try {
+    const {
+      style = "cartoon",
+      ref_image_b64,
+      story,
+      plan,
+      concurrency = 4,
+      pages_subset,
+      style_refs_b64,
+      coherence_code,
+      guidance, // optional
+    } = await req.json().catch(() => ({}));
+
+    const allPages = story?.book?.pages || [];
+    const pagesArr = Array.isArray(pages_subset) && pages_subset.length
+      ? allPages.filter((p) => pages_subset.includes(p.page))
+      : allPages;
+
+    if (!pagesArr.length) return err("No pages", 400);
+    if (!ref_image_b64)  return err("Missing reference image", 400);
+
+    const frames = plan?.plan || [];
+    const pageCount = pagesArr.length;
+    const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
+
+    const jobs = pagesArr.map((pg) => {
+      const f = frames.find((x) => x.page === pg.page) || {};
+      const prompt = buildFramePrompt({
+        style,
+        story,
+        page: pg,
+        pageCount,
+        frame: f,
+        characterName: heroName,
+        wardrobe_signature: deriveWardrobeSignature(story),
+        coherence_code: coherence_code || makeCoherenceCode(story),
+      });
+      return { page: pg.page, prompt };
+    });
+
+    const out = [];
+    const CONC = Math.min(Math.max(parseInt(concurrency || 3, 10), 1), 8);
+    let idx = 0;
+
+    async function worker() {
+      while (idx < jobs.length) {
+        const i = idx++;
+        const item = jobs[i];
         try {
-          const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
-          if (photo_b64) {
-            const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
-            if (b64.length > 64) return ok({ ref_image_b64: b64, provider: "client" });
-            return err("Provided photo_b64 looked invalid", 400);
-          }
-          const prompt = characterCardPrompt({ style, bible, traits });
-          const g = await geminiImage(env, { prompt }, 70000, 2);
-          if (g?.b64) return ok({ ref_image_b64: g.b64, provider: g.provider || "google" });
-          return ok({ ref_image_b64: null }); // frontend hanterar null
-        } catch (e) {
-          return err(e?.message || "Ref generation failed", 500);
-        }
-      }
-
-      /* ---------- Images (batch) ---------- */
-      if (req.method === "POST" && pathname === "/api/images") {
-        try {
-          const {
-            style = "cartoon",
-            ref_image_b64,
-            story,
-            plan,
-            concurrency = 4,
-            pages_subset,
-            style_refs_b64,
-            coherence_code,
-            guidance,
-          } = await req.json().catch(() => ({}));
-
-          const allPages = story?.book?.pages || [];
-          const pagesArr = Array.isArray(pages_subset) && pages_subset.length
-            ? allPages.filter((p) => pages_subset.includes(p.page))
-            : allPages;
-
-          if (!pagesArr.length) return err("No pages", 400);
-          if (!ref_image_b64)  return err("Missing reference image", 400);
-
-          const frames = plan?.plan || [];
-          const pageCount = pagesArr.length;
-          const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
-
-          const jobs = pagesArr.map((pg) => {
-            const f = frames.find((x) => x.page === pg.page) || {};
-            const prompt = buildFramePrompt({
-              style,
-              story,
-              page: pg,
-              pageCount,
-              frame: f,
-              characterName: heroName,
-              wardrobe_signature: deriveWardrobeSignature(story),
-              coherence_code: coherence_code || makeCoherenceCode(story),
-            });
-            return { page: pg.page, prompt };
-          });
-
-          const out = [];
-          const CONC = Math.min(Math.max(parseInt(concurrency || 3, 10), 1), 8);
-          let idx = 0;
-
-          async function worker() {
-            while (idx < jobs.length) {
-              const i = idx++;
-              const item = jobs[i];
-              try {
-                const payload = {
-                  prompt: item.prompt,
-                  character_ref_b64: ref_image_b64,
-                };
-                if (Array.isArray(style_refs_b64) && style_refs_b64.length) payload.style_refs_b64 = style_refs_b64;
-                if (coherence_code) payload.coherence_code = coherence_code;
-                if (guidance) payload.guidance = guidance;
-
-                const g = await geminiImage(env, payload, 75000, 3);
-                out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
-              } catch (e) {
-                out.push({ page: item.page, error: String(e?.message || e) });
-              }
-            }
-          }
-
-          await Promise.all(Array.from({ length: CONC }, worker));
-          out.sort((a, b) => (a.page || 0) - (b.page || 0));
-          return ok({ images: out });
-        } catch (e) {
-          return err(e?.message || "Images generation failed", 500);
-        }
-      }
-
-      /* ---------- Images (sequential/next) ---------- */
-      if (req.method === "POST" && pathname === "/api/images/next") {
-        try {
-          const {
-            style = "cartoon",
-            story,
-            plan,
-            page,
-            ref_image_b64,
-            prev_b64,
-            coherence_code,
-            style_refs_b64,
-          } = await req.json().catch(() => ({}));
-
-          if (!story?.book?.pages) return err("Missing story.pages", 400);
-          const pg = story.book.pages.find(p => p.page === page);
-          if (!pg) return err(`Page ${page} not found`, 404);
-          if (!ref_image_b64) return err("Missing ref_image_b64", 400);
-
-          const frames = (plan?.plan || []);
-          const frame  = frames.find(f => f.page === page) || {};
-          const pageCount = story.book.pages.length;
-          const heroName  = story.book.bible?.main_character?.name || "Hero";
-          const sceneEN = pg.scene_en || pg.scene || pg.text || "";
-
-          const continuation = [
-            "This illustration continues directly from the previous scene.",
-            "Use the previous image only as a visual guide for style, lighting, and character identity.",
-            "Do not replicate it exactly — imagine this as the same story world seen from a new camera angle or moment.",
-            "Keep the main character fully consistent (face, hair, hairstyle/length, outfit and its base color, proportions).",
-            "Preserve the overall tone and lighting continuity inspired by the previous scene.",
-            "Now illustrate this new scene based on the description below:"
-          ].join(" ");
-
-          const prompt = [
-            styleGuard(style),
-            `Use the exact same main character as in the reference (${heroName}). Keep hair color and length identical. Do not change age/proportions. Do not add extra limbs.`,
-            deriveWardrobeSignature(story)
-              ? `WARDROBE: ${deriveWardrobeSignature(story)}. Keep outfit and base color identical on every page.`
-              : "",
-            `This is page ${pg.page} of ${pageCount}. Keep the same global style across all pages.`,
-            `COHERENCE_CODE:${coherence_code || makeCoherenceCode(story)}`,
-            continuation,
-            `SCENE (EN): ${sceneEN}`,
-            `SHOT: ${shotLine(frame)}.`,
-            "Square composition (1:1).",
-            "DO NOT reuse the exact same pose/composition from the previous image."
-          ].filter(Boolean).join("\n");
-
           const payload = {
-            prompt,
+            prompt: item.prompt,
             character_ref_b64: ref_image_b64,
-            prev_b64,
-            coherence_code: coherence_code || makeCoherenceCode(story),
           };
           if (Array.isArray(style_refs_b64) && style_refs_b64.length) payload.style_refs_b64 = style_refs_b64;
+          if (coherence_code) payload.coherence_code = coherence_code;
+          if (guidance) payload.guidance = guidance;
 
           const g = await geminiImage(env, payload, 75000, 3);
-          if (!g?.image_url) return err("No image from Gemini", 502);
-          return ok({ page, image_url: g.image_url, provider: g.provider || "google", prompt });
+          out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
         } catch (e) {
-          return err(e?.message || "images/next failed", 500);
+          out.push({ page: item.page, error: String(e?.message || e) });
         }
       }
+    }
 
-      /* ---------- Image regenerate (single) ---------- */
-      if (req.method === "POST" && pathname === "/api/image/regenerate") {
+    await Promise.all(Array.from({ length: CONC }, worker));
+    out.sort((a, b) => (a.page || 0) - (b.page || 0));
+    return ok({ images: out });
+  } catch (e) {
+    return err(e?.message || "Images generation failed", 500);
+  }
+}
+
+async function handleCheckoutPdf(req, env) {
+  try {
+    // === Guard/diag (för att slippa "undefined put/get") ===
+    if (!env.ORDERS) return err("ORDERS KV not bound", 500, { where: "handleCheckoutPdf" });
+    if (!env.STRIPE_SECRET_KEY) return err("STRIPE_SECRET_KEY missing", 500, { where: "handleCheckoutPdf" });
+
+    const { price_id, customer_email, order_id, draft } = await req.json().catch(()=> ({}));
+    if (!price_id) return err("Missing price_id", 400, { where: "handleCheckoutPdf" });
+
+    // 1) Säkerställ order i KV
+    let oid = order_id;
+    if (oid) {
+      const ex = await kvGetOrder(env, oid);
+      if (!ex) {
+        const o = newOrder(draft);
+        o.id = oid;
+        await kvPutOrder(env, o);
+      }
+    } else {
+      const o = newOrder(draft);
+      await kvPutOrder(env, o);
+      oid = o.id;
+    }
+
+    // 2) Bygg Stripe checkout (metadata.order_id är kritiskt)
+    const FRONTEND_ORIGIN = env.FRONTEND_ORIGIN || "https://example.com";
+    const success = (env.SUCCESS_URL || `${FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
+    const cancel  = env.CANCEL_URL  || `${FRONTEND_ORIGIN}/`;
+
+    const base = {
+      mode: "payment",
+      "line_items[0][price]": price_id,
+      "line_items[0][quantity]": 1,
+      success_url: success,
+      cancel_url: cancel,
+      allow_promotion_codes: "true",
+      "metadata[order_id]": oid,
+    };
+    if (customer_email) base.customer_email = customer_email;
+
+    const body = formEncode(base);
+
+    // 3) Stripe-anrop
+    let session;
+    try {
+      session = await stripe(env, "checkout/sessions", { body });
+    } catch (e) {
+      return err(e?.message || "Stripe checkout failed", 500, {
+        where: "stripe.checkout.sessions",
+        hint: "Kontrollera STRIPE_SECRET_KEY/PRICE_ID och att priset ligger i samma Stripe-konto.",
+      });
+    }
+
+    // 4) Uppdatera orderstatus + spara session → order (viktigt för success/verify)
+    await kvUpdateStatus(env, oid, "pending", { stripe_session_id: session.id });
+    await kvMapSessionToOrder(env, session.id, oid); // ← NYCKELRAD
+
+    // 5) Returnera både url och order_id
+    return ok({ url: session.url, id: session.id, order_id: oid });
+  } catch (e) {
+    return err(e?.message || "checkout create failed", 500, { where: "handleCheckoutPdf" });
+  }
+}
+
+
+async function handleCheckoutPing(_req, env) {
+  return ok({
+    has_secret: !!env.STRIPE_SECRET_KEY,     // true/false
+    frontend_origin: env.FRONTEND_ORIGIN || null,
+    success_url: env.SUCCESS_URL || null,
+    cancel_url: env.CANCEL_URL || null,
+  });
+}
+
+async function handleCheckoutPrice(req, env) {
+  const url = new URL(req.url);
+  const id = url.searchParams.get("id");
+  if (!id) return err("Missing id", 400);
+  try {
+    const j = await stripe(env, `prices/${encodeURIComponent(id)}`, { method: "GET" });
+    return ok({ id: j.id, currency: j.currency, active: j.active, product: j.product, unit_amount: j.unit_amount });
+  } catch (e) {
+    return err(e?.message || "Stripe price lookup failed", 500, { where: "stripe.prices.get" });
+  }
+}
+
+
+
+async function handleCheckoutVerify(req, env) {
+  const url = new URL(req.url);
+  const sid = url.searchParams.get("session_id");
+  if (!sid) return err("Missing session_id", 400);
+
+  const session = await stripe(env, `checkout/sessions/${encodeURIComponent(sid)}`, { method: "GET" });
+
+  const paid = session.payment_status === "paid";
+  const order_id = session.metadata?.order_id || null;
+
+  return ok({
+    paid,
+    order_id,
+    amount_total: session.amount_total,
+    currency: session.currency,
+  });
+}
+
+
+// Generate ONE interior image, sequential (keeps context via prev_b64)
+// Generate ONE interior image, sequentially, with previous-image guidance
+if (req.method === "POST" && url.pathname === "/api/images/next") {
+  try {
+    const {
+      style = "cartoon",
+      story,
+      plan,
+      page,
+      ref_image_b64,
+      prev_b64,          // ← föregående bild som referens (bare b64)
+      coherence_code,
+      style_refs_b64,
+    } = await req.json().catch(() => ({}));
+
+    if (!story?.book?.pages) return err("Missing story.pages", 400);
+    const pg = story.book.pages.find(p => p.page === page);
+    if (!pg) return err(`Page ${page} not found`, 404);
+    if (!ref_image_b64) return err("Missing ref_image_b64", 400);
+
+    const frames = (plan?.plan || []);
+    const frame  = frames.find(f => f.page === page) || {};
+    const pageCount = story.book.pages.length;
+    const heroName  = story.book.bible?.main_character?.name || "Hero";
+
+    // English scene text if available, else fallback to Swedish scene/text
+    const sceneEN = pg.scene_en || pg.scene || pg.text || "";
+
+    // --- CONTINUATION BLOCK (ENG) ---
+    const continuation = [
+      "This illustration continues directly from the previous scene.",
+      "Use the previous image only as a visual guide for style, lighting, and character identity.",
+      "Do not replicate it exactly — imagine this as the same story world seen from a new camera angle or moment.",
+      "Keep the main character fully consistent (face, hair, hairstyle/length, outfit and its base color, proportions).",
+      "Preserve the overall tone and lighting continuity inspired by the previous scene.",
+      "Now illustrate this new scene based on the description below:"
+    ].join(" ");
+
+    // Bygg prompt (på engelska för bildmodellen)
+    const prompt = [
+      styleGuard(style),
+      // identitet & kläder
+      `Use the exact same main character as in the reference (${heroName}). Keep hair color and length identical. Do not change age/proportions. Do not add extra limbs.`,
+      deriveWardrobeSignature(story)
+        ? `WARDROBE: ${deriveWardrobeSignature(story)}. Keep outfit and base color identical on every page.`
+        : "",
+      // kontinuitet
+      `This is page ${pg.page} of ${pageCount}. Keep the same global style across all pages.`,
+      `COHERENCE_CODE:${coherence_code || makeCoherenceCode(story)}`,
+      // continuation-instruktion
+      continuation,
+      // scenen
+      `SCENE (EN): ${sceneEN}`,
+      `SHOT: ${shotLine(frame)}.`,
+      // format
+      "Square composition (1:1).",
+      // mild anti-repeat
+      "DO NOT reuse the exact same pose/composition from the previous image."
+    ].filter(Boolean).join("\n");
+
+    const payload = {
+      prompt,
+      character_ref_b64: ref_image_b64,
+      prev_b64, // ← den viktiga “föregående bild”-referensen
+      coherence_code: coherence_code || makeCoherenceCode(story),
+    };
+    if (Array.isArray(style_refs_b64) && style_refs_b64.length) payload.style_refs_b64 = style_refs_b64;
+
+    const g = await geminiImage(env, payload, 75000, 3);
+    if (!g?.image_url) return err("No image from Gemini", 502);
+    return ok({ page, image_url: g.image_url, provider: g.provider || "google", prompt });
+  } catch (e) {
+    return err(e?.message || "images/next failed", 500);
+  }
+}
+
+
+
+      // Regenerate single image
+      if (req.method === "POST" && url.pathname === "/api/image/regenerate") {
         try {
           const body = await req.json().catch(() => ({}));
           const { story, page, character_ref_b64 } = body || {};
@@ -1755,244 +1827,177 @@ ${JSON.stringify(toTranslate)}
         }
       }
 
-      /* ---------- Cover generation ---------- */
-      if (req.method === "POST" && pathname === "/api/cover") {
-        try {
-          const { story, style = "storybook", character_ref_b64, prev_image_b64 } = await req.json().catch(() => ({}));
-          if (!story?.book) return err("Missing story", 400);
-          if (!character_ref_b64) return err("Missing character_ref_b64", 400);
+   // Cover generation
+if (req.method === "POST" && url.pathname === "/api/cover") {
+  try {
+    const { story, style = "storybook", character_ref_b64, prev_image_b64 } = await req.json().catch(() => ({}));
+    if (!story?.book) return err("Missing story", 400);
+    if (!character_ref_b64) return err("Missing character_ref_b64", 400); // viktigt för identitet
 
-          const coherence_code = makeCoherenceCode(story);
-          const wardrobe_signature = deriveWardrobeSignature(story);
-          const effectiveStyle = style || story.book.style || "cartoon";
+    const coherence_code = makeCoherenceCode(story);
+    const wardrobe_signature = deriveWardrobeSignature(story);
+    const effectiveStyle = style || story.book.style || "cartoon";
 
-          const prompt = buildCoverPrompt({
-            style: effectiveStyle,
-            story,
-            characterName: story.book.bible?.main_character?.name || "Hero",
-            wardrobe_signature,
-            coherence_code,
-          });
+    const prompt = buildCoverPrompt({
+      style: effectiveStyle,
+      story,
+      characterName: story.book.bible?.main_character?.name || "Hero",
+      wardrobe_signature,
+      coherence_code,
+    });
 
-          const g = await geminiImage(env, {
-            prompt,
-            character_ref_b64,
-            prev_b64: prev_image_b64 || null,
-            coherence_code,
-            guidance: styleHint(effectiveStyle),
-          }, 75000, 3);
+    const g = await geminiImage(env, {
+      prompt,
+      character_ref_b64,
+      prev_b64: prev_image_b64 || null,
+      coherence_code,
+      guidance: styleHint(effectiveStyle),
+    }, 75000, 3);
 
-          let data_url = null;
-          if (g?.b64) data_url = `data:image/png;base64,${g.b64}`;
-          else if (g?.image_url) data_url = g.image_url;
-          else if (g?.data_url) data_url = g.data_url;
+    // Bygg robust svar oavsett format
+    let data_url = null;
+    if (g?.b64) data_url = `data:image/png;base64,${g.b64}`;
+    else if (g?.image_url) data_url = g.image_url;
+    else if (g?.data_url) data_url = g.data_url;
 
-          if (!data_url) return err("Cover generation failed (no image data)", 500);
+    if (!data_url) return err("Cover generation failed (no image data)", 500);
 
-          return ok({
-            cover_b64: g.b64 || null,
-            data_url,
-            image_url: g.image_url || null,
-            provider: g.provider || "google",
-            prompt,
-          });
-        } catch (e) {
-          console.error("COVER ERROR", e);
-          return err(e?.message || "Cover generation failed", 500);
+    return ok({
+      cover_b64: g.b64 || null,
+      data_url,
+      image_url: g.image_url || null,
+      provider: g.provider || "google",
+      prompt,
+    });
+  } catch (e) {
+    console.error("COVER ERROR", e);
+    return err(e?.message || "Cover generation failed", 500);
+  }
+}
+
+
+// GET /api/gelato/shipment-methods?country=SE&productUid=...
+if (req.method === "GET" && url.pathname === "/api/gelato/shipment-methods") {
+  try {
+    const country = url.searchParams.get("country") || "SE";
+    const productUid = url.searchParams.get("productUid");
+    if (!productUid) return err("Missing productUid", 400);
+    const j = await gelato(env, `shipment-methods?country=${encodeURIComponent(country)}&productUid=${encodeURIComponent(productUid)}`, { method: "GET" });
+    return ok({ methods: j?.shipmentMethods || j || [] });
+  } catch (e) {
+    return err(e.message || "gelato shipment-methods failed", 500, { where: "gelato.shipment-methods" });
+  }
+}
+
+// POST /api/gelato/quote
+// body: { shipTo:{ name,email,phone,address1,city,zip,country }, productUid, shipmentMethodUid?, quantity, currency, pages? }
+if (req.method === "POST" && url.pathname === "/api/gelato/quote") {
+  try {
+    const b = await req.json().catch(()=> ({}));
+    const ship = b?.shipTo || {};
+    const productUid = b?.productUid;
+    if (!productUid) return err("Missing productUid", 400);
+
+    // Om shipmentMethodUid inte skickas, hämta en lista och ta första “Standard”
+    let shipmentMethodUid = b?.shipmentMethodUid;
+    if (!shipmentMethodUid) {
+      const m = await gelato(env, `shipment-methods?country=${encodeURIComponent(ship.country || "SE")}&productUid=${encodeURIComponent(productUid)}`, { method:"GET" });
+      const list = m?.shipmentMethods || [];
+      // välj “standard” fallback, annars första
+      shipmentMethodUid = (list.find(x => /standard/i.test(x.name)) || list[0] || {}).shipmentMethodUid;
+      if (!shipmentMethodUid) return err("No shipment methods for product/country", 400);
+    }
+
+    const payload = {
+      currency: b?.currency || "SEK",
+      shipmentMethodUid,
+      recipient: {
+        address: {
+          addressLine1: ship.address1,
+          addressLine2: ship.address2 || "",
+          city: ship.city, postalCode: ship.zip, country: ship.country || "SE"
         }
-      }
+      },
+      items: [{ productUid, quantity: b?.quantity || 1 }]
+    };
 
-      /* ---------- Gelato ---------- */
-      // GET shipment methods
-      if (req.method === "GET" && pathname === "/api/gelato/shipment-methods") {
-        try {
-          const country = searchParams.get("country") || "SE";
-          const productUid = searchParams.get("productUid");
-          if (!productUid) return err("Missing productUid", 400);
-          const j = await gelato(env, `shipment-methods?country=${encodeURIComponent(country)}&productUid=${encodeURIComponent(productUid)}`, { method: "GET" });
-          return ok({ methods: j?.shipmentMethods || j || [] });
-        } catch (e) {
-          return err(e.message || "gelato shipment-methods failed", 500, { where: "gelato.shipment-methods" });
+    const q = await gelato(env, "orders/quotes", { method: "POST", body: JSON.stringify(payload) });
+    return ok({ quote: q, shipmentMethodUid });
+  } catch (e) {
+    return err(e.message || "gelato quote failed", 500, { where: "gelato.orders.quotes" });
+  }
+}
+
+// POST /api/gelato/order
+// body: { shipTo, productUid, shipmentMethodUid, files:{ interiorPdfUrl, coverPdfUrl }, quantity, currency, referenceId, email, phone }
+if (req.method === "POST" && url.pathname === "/api/gelato/order") {
+  try {
+    const b = await req.json().catch(()=> ({}));
+    const ship = b?.shipTo || {};
+    if (!b?.productUid) return err("Missing productUid", 400);
+    if (!b?.files?.interiorPdfUrl || !b?.files?.coverPdfUrl) return err("Missing files urls", 400);
+    if (!b?.shipmentMethodUid) return err("Missing shipmentMethodUid", 400);
+
+    const orderPayload = {
+      currency: b?.currency || "SEK",
+      contactEmail: b?.email || ship.email || "",
+      shippingAddress: {
+        firstName: (ship.name || "").split(" ")[0] || ship.name || "Kund",
+        lastName:  (ship.name || "").split(" ").slice(1).join(" ") || "-",
+        phone: b?.phone || ship.phone || "",
+        addressLine1: ship.address1, addressLine2: ship.address2 || "",
+        city: ship.city, postalCode: ship.zip, country: ship.country || "SE"
+      },
+      shipmentMethodUid: b.shipmentMethodUid,
+      items: [
+        {
+          productUid: b.productUid,
+          quantity: b?.quantity || 1,
+          files: [
+            { type: "content", sourceUrl: b.files.interiorPdfUrl },
+            { type: "cover",   sourceUrl: b.files.coverPdfUrl }
+          ]
         }
-      }
+      ],
+      referenceId: b?.referenceId || `bp_${crypto.randomUUID()}`
+    };
 
-      // POST quote
-      // body: { shipTo:{...}, productUid, shipmentMethodUid?, quantity, currency, pages? }
-      if (req.method === "POST" && pathname === "/api/gelato/quote") {
-        try {
-          const b = await req.json().catch(()=> ({}));
-          const ship = b?.shipTo || {};
-          const productUid = b?.productUid;
-          if (!productUid) return err("Missing productUid", 400);
+    const created = await gelato(env, "orders", { method: "POST", body: JSON.stringify(orderPayload) });
 
-          let shipmentMethodUid = b?.shipmentMethodUid;
-          if (!shipmentMethodUid) {
-            const m = await gelato(env, `shipment-methods?country=${encodeURIComponent(ship.country || "SE")}&productUid=${encodeURIComponent(productUid)}`, { method:"GET" });
-            const list = m?.shipmentMethods || [];
-            shipmentMethodUid = (list.find(x => /standard/i.test(x.name)) || list[0] || {})?.shipmentMethodUid;
-            if (!shipmentMethodUid) return err("No shipment methods for product/country", 400);
-          }
+    // spara i KV för spårning
+    const gid = created?.orderId || created?.id || orderPayload.referenceId;
+    await kvPutGelato(env, gid, {
+      id: gid,
+      status: created?.status || "created",
+      ref: orderPayload.referenceId,
+      productUid: b.productUid,
+      shipmentMethodUid: b.shipmentMethodUid,
+      created_at: Date.now(),
+      shipTo: { ...ship, email: orderPayload.contactEmail },
+      files: b.files
+    });
 
-          const payload = {
-            currency: b?.currency || "SEK",
-            shipmentMethodUid,
-            recipient: {
-              address: {
-                addressLine1: ship.address1,
-                addressLine2: ship.address2 || "",
-                city: ship.city, postalCode: ship.zip, country: ship.country || "SE"
-              }
-            },
-            items: [{ productUid, quantity: b?.quantity || 1 }]
-          };
+    return ok({ ok: true, order: created });
+  } catch (e) {
+    return err(e.message || "gelato order failed", 500, { where: "gelato.orders.create" });
+  }
+}
 
-          const q = await gelato(env, "orders/quotes", { method: "POST", body: JSON.stringify(payload) });
-          return ok({ quote: q, shipmentMethodUid });
-        } catch (e) {
-          return err(e.message || "gelato quote failed", 500, { where: "gelato.orders.quotes" });
-        }
-      }
 
-      // POST order
-      // body: { shipTo, productUid, shipmentMethodUid, files:{ interiorPdfUrl, coverPdfUrl }, quantity, currency, referenceId, email, phone }
-      if (req.method === "POST" && pathname === "/api/gelato/order") {
-        try {
-          const b = await req.json().catch(()=> ({}));
-          const ship = b?.shipTo || {};
-          if (!b?.productUid) return err("Missing productUid", 400);
-          if (!b?.files?.interiorPdfUrl || !b?.files?.coverPdfUrl) return err("Missing files urls", 400);
-          if (!b?.shipmentMethodUid) return err("Missing shipmentMethodUid", 400);
-
-          const orderPayload = {
-            currency: b?.currency || "SEK",
-            contactEmail: b?.email || ship.email || "",
-            shippingAddress: {
-              firstName: (ship.name || "").split(" ")[0] || ship.name || "Kund",
-              lastName:  (ship.name || "").split(" ").slice(1).join(" ") || "-",
-              phone: b?.phone || ship.phone || "",
-              addressLine1: ship.address1, addressLine2: ship.address2 || "",
-              city: ship.city, postalCode: ship.zip, country: ship.country || "SE"
-            },
-            shipmentMethodUid: b.shipmentMethodUid,
-            items: [
-              {
-                productUid: b.productUid,
-                quantity: b?.quantity || 1,
-                files: [
-                  { type: "content", sourceUrl: b.files.interiorPdfUrl },
-                  { type: "cover",   sourceUrl: b.files.coverPdfUrl }
-                ]
-              }
-            ],
-            referenceId: b?.referenceId || `bp_${crypto.randomUUID()}`
-          };
-
-          const created = await gelato(env, "orders", { method: "POST", body: JSON.stringify(orderPayload) });
-
-          // Save for tracking in KV
-          const gid = created?.orderId || created?.id || orderPayload.referenceId;
-          await kvPutGelato(env, gid, {
-            id: gid,
-            status: created?.status || "created",
-            ref: orderPayload.referenceId,
-            productUid: b.productUid,
-            shipmentMethodUid: b.shipmentMethodUid,
-            created_at: Date.now(),
-            shipTo: { ...ship, email: orderPayload.contactEmail },
-            files: b.files
-          });
-
-          return ok({ ok: true, order: created });
-        } catch (e) {
-          return err(e.message || "gelato order failed", 500, { where: "gelato.orders.create" });
-        }
-      }
-
-      /* ---------- Uploads ---------- */
-      if (req.method === "POST" && pathname === "/api/images/upload") {
+      // Uploads
+      if (req.method === "POST" && url.pathname === "/api/images/upload") {
         return handleUploadRequest(req, env);
       }
 
-      /* ---------- PDF build (digital) ---------- */
-      if (req.method === "POST" && pathname === "/api/pdf") {
+      // PDF build
+      if (req.method === "POST" && url.pathname === "/api/pdf") {
         return handlePdfRequest(req, env);
       }
 
-      /* ---------- 404 ---------- */
+      // Not found
       return new Response("Not found", { status: 404, headers: CORS });
     } catch (e) {
       return err(e?.message || "Unhandled error");
     }
   },
 };
-
-/* --------------------------- Stripe helpers --------------------------- */
-async function handleCheckoutPdf(req, env) {
-  try {
-    if (!env.ORDERS) return err("ORDERS KV not bound", 500, { where: "handleCheckoutPdf" });
-    if (!env.STRIPE_SECRET_KEY) return err("STRIPE_SECRET_KEY missing", 500, { where: "handleCheckoutPdf" });
-
-    const { price_id, customer_email, order_id, draft } = await req.json().catch(()=> ({}));
-    if (!price_id) return err("Missing price_id", 400, { where: "handleCheckoutPdf" });
-
-    // Ensure order exists in KV
-    let oid = order_id;
-    if (oid) {
-      const ex = await kvGetOrder(env, oid);
-      if (!ex) {
-        const o = newOrder(draft);
-        o.id = oid;
-        await kvPutOrder(env, o);
-      }
-    } else {
-      const o = newOrder(draft);
-      await kvPutOrder(env, o);
-      oid = o.id;
-    }
-
-    const FRONTEND_ORIGIN = env.FRONTEND_ORIGIN || "https://example.com";
-    const success = (env.SUCCESS_URL || `${FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
-    const cancel  = env.CANCEL_URL  || `${FRONTEND_ORIGIN}/`;
-
-    const base = {
-      mode: "payment",
-      "line_items[0][price]": price_id,
-      "line_items[0][quantity]": 1,
-      success_url: success,
-      cancel_url: cancel,
-      allow_promotion_codes: "true",
-      "metadata[order_id]": oid,
-    };
-    if (customer_email) base.customer_email = customer_email;
-
-    const body = formEncode(base);
-
-    // Create session
-    const session = await stripe(env, "checkout/sessions", { body });
-
-    // Track in KV
-    await kvUpdateStatus(env, oid, "pending", { stripe_session_id: session.id });
-    await kvMapSessionToOrder(env, session.id, oid);
-
-    return ok({ url: session.url, id: session.id, order_id: oid });
-  } catch (e) {
-    return err(e?.message || "checkout create failed", 500, { where: "handleCheckoutPdf" });
-  }
-}
-
-async function handleCheckoutVerify(req, env) {
-  const url = new URL(req.url);
-  const sid = url.searchParams.get("session_id");
-  if (!sid) return err("Missing session_id", 400);
-
-  const session = await stripe(env, `checkout/sessions/${encodeURIComponent(sid)}`, { method: "GET" });
-  const paid = session.payment_status === "paid";
-  const order_id = session.metadata?.order_id || null;
-
-  return ok({
-    paid,
-    order_id,
-    amount_total: session.amount_total,
-    currency: session.currency,
-  });
-}
