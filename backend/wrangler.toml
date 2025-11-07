@@ -11,11 +11,12 @@ FONT_BASE_URL = "https://sagobok.pages.dev/fonts"
 FRONTEND_ORIGIN = "https://sagobok.pages.dev"
 SUCCESS_URL = "https://sagobok.pages.dev/success.html"
 CANCEL_URL  = "https://sagobok.pages.dev/"
+PDF_PUBLIC_BASE = "https://pub-524c19f497c94f8cbdbe85bdb03a7be4.r2.dev/pdf-bucket"
 
 [[kv_namespaces]]
 binding = "ORDERS"
 id = "0e26ac0291c741708ba2b02394b163db"
 
 [[r2_buckets]]
-binding = "PDF_R2"
-bucket_name = "bokpiloten-pdfs"
+binding = "PDF_BUCKET"
+bucket_name = "pdf-bucket"
