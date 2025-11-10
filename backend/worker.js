@@ -231,14 +231,14 @@ async function gelatoGetPrices(env, productUid, { country, currency, pageCount }
   return gelatoFetch(url.toString(), env);
 }
 
-// --- full replacement: create Gelato order with required attributes ---
+// --- full replacement: create Gelato order with correct TOTAL pageCount ---
 async function gelatoCreateOrder(env, { order, shipment, customer }) {
   if (!env.GELATO_API_KEY) throw new Error("Missing GELATO_API_KEY");
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("Missing GELATO_PRODUCT_UID");
   if (!order?.id) throw new Error("Missing order.id");
 
-  // Idempotency — return existing Gelato order if present
+  // Idempotency
   if (order?.files?.gelato_order_id) {
     return {
       gelato: { id: order.files.gelato_order_id, status: order.files.gelato_status || "created" },
@@ -250,25 +250,30 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
   if (!order?.files?.interior_url) throw new Error("Order missing interior_url");
   if (!order?.files?.cover_url)    throw new Error("Order missing cover_url");
 
-  // Files: Gelato expects "default" for interior and "cover" for cover
+  // Files (interior + cover)
   const files = [
-    { type: "default", url: order.files.interior_url },
-    { type: "cover",   url: order.files.cover_url   },
+    { type: "default", url: order.files.interior_url }, // interior PDF (alla inre sidor)
+    { type: "cover",   url: order.files.cover_url    }, // omslag PDF (wrap/cover)
   ];
 
-  // --- Page count calculation ---
-  // storyPages = antal sidor i själva berättelsen (14 enligt din motor).
-  // innerPageCount = storyPages + 2 (titelsida + slutsida). Minst 16. Jämnt tal krävs.
+  // ---------------- Page count logic ----------------
+  // storyPages: antal "berättelse"-sidor från din motor
   const storyPages = order?.draft?.story?.book?.pages?.length || 0;
-  let innerPageCount = storyPages + 2;         // titelsida + slutsida
-  if (innerPageCount < 16) innerPageCount = 16;
-  if (innerPageCount % 2 !== 0) innerPageCount += 1;
 
-  // Total page count (inner + 2 omslag) används för cover-dimensions,
-  // men själva Orders API förväntar i praktiken "pageCount" = INNER.
-  const totalPageCount = innerPageCount + 2;
+  // Inner pages = berättelse + titel + slut
+  let innerPages = storyPages + 2;             // +2 för titelsida + slutsida
+  if (innerPages < 16) innerPages = 16;        // rimligt minimum för fotobok-inlaga
+  if (innerPages % 2 !== 0) innerPages += 1;   // måste vara jämnt
 
-  // Shipment method (fallback till "normal" för land)
+  // TOTAL pageCount som Orders API vill ha = inner + 4 (ytter/inner fram+bak)
+  let totalPages = innerPages + 4;
+
+  // Säkerställ min-nivå även totalt (vissa produkter kräver minst 20 totalt)
+  const MIN_TOTAL = Number(env.GELATO_MIN_TOTAL_PAGES || 20);
+  if (totalPages < MIN_TOTAL) totalPages = MIN_TOTAL;
+  if (totalPages % 2 !== 0) totalPages += 1;
+
+  // ---------------- Shipment method ----------------
   let shipmentMethodUid = shipment?.shipmentMethodUid || null;
   if (!shipmentMethodUid) {
     const meth = await gelatoGetShipmentMethods(
@@ -279,10 +284,10 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
     shipmentMethodUid = pick?.shipmentMethodUid || null;
   }
 
-  // Shipping address (lätta normaliseringar)
+  // ---------------- Shipping address ----------------
   const country = (shipment?.country || env.GELATO_DEFAULT_COUNTRY || "SE").toUpperCase();
   const phoneRaw = (customer?.phone || "").trim();
-  const phone = /^\+[\d\s-]+$/.test(phoneRaw) ? phoneRaw : ""; // lämna tom om ej E.164
+  const phone = /^\+[\d\s-]+$/.test(phoneRaw) ? phoneRaw : "";
 
   const shippingAddress = {
     companyName:  customer?.companyName || "",
@@ -298,9 +303,16 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
     phone,
   };
 
-  // --- Attributes ---
-  // Sätt pageCount i attributes OCH på item-nivå (båda behövs hos vissa produkter).
-  const attributes = { pageCount: innerPageCount };
+  // ---------------- Attributes ----------------
+  // Vissa produkter kräver att pageCount även ligger i attributes.
+  const attributes = { pageCount: totalPages };
+
+  // Metadata för enkel diag i dashboard
+  const metadata = [
+    { key: "bp_inner_pages", value: String(innerPages) },
+    { key: "bp_total_pages", value: String(totalPages) },
+    { key: "bp_story_pages", value: String(storyPages) },
+  ];
 
   const payload = {
     orderType: env.GELATO_DRY_RUN ? "draft" : "order",
@@ -313,12 +325,14 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
         productUid,
         quantity: 1,
         files,
-        pageCount: innerPageCount, // 👈 viktig för "products[0].pageCount"
-        attributes,                 // 👈 behåll även här
+        // 👇 Kritisk: Orders API för multipage-produkter vill ha TOTALT sidantal
+        pageCount: totalPages,
+        attributes,
       }
     ],
     ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
     shippingAddress,
+    metadata,
   };
 
   // Skapa order
@@ -328,13 +342,13 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
     body: JSON.stringify(payload),
   });
 
-  // Spara Gelato-id och status
+  // Spara Gelato-id och status + diag
   const saved = await kvAttachFiles(env, order.id, {
     gelato_order_id: data?.id || data?.orderId || null,
     gelato_status:   data?.status || "created",
-    // Bra att spara vilka counts vi använde, för diag
-    gelato_inner_page_count: innerPageCount,
-    gelato_total_page_count: totalPageCount,
+    gelato_inner_page_count: innerPages,
+    gelato_total_page_count: totalPages,
+    gelato_story_pages: storyPages,
   });
 
   // Reverse-index för webhook
@@ -345,6 +359,7 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
 
   return { gelato: data, order: saved };
 }
+
 
 
 
