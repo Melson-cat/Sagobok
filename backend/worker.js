@@ -197,17 +197,23 @@ async function gelatoFetch(url, env, init = {}) {
     ...init,
     headers: { ...gelatoHeaders(env), ...(init.headers || {}) },
   });
-  const txt = await r.text();        // <-- ta alltid texten
+
+  const txt = await r.text();
   let data = null;
   try { data = txt ? JSON.parse(txt) : null; } catch { data = { raw: txt }; }
 
   if (!r.ok) {
-    // <-- Behåll hela Gelatos valideringsfältsfel om de finns
-    const msg = data?.message || data?.error || data?.errors || data?.raw || `HTTP ${r.status}`;
-    throw new Error(`Gelato ${r.status}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
+    const err = new Error(`Gelato ${r.status}: ${data?.message || data?.error || "Request contains errors"}`);
+    err.name = "GelatoError";
+    err.status = r.status;
+    err.url = url;
+    err.data = data;       // <-- kan innehålla validationErrors / fields
+    err.raw = txt;
+    throw err;
   }
   return data;
 }
+
 
 /** Hämtar shipment methods (valfritt filtrera på land). */
 async function gelatoGetShipmentMethods(env, country) {
@@ -225,13 +231,14 @@ async function gelatoGetPrices(env, productUid, { country, currency, pageCount }
   return gelatoFetch(url.toString(), env);
 }
 
+// --- full replacement: create Gelato order with required attributes ---
 async function gelatoCreateOrder(env, { order, shipment, customer }) {
   if (!env.GELATO_API_KEY) throw new Error("Missing GELATO_API_KEY");
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("Missing GELATO_PRODUCT_UID");
   if (!order?.id) throw new Error("Missing order.id");
 
-  // ✅ Idempotens: om det redan finns en Gelato-order, returnera den
+  // Idempotency: return existing Gelato order if present
   if (order?.files?.gelato_order_id) {
     return {
       gelato: { id: order.files.gelato_order_id, status: order.files.gelato_status || "created" },
@@ -239,80 +246,131 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
     };
   }
 
+  // Required files
   if (!order?.files?.interior_url) throw new Error("Order missing interior_url");
   if (!order?.files?.cover_url) throw new Error("Order missing cover_url");
 
-  // Filer för fotobok: inlaga + omslag
+  // Files: Gelato expects "default" for interior, "cover" for cover
   const files = [
-  { type: "INTERIOR", url: order.files.interior_url },
-  { type: "COVER",    url: order.files.cover_url },
-];
+    { type: "default", url: order.files.interior_url },
+    { type: "cover",   url: order.files.cover_url },
+  ];
 
+  // Page count: all pages incl. covers (book pages + title + end + 2 covers)
+  const storyPages = order?.draft?.story?.book?.pages?.length || 0;
+  let pageCount = storyPages ? storyPages + 2 + 2 : null; // title + end + front/back cover
 
-  const pageCount = order?.draft?.story?.book?.pages?.length || null;
+  // Fetch product spec to discover required attributes
+  const spec = await gelatoGetProductSpec(env, productUid);
+  const attrs = Array.isArray(spec?.attributes) ? spec.attributes : [];
+  const requiredCodes = new Set(attrs.filter(a => a?.required).map(a => a.code));
 
-  // Hämta fraktmetod om inte given
-  let shipmentMethodUid = shipment?.shipmentMethodUid;
-  if (!shipmentMethodUid) {
-    const meth = await gelatoGetShipmentMethods(env, shipment?.country || env.GELATO_DEFAULT_COUNTRY || "SE");
-    const pick = meth?.shipmentMethods?.find(m => m.type === "normal") || meth?.shipmentMethods?.[0];
-    shipmentMethodUid = pick?.shipmentMethodUid || "normal";
+  // Build attributes object
+  const attributes = {};
+
+  // pageCount (if required)
+  if (requiredCodes.has("pageCount")) {
+    if (!Number.isFinite(pageCount)) throw new Error("Missing pageCount for required attribute");
+    // Some products require even page counts; nudge to even if needed
+    if (pageCount % 2 !== 0) pageCount += 1;
+    attributes.pageCount = pageCount;
   }
 
-  // ✅ Respektera DRY RUN
-  const orderType = env.GELATO_DRY_RUN ? "draft" : "order";
+  // Helper to pick first valid value from spec if not provided in env
+  function pickFromSpec(code, envValue) {
+    if (envValue) return envValue;
+    const a = attrs.find(x => x.code === code);
+    // Prefer uid if present, else code of first value
+    return a?.values?.[0]?.uid ?? a?.values?.[0]?.code ?? null;
+  }
 
- // anta att du redan räknat total pageCount korrekt, t.ex. 14 inlaga + 2 (titel+slut) + 2 (covers) = 18
-const payload = {
-  orderType, // "draft" i test, "order" i skarpt
-  orderReferenceId: order.id,
-  customerReferenceId: customer?.id || "guest",
-  currency: env.GELATO_DEFAULT_CURRENCY || "SEK",
-  items: [
-    {
-      itemReferenceId: `item-${order.id}`,
-      productUid,
-      quantity: 1,
-      files,                        // [{type:"default", url:...}, {type:"cover", url:...}]
-      attributes: { pageCount }     // ✅ RÄTT plats
-      // ❌ INTE: pageCount på denna nivå
-    }
-  ],
-  shipmentMethodUid,               // låt backend välja om frontend inte skickar något
-  shippingAddress: {
+  // Common required attributes for photobooks (varies by product)
+  if (requiredCodes.has("sizeUid")) {
+    const v = pickFromSpec("sizeUid", env.GELATO_SIZE_UID);
+    if (!v) throw new Error("Missing sizeUid for product");
+    attributes.sizeUid = v;
+  }
+  if (requiredCodes.has("coverTypeUid")) {
+    const v = pickFromSpec("coverTypeUid", env.GELATO_COVER_TYPE_UID);
+    if (!v) throw new Error("Missing coverTypeUid");
+    attributes.coverTypeUid = v;
+  }
+  if (requiredCodes.has("paperTypeUid")) {
+    const v = pickFromSpec("paperTypeUid", env.GELATO_PAPER_TYPE_UID);
+    if (!v) throw new Error("Missing paperTypeUid");
+    attributes.paperTypeUid = v;
+  }
+  // Fill any other required attributes with a sensible default from spec
+  for (const code of requiredCodes) {
+    if (attributes[code] != null) continue;
+    const v = pickFromSpec(code, null);
+    if (v != null) attributes[code] = v;
+  }
+
+  // Shipment method (fallback to normal for country)
+  let shipmentMethodUid = shipment?.shipmentMethodUid || null;
+  if (!shipmentMethodUid) {
+    const meth = await gelatoGetShipmentMethods(
+      env,
+      shipment?.country || env.GELATO_DEFAULT_COUNTRY || "SE"
+    );
+    const pick = meth?.shipmentMethods?.find(m => m.type === "normal") || meth?.shipmentMethods?.[0];
+    shipmentMethodUid = pick?.shipmentMethodUid || null;
+  }
+
+  // Shipping address normalization
+  const country = (shipment?.country || env.GELATO_DEFAULT_COUNTRY || "SE").toUpperCase();
+  const phoneRaw = customer?.phone || "";
+  const phone = /^\+[\d\s-]+$/.test(phoneRaw) ? phoneRaw : ""; // E.164 only; else blank to avoid 400
+
+  const shippingAddress = {
     companyName:  customer?.companyName || "",
-    firstName:    customer?.firstName || "Kund",
-    lastName:     customer?.lastName  || "BokPiloten",
+    firstName:    customer?.firstName   || "Kund",
+    lastName:     customer?.lastName    || "BokPiloten",
     addressLine1: shipment?.addressLine1 || "Adress 1",
     addressLine2: shipment?.addressLine2 || "",
     state:        shipment?.state || "",
     city:         shipment?.city  || "Örebro",
     postCode:     shipment?.postCode || "70000",
-    country:      shipment?.country  || env.GELATO_DEFAULT_COUNTRY || "SE",
+    country,
     email:        customer?.email || "no-reply@example.com",
-    phone:        customer?.phone || "000000000",
-  }
-};
+    phone,
+  };
 
+  const payload = {
+    orderType: env.GELATO_DRY_RUN ? "draft" : "order",
+    orderReferenceId: order.id,
+    customerReferenceId: customer?.id || "guest",
+    currency: env.GELATO_DEFAULT_CURRENCY || "SEK",
+    items: [{
+      itemReferenceId: `item-${order.id}`,
+      productUid,
+      quantity: 1,
+      files,
+      attributes, // <-- required attributes live here
+    }],
+    ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
+    shippingAddress,
+  };
+
+  // Create order
   const data = await gelatoFetch(`${GELATO_BASE.order}/orders`, env, {
     method: "POST",
+    headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
   });
 
-  // Spara Gelato-id och status
+  // Persist Gelato ids + reverse index for webhook
   const saved = await kvAttachFiles(env, order.id, {
     gelato_order_id: data?.id || data?.orderId || null,
     gelato_status:   data?.status || "created",
   });
-
-  // Reverse-index för webhook: GELATO_IDX:{gelatoId} -> order.id (60 dagar)
   const gelatoId = data?.id || data?.orderId;
-  if (gelatoId) {
-    await kvIndexGelatoOrder(env, gelatoId, saved.id, 60*24*60*60);
-  }
+  if (gelatoId) await kvIndexGelatoOrder(env, gelatoId, saved.id, 60 * 24 * 60 * 60);
 
   return { gelato: data, order: saved };
 }
+
 
 
 async function buildWrapCoverPdfFromDims(env, story, images, dims) {
@@ -2228,13 +2286,35 @@ async function handleGelatoCreate(req, env) {
     if (!ord?.files?.interior_url || !ord?.files?.cover_url) {
       return err("Order is missing R2 files; run build-and-attach first", 400);
     }
-    const result = await gelatoCreateOrder(env, { order: ord, shipment: body?.shipment || {}, customer: body?.customer || {} });
+
+    const result = await gelatoCreateOrder(env, {
+      order: ord,
+      shipment: body?.shipment || {},
+      customer: body?.customer || {}
+    });
     return ok(result);
-} catch (e) {
-  return err(e?.message || "gelato create failed", 500, { where:"gelato.create" });
+  } catch (e) {
+    if (e?.name === "GelatoError") {
+      return ok({
+        error: e.message,
+        where: "gelato.create",
+        status: e.status,
+        url: e.url,
+        details: e.data || e.raw || null
+      }, { status: 400 }); // svara 400 så vi ser klient-sidan
+    }
+    return err(e?.message || "gelato create failed", 500, { where: "gelato.create" });
+  }
 }
 
+// --- product spec helper (needed by createOrder) ---
+async function gelatoGetProductSpec(env, productUid) {
+  if (!productUid) throw new Error("Missing GELATO_PRODUCT_UID");
+  const url = `${GELATO_BASE.product}/products/${encodeURIComponent(productUid)}`;
+  return gelatoFetch(url, env, { method: "GET" });
 }
+
+
 
 async function handleGelatoWebhook(req, env) {
   try {
