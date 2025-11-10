@@ -268,12 +268,18 @@ async function handleStripeWebhook(req, env) {
 async function r2PutPublic(env, key, bytes, contentType = "application/pdf") {
   if (!env.PDF_BUCKET) throw new Error("PDF_BUCKET not bound");
   if (!env.PDF_PUBLIC_BASE) throw new Error("PDF_PUBLIC_BASE missing");
+
   await env.PDF_BUCKET.put(key, bytes, {
     httpMetadata: { contentType }
   });
-  const base = env.PDF_PUBLIC_BASE.replace(/\/+$/, "");
+
+  // Ta bort ev. avslutande slash och felaktigt "/pdf-bucket" i env
+  const base0 = String(env.PDF_PUBLIC_BASE).replace(/\/+$/, "");
+  const base  = base0.replace(/\/pdf-bucket$/i, "");
+
   return `${base}/${encodeURIComponent(key)}`;
 }
+
 
 // ---------- PDF split helpers ----------
 async function buildFinalInteriorPdf(env, story, images) {
