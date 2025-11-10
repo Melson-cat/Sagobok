@@ -88,6 +88,17 @@ const state = {
   images_by_page: new Map(), // page -> {image_url|data_url|image_id}
 };
 
+async function fetchJSON(url, init) {
+  const r = await fetch(url, init);
+  const ct = r.headers.get("content-type") || "";
+  const body = ct.includes("application/json") ? await r.json() : await r.text();
+  if (!r.ok || (body && body.error)) {
+    const msg = (body && body.error) || (typeof body === "string" ? body : `HTTP ${r.status}`);
+    throw new Error(msg);
+  }
+  return body;
+}
+
 /* --------------------------- Helpers --------------------------- */
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 const toInt = (v, fb = 0) => {
@@ -539,92 +550,81 @@ async function onBuyPrint() {
   try {
     if (!state.story) { alert("Skapa förhandsvisning först."); return; }
 
-    if (!HAS_PRINT_PDF_ENDPOINTS) {
-      alert("Tryck-PDF är inte aktiverad ännu.");
-      return;
-    }
+    // 1) Bygg FINAL inlaga (utan omslag)
+    const interior = await fetchJSON(`${API}/api/pdf/interior-url`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        story: state.story,
+        images: buildImagesPayload(),
+        trim: "square210",
+        mode: "final"
+      })
+    });
+    const interiorPdfUrl = interior?.url;
+    if (!interiorPdfUrl) throw new Error("Kunde inte få URL för inlaga (interior-url).");
 
-    // 1) Bygg FINAL inlaga + omslag – här antar vi att du redan kan göra final-PDF.
-    //    Du har idag /api/pdf “final”; men för Gelato krävs SEPARAT omslag.pdf och inlaga.pdf.
-    //    Om du inte hunnit: kalla din nuvarande final-PDF "interior" och gör en snabb cover-builder,
-    //    eller generera båda via backend och få publika URLs tillbaka.
+    // 2) Bygg FINAL omslag (full spread)
+    const cover = await fetchJSON(`${API}/api/pdf/cover-url`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        story: state.story,
+        images: buildImagesPayload(), // backend kan strunta i sidbilderna om den bara behöver cover
+        trim: "square210",
+        mode: "final",
+        // valfritt: metadata om produkt/sidor om din backend behöver det:
+        // productUid: "PHOTOBOOK_20X20_HARDCOVER",
+        // pages: (state.story?.book?.pages?.length ?? 0) * 2
+      })
+    });
+    const coverPdfUrl = cover?.url;
+    if (!coverPdfUrl) throw new Error("Kunde inte få URL för omslag (cover-url).");
 
-    // (Här illustrerar vi att du redan har publika URLs – byt till ditt riktiga sätt:)
-  // 1) Generera inlaga (FINAL, utan omslag)
-const interiorRes = await fetch(`${API}/api/pdf/interior`, {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({
-    story: state.story,
-    images: buildImagesPayload(),
-    trim: "square210",
-    mode: "final"
-  })
-});
-const { url: interiorPdfUrl } = await interiorRes.json();
-
-// 2) Generera omslag (FINAL full-spread)
-const coverRes = await fetch(`${API}/api/pdf/cover`, {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({
-    story: state.story,
-    // Skicka gärna titel/namn och ev. cover-bild (image_id/data_url) om du vill dekorera
-    coverImage: state.cover_image_id ? { image_id: state.cover_image_id } 
-                                     : { data_url: state.cover_preview_url },
-    productUid: "PHOTOBOOK_20X20_HARDCOVER",  // byt till din valda produkt
-    pages: /* totalt antal inlagesidor (ej omslag!) */ (state.story?.book?.pages?.length ?? 0) * 2
-  })
-});
-const { url: coverPdfUrl } = await coverRes.json();
-
-// 3) Quote -> Order (som i skelettet du redan har)
-
-
-    // 2) Mottagarinfo (ersätt med din adress-dialog)
+    // 3) Fråga användaren om leveransinfo (tillfällig prompt-lösning)
     const shipTo = {
-      name: prompt("Namn") || "För- och efternamn",
-      email: prompt("E-post") || "",
-      phone: prompt("Telefon (+46...)") || "",
-      address1: prompt("Adress") || "",
-      city: prompt("Stad") || "",
-      zip: prompt("Postnummer") || "",
-      country: "SE"
+      name:   prompt("Namn")              || "För- och efternamn",
+      email:  prompt("E-post")            || "",
+      phone:  prompt("Telefon (+46...)")  || "",
+      address1: prompt("Adress")          || "",
+      city:   prompt("Stad")              || "",
+      zip:    prompt("Postnummer")        || "",
+      country:"SE"
     };
 
-    // 3) Produkt och frakt
-    //    – sätt productUid hårdkodat nu (20x20 hardcover fotobok) eller bygg en selector senare.
+    // 4) Välj/ange Gelato-produkt (tillfälligt prompt)
     const productUid = prompt("productUid (Gelato)") || "";
     if (!productUid) { alert("productUid saknas."); return; }
 
+    // 5) Quote
     setStatus("🚚 Hämtar frakt & pris…", 40);
-    const qRes = await fetch(`${API}/api/gelato/quote`, {
+    const q = await fetchJSON(`${API}/api/gelato/quote`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ shipTo, productUid, quantity: 1, currency: "SEK" })
     });
-    const q = await qRes.json();
-    if (!qRes.ok || q?.error) throw new Error(q?.error || `HTTP ${qRes.status}`);
-    // visa pris/ETA snabbt:
-    const ask = confirm(`Pris (hela ordern): ${(q.quote?.totals?.grandTotal?.amount || "okänt")} ${q.quote?.totals?.grandTotal?.currency || "SEK"}\nETA: ${q.quote?.estimatedDeliveryDate || "–"}\n\nFortsätt beställning?`);
-    if (!ask) { setStatus(null); return; }
 
-    // 4) Skapa order
+    const total = q?.quote?.totals?.grandTotal?.amount;
+    const curr  = q?.quote?.totals?.grandTotal?.currency || "SEK";
+    const eta   = q?.quote?.estimatedDeliveryDate || "–";
+    const okGo  = confirm(`Pris (hela ordern): ${total ?? "okänt"} ${curr}\nETA: ${eta}\n\nFortsätt beställning?`);
+    if (!okGo) { setStatus(null); return; }
+
+    // 6) Order (använd shipmentMethodUid från quote-svaret)
     setStatus("🖨️ Lägger tryckorder…", 78);
-    const oRes = await fetch(`${API}/api/gelato/order`, {
+    const o = await fetchJSON(`${API}/api/gelato/order`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         shipTo,
         productUid,
-        shipmentMethodUid: q.shipmentMethodUid,  // från quote-steget
+        shipmentMethodUid: q.shipmentMethodUid,
         files: { interiorPdfUrl, coverPdfUrl },
-        quantity: 1, currency: "SEK",
+        quantity: 1,
+        currency: "SEK",
         referenceId: `bp_${Date.now()}`
       })
     });
-    const o = await oRes.json();
-    if (!oRes.ok || o?.error) throw new Error(o?.error || `HTTP ${oRes.status}`);
 
     setStatus("✅ Order lagd! (Gelato)", 100);
     alert(`Order skapad!\nGelato ID: ${o?.order?.orderId || o?.order?.id || "okänt"}`);
@@ -635,6 +635,7 @@ const { url: coverPdfUrl } = await coverRes.json();
     alert(e?.message || "Kunde inte lägga tryckorder.");
   }
 }
+
 
 
 
