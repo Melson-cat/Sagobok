@@ -11,7 +11,7 @@ FONT_BASE_URL = "https://sagobok.pages.dev/fonts"
 FRONTEND_ORIGIN = "https://sagobok.pages.dev"
 SUCCESS_URL = "https://sagobok.pages.dev/success.html"
 CANCEL_URL  = "https://sagobok.pages.dev/"
-PDF_PUBLIC_BASE = "https://pub-524c19f497c94f8cbdbe85bdb03a7be4.r2.dev/pdf-bucket"
+PDF_PUBLIC_BASE = "https://pub-524c19f497c94f8cbdbe85bdb03a7be4.r2.dev"
 
 [[kv_namespaces]]
 binding = "ORDERS"
