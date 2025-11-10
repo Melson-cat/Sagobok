@@ -259,15 +259,16 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
   // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
   // 1) Hämta antal inlaga-sidor (du sa att din pipeline ger 30 just nu)
   //    Spara gärna detta i order.files.interior_pages när du genererar PDF:en.
-  const interiorPages =
-    order?.files?.interior_pages ??
-    (order?.draft?.story?.book?.pages?.length ? order.draft.story.book.pages.length + 2 /*titel+slut*/ : null) ??
-    30; // Fallback om du vet det
+ // 1) Hämtas från handleBuildAndAttach → kvAttachFiles
+const interiorPages = order?.files?.interior_pages;
+if (!Number.isFinite(interiorPages)) {
+  throw new Error("Missing order.files.interior_pages (ensure handleBuildAndAttach saved it)");
+}
 
-  // 2) Välj giltigt total pageCount så att (total - 4) == interiorPages
-  //    (covers räknas alltid som 4 sidor i Gelatos pageCount)
-  const pageCount = await pickTotalPageCount(env, productUid, interiorPages, /*minTotal*/ 20);
-  // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+// 2) Gelato räknar total = inlaga + 4 (ytter/inner fram+baksida)
+const pageCount = interiorPages + 4;
+if (pageCount % 2 !== 0) throw new Error("Total pageCount must be even");
+
 
   // Fraktmetod
   let shipmentMethodUid = shipment?.shipmentMethodUid;
@@ -333,32 +334,6 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
   return { gelato: data, order: saved };
 }
 
-
-// --- helpers: product cover-dimensions probing ---
-async function probeCoverDimensionsOk(env, productUid, pageCount) {
-  const url = `${GELATO_BASE.product}/products/${encodeURIComponent(productUid)}/cover-dimensions?pageCount=${pageCount}`;
-  const res = await gelatoFetch(url, env, { method: "GET" }, /*soft*/ true);
-  return !!(res && res.ok);
-}
-
-// Probar från 'start' uppåt i steg om 2 tills första 200
-async function probeValidTotal(env, productUid, start, maxSteps = 15) {
-  let p = start % 2 ? start + 1 : start;
-  for (let i = 0; i <= maxSteps; i++, p += 2) {
-    const ok = await probeCoverDimensionsOk(env, productUid, p);
-    if (ok) return p;
-  }
-  return null;
-}
-
-// Välj total pageCount så att (total - 4) == interiorPages, bumpa till giltig via cover-dimensions
-async function pickTotalPageCount(env, productUid, interiorPages, minTotal = 20) {
-  let desired = Math.max(minTotal, interiorPages + 4);
-  if (desired % 2 !== 0) desired += 1;
-  const valid = await probeValidTotal(env, productUid, desired, 20);
-  if (!valid) throw new Error(`No valid pageCount ≥ ${desired} for product ${productUid}`);
-  return valid;
-}
 
 
 
@@ -590,26 +565,27 @@ async function buildFinalInteriorPdf(env, story, images) {
   return await out.save();
 }
 
-async function buildFinalCoverPdf(env, story, images) {
-  const productUid = env.GELATO_PRODUCT_UID;
-  // Inkludera alla inlagesidor + ev. titelsida + slutsida + (front/back) om din inlaga räknas så.
-  // Gelato kräver "all pages in the product, including front and back cover".
-  // Du har: 14 bildsidor + titelsida + slutsida = 16 inner + 2 cover = 18 totalt.
-  // Justera om din struktur avviker.
-  const innerCount = (story?.book?.pages?.length || 0) + 2; // + titelsida + slutsida
-  const pageCount = innerCount + 2; // + front/back cover
+aasync function buildFinalCoverPdf(env, story, images, interiorPages) {
 
-  if (productUid && pageCount > 0) {
-    try {
-      const dims = await gelatoGetCoverDimensions(env, productUid, pageCount);
-      // Om wrap-dimensioner finns enligt Gelato – kör wrap
-      if (dims?.wraparoundInsideSize && dims?.contentFrontSize && dims?.contentBackSize) {
-        return await buildWrapCoverPdfFromDims(env, story, images, dims);
-      }
-    } catch {
-      // fall back nedan
+const productUid = env.GELATO_PRODUCT_UID;
+const totalPageCount = (() => {
+  if (!Number.isFinite(interiorPages)) throw new Error("buildFinalCoverPdf: missing interiorPages");
+  const total = interiorPages + 4; // Gelato: total = inlaga + 4 (ytter/inner fram+baksida)
+  if (total % 2 !== 0) throw new Error("Total page count must be even");
+  return total;
+})();
+
+if (productUid) {
+  try {
+    const dims = await gelatoGetCoverDimensions(env, productUid, totalPageCount);
+    if (dims?.wraparoundInsideSize && dims?.contentFrontSize && dims?.contentBackSize) {
+      return await buildWrapCoverPdfFromDims(env, story, images, dims);
     }
+  } catch {
+    // fall back nedan
   }
+}
+
 
   // Fallback: enkel framsida från din befintliga full-PDF
   const fullBytes = await buildPdf({ story, images, mode: "print" }, env, null);
@@ -1665,7 +1641,14 @@ async function handleBuildAndAttach(req, env) {
 
     // Bygg PDFs
     const interiorBytes = await buildFinalInteriorPdf(env, story, images);
-    const coverBytes    = await buildFinalCoverPdf(env, story, images);
+
+// RÄKNA FAKTISKT SIDANTAL I INLAGAN
+const interiorDoc = await PDFDocument.load(interiorBytes);
+const interiorPages = interiorDoc.getPageCount();  // ← ex. 30
+
+// Bygg omslag med wrap-mått baserat på TOTAL = interior + 4
+const coverBytes = await buildFinalCoverPdf(env, story, images, interiorPages);
+
     const ts = Date.now();
 
     // Säker filnamnsbas (UNICODE-safe)
@@ -1684,9 +1667,11 @@ async function handleBuildAndAttach(req, env) {
 
     // Spara på ordern
     const updated = await kvAttachFiles(env, order_id, {
-      interior_url, interior_key,
-      cover_url,    cover_key,
-    });
+  interior_url, interior_key,
+  cover_url,    cover_key,
+  interior_pages: interiorPages,           // ← spara verkligt sidantal
+});
+
 
     return ok({
       order_id,
