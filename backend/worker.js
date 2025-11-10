@@ -565,7 +565,7 @@ async function buildFinalInteriorPdf(env, story, images) {
   return await out.save();
 }
 
-aasync function buildFinalCoverPdf(env, story, images, interiorPages) {
+async function buildFinalCoverPdf(env, story, images, interiorPages) {
 
 const productUid = env.GELATO_PRODUCT_UID;
 const totalPageCount = (() => {
