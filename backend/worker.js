@@ -242,9 +242,10 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
 
   // Filer för fotobok: inlaga + omslag
   const files = [
-    { type: "default", url: order.files.interior_url },
-    { type: "cover",   url: order.files.cover_url },
-  ];
+  { type: "INTERIOR", url: order.files.interior_url },
+  { type: "COVER",    url: order.files.cover_url },
+];
+
 
   const pageCount = order?.draft?.story?.book?.pages?.length || null;
 
@@ -2225,8 +2226,10 @@ async function handleGelatoCreate(req, env) {
     }
     const result = await gelatoCreateOrder(env, { order: ord, shipment: body?.shipment || {}, customer: body?.customer || {} });
     return ok(result);
-  } catch (e) { return err(e?.message || "gelato create failed", 500); }
+  } catch (e) {
+  return err(e?.message || "gelato create failed", 500, { where:"gelato.create" });
 }
+
 async function handleGelatoWebhook(req, env) {
   try {
     const evt = await req.json().catch(()=> ({}));
