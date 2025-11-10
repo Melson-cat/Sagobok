@@ -192,17 +192,19 @@ function gelatoHeaders(env) {
   };
 }
 
-async function gelatoFetch(url, env, init={}) {
+async function gelatoFetch(url, env, init = {}) {
   const r = await fetch(url, {
     ...init,
     headers: { ...gelatoHeaders(env), ...(init.headers || {}) },
   });
-  const txt = await r.text();
+  const txt = await r.text();        // <-- ta alltid texten
   let data = null;
   try { data = txt ? JSON.parse(txt) : null; } catch { data = { raw: txt }; }
+
   if (!r.ok) {
-    const msg = data?.message || data?.error || `HTTP ${r.status}`;
-    throw new Error(`Gelato: ${msg}`);
+    // <-- Behåll hela Gelatos valideringsfältsfel om de finns
+    const msg = data?.message || data?.error || data?.errors || data?.raw || `HTTP ${r.status}`;
+    throw new Error(`Gelato ${r.status}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
   }
   return data;
 }
@@ -260,35 +262,37 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
   // ✅ Respektera DRY RUN
   const orderType = env.GELATO_DRY_RUN ? "draft" : "order";
 
-  const payload = {
-    orderType,                             // ← "draft" i test, "order" i skarpt
-    orderReferenceId: order.id,
-    customerReferenceId: customer?.id || "guest",
-    currency: env.GELATO_DEFAULT_CURRENCY || "SEK",
-    items: [
-      {
-        itemReferenceId: `item-${order.id}`,
-        productUid,
-        files,
-        quantity: 1,
-        ...(pageCount ? { pageCount } : {}),
-      }
-    ],
-    shipmentMethodUid,
-    shippingAddress: {
-      companyName: customer?.companyName || "",
-      firstName:   customer?.firstName || "Kund",
-      lastName:    customer?.lastName  || "BokPiloten",
-      addressLine1: shipment?.addressLine1 || "Adress 1",
-      addressLine2: shipment?.addressLine2 || "",
-      state:        shipment?.state || "",
-      city:         shipment?.city  || "Örebro",
-      postCode:     shipment?.postCode || "70000",
-      country:      shipment?.country  || env.GELATO_DEFAULT_COUNTRY || "SE",
-      email:        customer?.email || "no-reply@example.com",
-      phone:        customer?.phone || "000000000",
+ // anta att du redan räknat total pageCount korrekt, t.ex. 14 inlaga + 2 (titel+slut) + 2 (covers) = 18
+const payload = {
+  orderType, // "draft" i test, "order" i skarpt
+  orderReferenceId: order.id,
+  customerReferenceId: customer?.id || "guest",
+  currency: env.GELATO_DEFAULT_CURRENCY || "SEK",
+  items: [
+    {
+      itemReferenceId: `item-${order.id}`,
+      productUid,
+      quantity: 1,
+      files,                        // [{type:"default", url:...}, {type:"cover", url:...}]
+      attributes: { pageCount }     // ✅ RÄTT plats
+      // ❌ INTE: pageCount på denna nivå
     }
-  };
+  ],
+  shipmentMethodUid,               // låt backend välja om frontend inte skickar något
+  shippingAddress: {
+    companyName:  customer?.companyName || "",
+    firstName:    customer?.firstName || "Kund",
+    lastName:     customer?.lastName  || "BokPiloten",
+    addressLine1: shipment?.addressLine1 || "Adress 1",
+    addressLine2: shipment?.addressLine2 || "",
+    state:        shipment?.state || "",
+    city:         shipment?.city  || "Örebro",
+    postCode:     shipment?.postCode || "70000",
+    country:      shipment?.country  || env.GELATO_DEFAULT_COUNTRY || "SE",
+    email:        customer?.email || "no-reply@example.com",
+    phone:        customer?.phone || "000000000",
+  }
+};
 
   const data = await gelatoFetch(`${GELATO_BASE.order}/orders`, env, {
     method: "POST",
