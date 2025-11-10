@@ -1829,41 +1829,25 @@ async function handleCheckoutPrinted(req, env) {
   }
 }
 
-/* --------------------------- Story endpoints ------------------------- */
-export default {
-  async fetch(req, env) {
-    try {
-      if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-      const url = new URL(req.url);
-
-      // Health
-      if (req.method === "GET" && url.pathname === "/") return ok({ ok: true, ts: Date.now() });
-
-      // Diag
-      if (req.method === "GET" && url.pathname === "/api/diag") return handleDiagRequest(req, env);
-
-      // Create draft order (returns {order_id})
-if (req.method === "POST" && url.pathname === "/api/orders/draft") {
+/* ====================== ORDERS (KV) ====================== */
+async function handleOrdersDraft(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
     const order = newOrder(body?.draft);
     await kvPutOrder(env, order);
     return ok({ order_id: order.id });
-  } catch (e) {
-    return err(e?.message || "order draft failed", 500);
-  }
+  } catch (e) { return err(e?.message || "order draft failed", 500); }
 }
-
-// Read order status
-if (req.method === "GET" && url.pathname === "/api/orders/status") {
+async function handleOrdersStatus(req, env) {
+  const url = new URL(req.url);
   const id = url.searchParams.get("id");
   const data = await kvGetOrder(env, id);
   if (!data) return err("Not found", 404);
   return ok(data);
 }
 
-// Checkout diag
-if (req.method === "GET" && url.pathname === "/api/checkout/ping") {
+/* ====================== CHECKOUT (Stripe) ====================== */
+async function handleCheckoutPing(_req, env) {
   return ok({
     has_secret: !!env.STRIPE_SECRET_KEY,
     frontend_origin: env.FRONTEND_ORIGIN,
@@ -1871,9 +1855,7 @@ if (req.method === "GET" && url.pathname === "/api/checkout/ping") {
     cancel_url: env.CANCEL_URL,
   });
 }
-
-// Pris-lookup
-if (req.method === "GET" && url.pathname === "/api/checkout/price") {
+async function handleCheckoutPriceLookup(req, env) {
   try {
     const id = new URL(req.url).searchParams.get("id");
     if (!id) return err("Missing id", 400, { where: "stripe.prices.get" });
@@ -1885,41 +1867,28 @@ if (req.method === "GET" && url.pathname === "/api/checkout/price") {
       product: typeof p.product === "string" ? p.product : p.product?.id,
       unit_amount: p.unit_amount,
     });
-  } catch (e) {
-    return err(e.message || "price lookup failed", 500, { where: "stripe.prices.get" });
-  }
+  } catch (e) { return err(e?.message || "price lookup failed", 500, { where: "stripe.prices.get" }); }
 }
-
-// Skapa checkout-session (DIGITAL PDF)
-if (req.method === "POST" && url.pathname === "/api/checkout/pdf") {
-  try { return await handleCheckoutPdf(req, env); }
-  catch (e) { return err(e?.message || "checkout create failed", 500, { where: "handleCheckoutPdf" }); }
-}
-
-// Skapa checkout-session (PRINTED BOOK)
-if (req.method === "POST" && url.pathname === "/api/checkout/printed") {
+async function handleCheckoutPdf(req, env) {
   try {
-    if (!env.STRIPE_SECRET_KEY) return err("STRIPE_SECRET_KEY missing", 500);
-    const { price_id, customer_email, order_id, draft } = await req.json().catch(()=> ({}));
-    if (!price_id) return err("Missing price_id", 400);
+    if (!env.ORDERS) return err("ORDERS KV not bound", 500, { where: "handleCheckoutPdf" });
+    if (!env.STRIPE_SECRET_KEY) return err("STRIPE_SECRET_KEY missing", 500, { where: "handleCheckoutPdf" });
 
-    // 1) Säkerställ order i KV
+    const { price_id, customer_email, order_id, draft } = await req.json().catch(()=> ({}));
+    if (!price_id) return err("Missing price_id", 400, { where: "handleCheckoutPdf" });
+
     let oid = order_id;
     if (oid) {
       const ex = await kvGetOrder(env, oid);
       if (!ex) { const o = newOrder(draft); o.id = oid; await kvPutOrder(env, o); }
     } else {
-      const o = newOrder(draft);
-      await kvPutOrder(env, o);
-      oid = o.id;
+      const o = newOrder(draft); await kvPutOrder(env, o); oid = o.id;
     }
 
-    // 2) URLs
     const FRONTEND_ORIGIN = env.FRONTEND_ORIGIN || "https://example.com";
     const success = (env.SUCCESS_URL || `${FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
     const cancel  = env.CANCEL_URL  || `${FRONTEND_ORIGIN}/`;
 
-    // 3) Stripe body – med shipping address collection
     const base = {
       mode: "payment",
       "line_items[0][price]": price_id,
@@ -1928,76 +1897,53 @@ if (req.method === "POST" && url.pathname === "/api/checkout/printed") {
       cancel_url: cancel,
       allow_promotion_codes: "true",
       "metadata[order_id]": oid,
-      "metadata[kind]": "printed"
+      "metadata[kind]": "pdf",
     };
     if (customer_email) base.customer_email = customer_email;
 
-    // Shipping via Checkout
-    base["shipping_address_collection[allowed_countries][0]"] = (env.GELATO_DEFAULT_COUNTRY || "SE");
-    base["phone_number_collection[enabled]"] = "true";
-
-    const body = formEncode(base);
-
-    // 4) Skapa session
-    const session = await stripe(env, "checkout/sessions", { body });
-
-    // 5) Status + KV-map
+    const session = await stripe(env, "checkout/sessions", { body: formEncode(base) });
     await kvUpdateStatus(env, oid, "pending", { stripe_session_id: session.id });
     await kvMapSessionToOrder(env, session.id, oid);
 
     return ok({ url: session.url, id: session.id, order_id: oid });
   } catch (e) {
-    return err(e?.message || "checkout printed failed", 500, { where: "handleCheckoutPrinted" });
+    return err(e?.message || "checkout create failed", 500, { where: "handleCheckoutPdf" });
   }
 }
-
-
-// Verifiera checkout
-if (req.method === "GET" && url.pathname === "/api/checkout/verify") {
-  try { return await handleCheckoutVerify(req, env); }
-  catch (e) { return err(e?.message || "checkout verify failed", 500, { where: "handleCheckoutVerify" }); }
+async function handleCheckoutVerify(req, env) {
+  const url = new URL(req.url);
+  const sid = url.searchParams.get("session_id");
+  if (!sid) return err("Missing session_id", 400);
+  const session = await stripe(env, `checkout/sessions/${encodeURIComponent(sid)}`, { method: "GET" });
+  const paid = session.payment_status === "paid";
+  const order_id = session.metadata?.order_id || null;
+  return ok({ paid, order_id, amount_total: session.amount_total, currency: session.currency });
 }
-
-// Stripe webhook – måste vara POST
-if (req.method === "POST" && url.pathname === "/api/stripe/webhook") {
-  return handleStripeWebhook(req, env);
-}
-
-// Hämta order_id från session (KV först, Stripe fallback)
-if (req.method === "GET" && url.pathname === "/api/checkout/order-id") {
+async function handleCheckoutOrderId(req, env) {
   try {
-    const urlObj = new URL(req.url);
-    const sid = urlObj.searchParams.get("session_id");
+    const sid = new URL(req.url).searchParams.get("session_id");
     if (!sid) return err("Missing session_id", 400);
-
-    // 1) KV-fast path
     const kvOid = await kvGetOrderFromSession(env, sid);
     if (kvOid) return ok({ order_id: kvOid, source: "kv" });
-
-    // 2) Fallback: fråga Stripe
     const session = await stripe(env, `checkout/sessions/${encodeURIComponent(sid)}`, { method: "GET" });
     const order_id = session.metadata?.order_id || null;
-
     return ok({ order_id, source: "stripe" });
-  } catch (e) {
-    return err(e?.message || "order-id lookup failed", 500, { where: "stripe.checkout.sessions.get" });
-  }
+  } catch (e) { return err(e?.message || "order-id lookup failed", 500); }
 }
 
+/* ====================== STORY & IMAGES ====================== */
+// Dessa använder dina befintliga helpers: openaiJSON, OUTLINE_SYS, STORY_SYS,
+// heroDescriptor, getCameraHints, normalizePlan, makeCoherenceCode, deriveWardrobeSignature,
+// characterCardPrompt, geminiImage, buildFramePrompt, styleHint, shotLine.
+async function handleStory(req, env) {
+  try {
+    const body = await req.json().catch(() => ({}));
+    const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
+    const targetAge = Number.isFinite(parseInt(reading_age, 10))
+      ? parseInt(reading_age, 10)
+      : (category || "kids") === "pets" ? 8 : parseInt(age || 6, 10);
 
-
-      // Story
-      if (req.method === "POST" && url.pathname === "/api/story") {
-        try {
-          const body = await req.json().catch(() => ({}));
-          const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
-          const targetAge = Number.isFinite(parseInt(reading_age, 10))
-            ? parseInt(reading_age, 10)
-            : (category || "kids") === "pets"
-            ? 8
-            : parseInt(age || 6, 10);
-
-          const outlineUser = `
+    const outlineUser = `
 ${heroDescriptor({ category, name, age, traits })}
 Kategori: ${category || "kids"}.
 Läsålder: ${targetAge}.
@@ -2005,9 +1951,9 @@ Läsålder: ${targetAge}.
 Antal sidor: ${pages || 12}.
 Returnera enbart json.`.trim();
 
-          const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
+    const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
 
-      const storyUser = `
+    const storyUser = `
 OUTLINE:
 ${JSON.stringify(outline)}
 Skriv en engagerande, händelserik saga som är rolig att läsa högt.
@@ -2017,92 +1963,82 @@ Läsålder: ${targetAge}. **Sidor: 14**. Stil: ${style || "cartoon"}. Kategori: 
 Returnera enbart JSON i exakt formatet.
 `.trim();
 
+    const story = await openaiJSON(env, STORY_SYS, storyUser);
 
-        const story = await openaiJSON(env, STORY_SYS, storyUser);
-
-
-// Fallback: om storyn skulle sakna scene_en (bakåtkomp eller modellglitch)
-try {
-  const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
-  const needs = pages.some(p => !p.scene_en || !String(p.scene_en).trim());
-  if (needs && pages.length) {
-    const toTranslate = pages.map(p => ({ page: p.page, sv: p.scene || p.text || "" }));
-    const tprompt = `
-Översätt följande scenangivelser till **kort** engelsk, visuell beskrivning (1–2 meningar, inga repliker).
+    // Fallback översättning till scene_en om saknas
+    try {
+      const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
+      const needs = pages.some(p => !p.scene_en || !String(p.scene_en).trim());
+      if (needs && pages.length) {
+        const toTranslate = pages.map(p => ({ page: p.page, sv: p.scene || p.text || "" }));
+        const t = await openaiJSON(env,
+          "Du är en saklig översättare. Returnera endast giltig JSON.",
+          `Översätt följande scenangivelser till kort engelsk, visuell beskrivning (1–2 meningar, inga repliker).
 Returnera exakt: { "items":[{"page":number,"scene_en":string}, ...] } och inget mer.
 SVENSKA:
-${JSON.stringify(toTranslate)}
-`.trim();
-    const t = await openaiJSON(env,
-      "Du är en saklig översättare. Returnera endast giltig JSON.",
-      tprompt
-    );
-    const map = new Map((t?.items || []).map(x => [x.page, x.scene_en]));
-    story.book.pages = pages.map(p => ({ ...p, scene_en: p.scene_en || map.get(p.page) || "" }));
-  }
-} catch { /* ignore graceful */ }
-
-// ⬇️ NYTT: hämta kamerahints och bygg plan med hints
-const camHints = await getCameraHints(env, story);
-const plan = normalizePlan(story?.book?.pages || [], camHints.shots);
-
-const coherence_code = makeCoherenceCode(story);
-const wardrobe_signature = deriveWardrobeSignature(story);
-
-return ok({ outline, story, plan, coherence_code, wardrobe_signature });
-
-
-        } catch (e) {
-          return err(e?.message || "Story generation failed", 500);
-        }
+${JSON.stringify(toTranslate)}`
+        );
+        const map = new Map((t?.items || []).map(x => [x.page, x.scene_en]));
+        story.book.pages = pages.map(p => ({ ...p, scene_en: p.scene_en || map.get(p.page) || "" }));
       }
+    } catch {}
 
- // Ref image (v27-kompatibel, enkel prompt, platt payload)
-if (req.method === "POST" && url.pathname === "/api/ref-image") {
+    const camHints = await getCameraHints(env, story);
+    const plan = normalizePlan(story?.book?.pages || [], camHints.shots);
+    const coherence_code = makeCoherenceCode(story);
+    const wardrobe_signature = deriveWardrobeSignature(story);
+
+    return ok({ outline, story, plan, coherence_code, wardrobe_signature });
+  } catch (e) { return err(e?.message || "Story generation failed", 500); }
+
+  function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
+  const m = bible?.main_character || {};
+  const name = m.name || "Hero";
+  const age = m.age || 6;
+  const physique = m.physique || "child with friendly face";
+  const wardrobe = Array.isArray(bible?.wardrobe) && bible.wardrobe.length
+    ? bible.wardrobe.join(", ")
+    : "";
+  const palette = Array.isArray(bible?.palette) && bible.palette.length
+    ? bible.palette.join(", ")
+    : "";
+
+  const guard = styleGuard(style);
+  return [
+    guard,
+    `Create a single character reference card for a ${age} y/o child named ${name}.`,
+    `Physique/identity cues: ${physique}.`,
+    wardrobe ? `Wardrobe hint: ${wardrobe}.` : "",
+    palette ? `Color palette hint: ${palette}.` : "",
+    traits ? `Personality: ${traits}.` : "",
+    "Square composition (1:1). Neutral, evenly lit. No text, no logos.",
+    "This reference will be used for strict identity consistency across pages."
+  ].filter(Boolean).join("\n");
+}
+
+}
+async function handleRefImage(req, env) {
   try {
     const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
-
-    // Client-supplied photo wins
     if (photo_b64) {
       const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
       if (b64.length > 64) return ok({ ref_image_b64: b64, provider: "client" });
       return err("Provided photo_b64 looked invalid", 400);
     }
-
-    // Minimal, robust prompt – exakt som v27
     const prompt = characterCardPrompt({ style, bible, traits });
-
-    // Anropa Gemini utan extra parts
     const g = await geminiImage(env, { prompt }, 70000, 2);
     if (g?.b64) return ok({ ref_image_b64: g.b64, provider: g.provider || "google" });
-
-    // Tillbaka-kompatibelt svar (frontend hanterar null)
     return ok({ ref_image_b64: null });
-  } catch (e) {
-    return err(e?.message || "Ref generation failed", 500);
-  }
+  } catch (e) { return err(e?.message || "Ref generation failed", 500); }
 }
-
-// Generate interior images (plural endpoint expected by frontend)
-if (req.method === "POST" && url.pathname === "/api/images") {
+async function handleImagesBatch(req, env) {
   try {
-    const {
-      style = "cartoon",
-      ref_image_b64,
-      story,
-      plan,
-      concurrency = 4,
-      pages_subset,
-      style_refs_b64,
-      coherence_code,
-      guidance, // optional
-    } = await req.json().catch(() => ({}));
-
+    const { style="cartoon", ref_image_b64, story, plan, concurrency=4, pages_subset, style_refs_b64, coherence_code, guidance } =
+      await req.json().catch(() => ({}));
     const allPages = story?.book?.pages || [];
     const pagesArr = Array.isArray(pages_subset) && pages_subset.length
       ? allPages.filter((p) => pages_subset.includes(p.page))
       : allPages;
-
     if (!pagesArr.length) return err("No pages", 400);
     if (!ref_image_b64)  return err("Missing reference image", 400);
 
@@ -2113,11 +2049,7 @@ if (req.method === "POST" && url.pathname === "/api/images") {
     const jobs = pagesArr.map((pg) => {
       const f = frames.find((x) => x.page === pg.page) || {};
       const prompt = buildFramePrompt({
-        style,
-        story,
-        page: pg,
-        pageCount,
-        frame: f,
+        style, story, page: pg, pageCount, frame: f,
         characterName: heroName,
         wardrobe_signature: deriveWardrobeSignature(story),
         coherence_code: coherence_code || makeCoherenceCode(story),
@@ -2128,7 +2060,6 @@ if (req.method === "POST" && url.pathname === "/api/images") {
     const out = [];
     const CONC = Math.min(Math.max(parseInt(concurrency || 3, 10), 1), 8);
     let idx = 0;
-
     async function worker() {
       while (idx < jobs.length) {
         const i = idx++;
@@ -2137,11 +2068,10 @@ if (req.method === "POST" && url.pathname === "/api/images") {
           const payload = {
             prompt: item.prompt,
             character_ref_b64: ref_image_b64,
+            ...(Array.isArray(style_refs_b64)&&style_refs_b64.length ? {style_refs_b64} : {}),
+            ...(coherence_code ? {coherence_code} : {}),
+            ...(guidance ? {guidance} : {}),
           };
-          if (Array.isArray(style_refs_b64) && style_refs_b64.length) payload.style_refs_b64 = style_refs_b64;
-          if (coherence_code) payload.coherence_code = coherence_code;
-          if (guidance) payload.guidance = guidance;
-
           const g = await geminiImage(env, payload, 75000, 3);
           out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
         } catch (e) {
@@ -2149,115 +2079,16 @@ if (req.method === "POST" && url.pathname === "/api/images") {
         }
       }
     }
-
     await Promise.all(Array.from({ length: CONC }, worker));
     out.sort((a, b) => (a.page || 0) - (b.page || 0));
     return ok({ images: out });
-  } catch (e) {
-    return err(e?.message || "Images generation failed", 500);
-  }
+  } catch (e) { return err(e?.message || "Images generation failed", 500); }
 }
-
-async function handleCheckoutPdf(req, env) {
+async function handleImagesNext(req, env) {
+  // exakt din tidigare /api/images/next (se din v27/v29 kod) – här inklistrad:
   try {
-    // === Guard/diag (för att slippa "undefined put/get") ===
-    if (!env.ORDERS) return err("ORDERS KV not bound", 500, { where: "handleCheckoutPdf" });
-    if (!env.STRIPE_SECRET_KEY) return err("STRIPE_SECRET_KEY missing", 500, { where: "handleCheckoutPdf" });
-
-    const { price_id, customer_email, order_id, draft } = await req.json().catch(()=> ({}));
-    if (!price_id) return err("Missing price_id", 400, { where: "handleCheckoutPdf" });
-
-    // 1) Säkerställ order i KV
-    let oid = order_id;
-    if (oid) {
-      const ex = await kvGetOrder(env, oid);
-      if (!ex) {
-        const o = newOrder(draft);
-        o.id = oid;
-        await kvPutOrder(env, o);
-      }
-    } else {
-      const o = newOrder(draft);
-      await kvPutOrder(env, o);
-      oid = o.id;
-    }
-
-    // 2) Bygg Stripe checkout (metadata.order_id är kritiskt)
-    const FRONTEND_ORIGIN = env.FRONTEND_ORIGIN || "https://example.com";
-    const success = (env.SUCCESS_URL || `${FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
-    const cancel  = env.CANCEL_URL  || `${FRONTEND_ORIGIN}/`;
-
-    const base = {
-      mode: "payment",
-      "line_items[0][price]": price_id,
-      "line_items[0][quantity]": 1,
-      success_url: success,
-      cancel_url: cancel,
-      allow_promotion_codes: "true",
-      "metadata[order_id]": oid,
-    };
-    if (customer_email) base.customer_email = customer_email;
-
-    const body = formEncode(base);
-
-    // 3) Stripe-anrop
-    let session;
-    try {
-      session = await stripe(env, "checkout/sessions", { body });
-    } catch (e) {
-      return err(e?.message || "Stripe checkout failed", 500, {
-        where: "stripe.checkout.sessions",
-        hint: "Kontrollera STRIPE_SECRET_KEY/PRICE_ID och att priset ligger i samma Stripe-konto.",
-      });
-    }
-
-    // 4) Uppdatera orderstatus + spara session → order (viktigt för success/verify)
-    await kvUpdateStatus(env, oid, "pending", { stripe_session_id: session.id });
-    await kvMapSessionToOrder(env, session.id, oid); // ← NYCKELRAD
-
-    // 5) Returnera både url och order_id
-    return ok({ url: session.url, id: session.id, order_id: oid });
-  } catch (e) {
-    return err(e?.message || "checkout create failed", 500, { where: "handleCheckoutPdf" });
-  }
-}
-
-
-
-async function handleCheckoutVerify(req, env) {
-  const url = new URL(req.url);
-  const sid = url.searchParams.get("session_id");
-  if (!sid) return err("Missing session_id", 400);
-
-  const session = await stripe(env, `checkout/sessions/${encodeURIComponent(sid)}`, { method: "GET" });
-
-  const paid = session.payment_status === "paid";
-  const order_id = session.metadata?.order_id || null;
-
-  return ok({
-    paid,
-    order_id,
-    amount_total: session.amount_total,
-    currency: session.currency,
-  });
-}
-
-
-// Generate ONE interior image, sequential (keeps context via prev_b64)
-// Generate ONE interior image, sequentially, with previous-image guidance
-if (req.method === "POST" && url.pathname === "/api/images/next") {
-  try {
-    const {
-      style = "cartoon",
-      story,
-      plan,
-      page,
-      ref_image_b64,
-      prev_b64,          // ← föregående bild som referens (bare b64)
-      coherence_code,
-      style_refs_b64,
-    } = await req.json().catch(() => ({}));
-
+    const { style="cartoon", story, plan, page, ref_image_b64, prev_b64, coherence_code, style_refs_b64 } =
+      await req.json().catch(() => ({}));
     if (!story?.book?.pages) return err("Missing story.pages", 400);
     const pg = story.book.pages.find(p => p.page === page);
     if (!pg) return err(`Page ${page} not found`, 404);
@@ -2267,11 +2098,8 @@ if (req.method === "POST" && url.pathname === "/api/images/next") {
     const frame  = frames.find(f => f.page === page) || {};
     const pageCount = story.book.pages.length;
     const heroName  = story.book.bible?.main_character?.name || "Hero";
-
-    // English scene text if available, else fallback to Swedish scene/text
     const sceneEN = pg.scene_en || pg.scene || pg.text || "";
 
-    // --- CONTINUATION BLOCK (ENG) ---
     const continuation = [
       "This illustration continues directly from the previous scene.",
       "Use the previous image only as a visual guide for style, lighting, and character identity.",
@@ -2281,110 +2109,69 @@ if (req.method === "POST" && url.pathname === "/api/images/next") {
       "Now illustrate this new scene based on the description below:"
     ].join(" ");
 
-    // Bygg prompt (på engelska för bildmodellen)
     const prompt = [
       styleGuard(style),
-      // identitet & kläder
       `Use the exact same main character as in the reference (${heroName}). Keep hair color and length identical. Do not change age/proportions. Do not add extra limbs.`,
       deriveWardrobeSignature(story)
         ? `WARDROBE: ${deriveWardrobeSignature(story)}. Keep outfit and base color identical on every page.`
         : "",
-      // kontinuitet
       `This is page ${pg.page} of ${pageCount}. Keep the same global style across all pages.`,
       `COHERENCE_CODE:${coherence_code || makeCoherenceCode(story)}`,
-      // continuation-instruktion
       continuation,
-      // scenen
       `SCENE (EN): ${sceneEN}`,
       `SHOT: ${shotLine(frame)}.`,
-      // format
       "Square composition (1:1).",
-      // mild anti-repeat
       "DO NOT reuse the exact same pose/composition from the previous image."
     ].filter(Boolean).join("\n");
 
     const payload = {
       prompt,
       character_ref_b64: ref_image_b64,
-      prev_b64, // ← den viktiga “föregående bild”-referensen
+      prev_b64,
       coherence_code: coherence_code || makeCoherenceCode(story),
+      ...(Array.isArray(style_refs_b64)&&style_refs_b64.length ? {style_refs_b64} : {}),
     };
-    if (Array.isArray(style_refs_b64) && style_refs_b64.length) payload.style_refs_b64 = style_refs_b64;
-
     const g = await geminiImage(env, payload, 75000, 3);
     if (!g?.image_url) return err("No image from Gemini", 502);
     return ok({ page, image_url: g.image_url, provider: g.provider || "google", prompt });
-  } catch (e) {
-    return err(e?.message || "images/next failed", 500);
-  }
+  } catch (e) { return err(e?.message || "images/next failed", 500); }
 }
+async function handleImageRegenerate(req, env) {
+  try {
+    const { story, page, character_ref_b64 } = await req.json().catch(() => ({}));
+    if (!story?.book?.pages) return err("Missing story.pages", 400);
+    const target = story.book.pages.find((p) => p.page === page);
+    if (!target) return err(`Page ${page} not found`, 404);
 
-function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
-  const mc = bible?.main_character || {};
-  const name = mc.name || "Hero";
-  const age  = mc.age  || 5;
-  const physique = mc.physique || "";
-  const identity = Array.isArray(mc.identity_keys) ? mc.identity_keys.join(", ") : "";
+    const frame = normalizePlan(story.book.pages).plan.find((f) => f.page === page);
+    const coherence_code = makeCoherenceCode(story);
+    const wardrobe_signature = deriveWardrobeSignature(story);
 
-  const styleGuardText = styleGuard(style);
+    const prompt = buildFramePrompt({
+      style: story.book.style,
+      story,
+      page: target,
+      pageCount: story.book.pages.length,
+      frame,
+      characterName: story.book.bible.main_character.name,
+      wardrobe_signature,
+      coherence_code,
+    });
 
-  return [
-    styleGuardText,
-    "Create a square (1:1) **character reference card** for the main hero.",
-    `Name: ${name}. Age: ≈${age} (child proportions if human).`,
-    physique ? `Physique: ${physique}.` : "",
-    identity ? `Personality: ${identity}.` : "",
-    traits ? `Extra traits: ${traits}.` : "",
-    "Neutral, even lighting. Plain, uncluttered background.",
-    "Show full body front-facing + a clear look at the face.",
-    "This image will be used as the identity reference for all later illustrations.",
-    "No text or logos in the image."
-  ].filter(Boolean).join("\n");
+    const img = await geminiImage(env, {
+      prompt,
+      character_ref_b64,
+      guidance: styleHint(story.book.style),
+      coherence_code,
+    });
+    return ok({ page, prompt, ...img });
+  } catch (e) { return err(e?.message || "Image regeneration failed"); }
 }
-
-
-      // Regenerate single image
-      if (req.method === "POST" && url.pathname === "/api/image/regenerate") {
-        try {
-          const body = await req.json().catch(() => ({}));
-          const { story, page, character_ref_b64 } = body || {};
-          if (!story?.book?.pages) return err("Missing story.pages", 400);
-          const target = story.book.pages.find((p) => p.page === page);
-          if (!target) return err(`Page ${page} not found`, 404);
-
-          const frame = normalizePlan(story.book.pages).plan.find((f) => f.page === page);
-          const coherence_code = makeCoherenceCode(story);
-          const wardrobe_signature = deriveWardrobeSignature(story);
-
-          const prompt = buildFramePrompt({
-            style: story.book.style,
-            story,
-            page: target,
-            pageCount: story.book.pages.length,
-            frame,
-            characterName: story.book.bible.main_character.name,
-            wardrobe_signature,
-            coherence_code,
-          });
-
-          const img = await geminiImage(env, {
-            prompt,
-            character_ref_b64,
-            guidance: styleHint(story.book.style),
-            coherence_code,
-          });
-          return ok({ page, prompt, ...img });
-        } catch (e) {
-          return err(e?.message || "Image regeneration failed");
-        }
-      }
-
-   // Cover generation
-if (req.method === "POST" && url.pathname === "/api/cover") {
+async function handleCover(req, env) {
   try {
     const { story, style = "storybook", character_ref_b64, prev_image_b64 } = await req.json().catch(() => ({}));
     if (!story?.book) return err("Missing story", 400);
-    if (!character_ref_b64) return err("Missing character_ref_b64", 400); // viktigt för identitet
+    if (!character_ref_b64) return err("Missing character_ref_b64", 400);
 
     const coherence_code = makeCoherenceCode(story);
     const wardrobe_signature = deriveWardrobeSignature(story);
@@ -2406,91 +2193,56 @@ if (req.method === "POST" && url.pathname === "/api/cover") {
       guidance: styleHint(effectiveStyle),
     }, 75000, 3);
 
-    // Bygg robust svar oavsett format
     let data_url = null;
     if (g?.b64) data_url = `data:image/png;base64,${g.b64}`;
     else if (g?.image_url) data_url = g.image_url;
     else if (g?.data_url) data_url = g.data_url;
-
     if (!data_url) return err("Cover generation failed (no image data)", 500);
 
-    return ok({
-      cover_b64: g.b64 || null,
-      data_url,
-      image_url: g.image_url || null,
-      provider: g.provider || "google",
-      prompt,
-    });
-  } catch (e) {
-    console.error("COVER ERROR", e);
-    return err(e?.message || "Cover generation failed", 500);
-  }
+    return ok({ cover_b64: g.b64 || null, data_url, image_url: g.image_url || null, provider: g.provider || "google", prompt });
+  } catch (e) { return err(e?.message || "Cover generation failed", 500); }
 }
 
-
-// POST /api/pdf/interior-url
-// body: { story, images }
-if (req.method === "POST" && url.pathname === "/api/pdf/interior-url") {
+/* ====================== PDF URL-varianter ====================== */
+async function handlePdfInteriorUrl(req, env) {
   try {
     const { story, images } = await req.json().catch(() => ({}));
     if (!story?.book?.pages) return err("Missing story", 400);
-
     const bytes = await buildFinalInteriorPdf(env, story, images || []);
     const ts = Date.now();
     const safeTitle = String(story?.book?.title || "bok").replace(/[^\wåäöÅÄÖ\-]+/g, "_");
-
     const key = `${safeTitle}_${ts}_INTERIOR.pdf`;
-
-    const publicUrl = await r2PutPublic(env, key, bytes);
-    return ok({ url: publicUrl, key });
-  } catch (e) {
-    return err(e?.message || "interior-url failed", 500);
-  }
+    const url = await r2PutPublic(env, key, bytes);
+    return ok({ url, key });
+  } catch (e) { return err(e?.message || "interior-url failed", 500); }
 }
-
-// POST /api/pdf/cover-url
-// body: { story, images }
-if (req.method === "POST" && url.pathname === "/api/pdf/cover-url") {
+async function handlePdfCoverUrl(req, env) {
   try {
     const { story, images } = await req.json().catch(() => ({}));
     if (!story?.book?.pages) return err("Missing story", 400);
-
     const bytes = await buildFinalCoverPdf(env, story, images || []);
     const ts = Date.now();
-   const title = story?.book?.title ?? "bok";
-const safeTitle = title
-  .normalize("NFKD")                               // dela accenter
-  .replace(/[^\p{L}\p{N}-]+/gu, "_")              // behåll bokstäver/siffror/-
-  .replace(/_{2,}/g, "_")                         // komprimera __
-  .replace(/^_|_$/g, "");                         // trimma _
-
+    const title = story?.book?.title ?? "bok";
+    const safeTitle = String(title).normalize("NFKD").replace(/[^\p{L}\p{N}-]+/gu, "_").replace(/_{2,}/g, "_").replace(/^_|_$/g, "");
     const key = `${safeTitle}_${ts}_COVER.pdf`;
-
-    const publicUrl = await r2PutPublic(env, key, bytes);
-    return ok({ url: publicUrl, key });
-  } catch (e) {
-    return err(e?.message || "cover-url failed", 500);
-  }
+    const url = await r2PutPublic(env, key, bytes);
+    return ok({ url, key });
+  } catch (e) { return err(e?.message || "cover-url failed", 500); }
 }
 
-if (req.method === "POST" && url.pathname === "/api/pdf/build-and-attach") {
-  return handleBuildAndAttach(req, env);
-}
-
-/* ===== Gelato: fraktmetoder ===== */
-if (req.method === "GET" && url.pathname === "/api/gelato/shipment-methods") {
+/* ====================== GELATO (router-alias) ====================== */
+async function handleGelatoShipmentMethods(req, env) {
   try {
-    const country = url.searchParams.get("country") || env.GELATO_DEFAULT_COUNTRY || "SE";
+    const country = new URL(req.url).searchParams.get("country") || env.GELATO_DEFAULT_COUNTRY || "SE";
     const data = await gelatoGetShipmentMethods(env, country);
     return ok(data);
-  } catch (e) { return err(e.message || "gelato shipment-methods failed", 500); }
+  } catch (e) { return err(e?.message || "gelato shipment-methods failed", 500); }
 }
-
-/* ===== Gelato: priser för vald produkt UID ===== */
-if (req.method === "GET" && url.pathname === "/api/gelato/prices") {
+async function handleGelatoPrices(req, env) {
   try {
     const productUid = env.GELATO_PRODUCT_UID;
     if (!productUid) return err("Missing GELATO_PRODUCT_UID", 400);
+    const url = new URL(req.url);
     const country  = url.searchParams.get("country")  || env.GELATO_DEFAULT_COUNTRY || "SE";
     const currency = url.searchParams.get("currency") || env.GELATO_DEFAULT_CURRENCY || "SEK";
     const pageCount = url.searchParams.get("pageCount");
@@ -2498,12 +2250,18 @@ if (req.method === "GET" && url.pathname === "/api/gelato/prices") {
       country, currency, pageCount: pageCount ? Number(pageCount) : undefined,
     });
     return ok(prices);
-  } catch (e) { return err(e.message || "gelato prices failed", 500); }
+  } catch (e) { return err(e?.message || "gelato prices failed", 500); }
 }
-
-/* ===== Gelato: skapa order från din KV-order ===== */
-// POST /api/gelato/create  body: { order_id, shipment?, customer? }
-if (req.method === "POST" && url.pathname === "/api/gelato/create") {
+async function handleGelatoCoverDimensions(req, env) {
+  try {
+    const productUid = env.GELATO_PRODUCT_UID;
+    const url = new URL(req.url);
+    const pageCount = Number(url.searchParams.get("pageCount"));
+    const dims = await gelatoGetCoverDimensions(env, productUid, pageCount);
+    return ok(dims);
+  } catch (e) { return err(e?.message || "gelato cover-dimensions failed", 500); }
+}
+async function handleGelatoCreate(req, env) {
   try {
     const body = await req.json().catch(()=> ({}));
     const order_id = body?.order_id;
@@ -2511,86 +2269,72 @@ if (req.method === "POST" && url.pathname === "/api/gelato/create") {
 
     const ord = await kvGetOrder(env, order_id);
     if (!ord) return err("Order not found", 404);
-
-    // Kräv att vi har R2-länkar (du har dem redan efter build-and-attach)
     if (!ord?.files?.interior_url || !ord?.files?.cover_url) {
       return err("Order is missing R2 files; run build-and-attach first", 400);
     }
-
-    const result = await gelatoCreateOrder(env, {
-      order: ord,
-      shipment: body?.shipment || {},
-      customer: body?.customer || {},
-    });
-
+    const result = await gelatoCreateOrder(env, { order: ord, shipment: body?.shipment || {}, customer: body?.customer || {} });
     return ok(result);
-  } catch (e) {
-    return err(e.message || "gelato create failed", 500);
-  }
+  } catch (e) { return err(e?.message || "gelato create failed", 500); }
 }
-
-/* ===== Gelato webhook ===== */
-// Ställ in denna URL i Gelatos dashboard: POST https://.../api/gelato/webhook
-if (req.method === "POST" && url.pathname === "/api/gelato/webhook") {
+async function handleGelatoWebhook(req, env) {
   try {
     const evt = await req.json().catch(()=> ({}));
-    // Gelato skickar bl.a. orderId/status – format kan variera; anpassa vid behov
     const gelatoOrderId = evt?.orderId || evt?.id || evt?.data?.orderId;
     const status = evt?.status || evt?.data?.status || evt?.eventType;
-
-    // Hitta din KV-order via lagrad gelato_order_id
-    // (om du inte har en index, kan du skicka med din orderReferenceId i webhook payload i Gelato, 
-    //  annars spara en "reverse index" i KV när du skapar ordern)
-    // Här antar vi att du sparade gelato_order_id i ord.files – hämta alla är dyrt; 
-    // enklast: låt frontend/worker skapa en KV "GELATO_IDX:{gelatoId} -> orderId" samtidigt vid create.
-
-    // Exempel på index: vid create:
-    // await env.ORDERS.put(`GELATO_IDX:${gelatoId}`, orderId)
-
     let orderId = null;
-    if (gelatoOrderId) {
-      orderId = await env.ORDERS.get(`GELATO_IDX:${gelatoOrderId}`);
-    }
-    if (orderId) {
-      // uppdatera status på din order
-      await kvAttachFiles(env, orderId, { gelato_status: status });
-    }
+    if (gelatoOrderId) orderId = await env.ORDERS.get(`GELATO_IDX:${gelatoOrderId}`);
+    if (orderId) await kvAttachFiles(env, orderId, { gelato_status: status });
     return ok({ received: true });
-  } catch (e) {
-    return err(e.message || "webhook error", 500);
-  }
-}
-
-// GET /api/gelato/cover-dimensions?pageCount=34
-if (req.method === "GET" && url.pathname === "/api/gelato/cover-dimensions") {
-  try {
-    const productUid = env.GELATO_PRODUCT_UID;
-    const pageCount = Number(url.searchParams.get("pageCount"));
-    const dims = await gelatoGetCoverDimensions(env, productUid, pageCount);
-    return ok(dims);
-  } catch (e) {
-    return err(e.message || "gelato cover-dimensions failed", 500);
-  }
-}
-
-// Skapa checkout-session (TRYCKT BOK)
-if (req.method === "POST" && url.pathname === "/api/checkout/printed") {
-  try { return await handleCheckoutPrinted(req, env); }
-  catch (e) { return err(e?.message || "checkout printed failed", 500, { where: "handleCheckoutPrinted" }); }
+  } catch (e) { return err(e?.message || "webhook error", 500); }
 }
 
 
-      // Uploads
-      if (req.method === "POST" && url.pathname === "/api/images/upload") {
-        return handleUploadRequest(req, env);
-      }
+export default {
+  async fetch(req, env) {
+    try {
+      if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+      const url = new URL(req.url);
 
-      // PDF build
-      if (req.method === "POST" && url.pathname === "/api/pdf") {
-        return handlePdfRequest(req, env);
-      }
+      // --- Health & Diag ---
+      if (req.method === "GET" && url.pathname === "/") return ok({ ok:true, ts:Date.now() });
+      if (req.method === "GET" && url.pathname === "/api/diag") return handleDiagRequest(req, env);
 
-      // Not found
+      // --- Orders (KV) ---
+      if (req.method === "POST" && url.pathname === "/api/orders/draft")  return handleOrdersDraft(req, env);
+      if (req.method === "GET"  && url.pathname === "/api/orders/status") return handleOrdersStatus(req, env);
+
+      // --- Checkout (Stripe) ---
+      if (req.method === "GET"  && url.pathname === "/api/checkout/ping")      return handleCheckoutPing(req, env);
+      if (req.method === "GET"  && url.pathname === "/api/checkout/price")     return handleCheckoutPriceLookup(req, env);
+      if (req.method === "POST" && url.pathname === "/api/checkout/pdf")       return handleCheckoutPdf(req, env);
+      if (req.method === "POST" && url.pathname === "/api/checkout/printed")   return handleCheckoutPrinted(req, env); // ← ENDA printed
+      if (req.method === "GET"  && url.pathname === "/api/checkout/verify")    return handleCheckoutVerify(req, env);
+      if (req.method === "GET"  && url.pathname === "/api/checkout/order-id")  return handleCheckoutOrderId(req, env);
+      if (req.method === "POST" && url.pathname === "/api/stripe/webhook")     return handleStripeWebhook(req, env);
+
+      // --- Story & Images ---
+      if (req.method === "POST" && url.pathname === "/api/story")             return handleStory(req, env);
+      if (req.method === "POST" && url.pathname === "/api/ref-image")         return handleRefImage(req, env);
+      if (req.method === "POST" && url.pathname === "/api/images")            return handleImagesBatch(req, env);
+      if (req.method === "POST" && url.pathname === "/api/images/next")       return handleImagesNext(req, env);
+      if (req.method === "POST" && url.pathname === "/api/image/regenerate")  return handleImageRegenerate(req, env);
+      if (req.method === "POST" && url.pathname === "/api/cover")             return handleCover(req, env);
+
+      // --- PDF build & storage ---
+      if (req.method === "POST" && url.pathname === "/api/images/upload")       return handleUploadRequest(req, env);
+      if (req.method === "POST" && url.pathname === "/api/pdf")                 return handlePdfRequest(req, env); // preview/final i en fil
+      if (req.method === "POST" && url.pathname === "/api/pdf/interior-url")    return handlePdfInteriorUrl(req, env);
+      if (req.method === "POST" && url.pathname === "/api/pdf/cover-url")       return handlePdfCoverUrl(req, env);
+      if (req.method === "POST" && url.pathname === "/api/pdf/build-and-attach")return handleBuildAndAttach(req, env);
+
+      // --- Gelato ---
+      if (req.method === "GET"  && url.pathname === "/api/gelato/shipment-methods") return handleGelatoShipmentMethods(req, env);
+      if (req.method === "GET"  && url.pathname === "/api/gelato/prices")            return handleGelatoPrices(req, env);
+      if (req.method === "GET"  && url.pathname === "/api/gelato/cover-dimensions")  return handleGelatoCoverDimensions(req, env);
+      if (req.method === "POST" && url.pathname === "/api/gelato/create")            return handleGelatoCreate(req, env);
+      if (req.method === "POST" && url.pathname === "/api/gelato/webhook")           return handleGelatoWebhook(req, env);
+
+      // --- 404 ---
       return new Response("Not found", { status: 404, headers: CORS });
     } catch (e) {
       return err(e?.message || "Unhandled error");

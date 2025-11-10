@@ -550,91 +550,47 @@ async function onBuyPrint() {
   try {
     if (!state.story) { alert("Skapa förhandsvisning först."); return; }
 
-    // 1) Bygg FINAL inlaga (utan omslag)
-    const interior = await fetchJSON(`${API}/api/pdf/interior-url`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        story: state.story,
-        images: buildImagesPayload(),
-        trim: "square210",
-        mode: "final"
-      })
-    });
-    const interiorPdfUrl = interior?.url;
-    if (!interiorPdfUrl) throw new Error("Kunde inte få URL för inlaga (interior-url).");
-
-    // 2) Bygg FINAL omslag (full spread)
-    const cover = await fetchJSON(`${API}/api/pdf/cover-url`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        story: state.story,
-        images: buildImagesPayload(), // backend kan strunta i sidbilderna om den bara behöver cover
-        trim: "square210",
-        mode: "final",
-        // valfritt: metadata om produkt/sidor om din backend behöver det:
-        // productUid: "PHOTOBOOK_20X20_HARDCOVER",
-        // pages: (state.story?.book?.pages?.length ?? 0) * 2
-      })
-    });
-    const coverPdfUrl = cover?.url;
-    if (!coverPdfUrl) throw new Error("Kunde inte få URL för omslag (cover-url).");
-
-    // 3) Fråga användaren om leveransinfo (tillfällig prompt-lösning)
-    const shipTo = {
-      name:   prompt("Namn")              || "För- och efternamn",
-      email:  prompt("E-post")            || "",
-      phone:  prompt("Telefon (+46...)")  || "",
-      address1: prompt("Adress")          || "",
-      city:   prompt("Stad")              || "",
-      zip:    prompt("Postnummer")        || "",
-      country:"SE"
+    // Spara ett “draft” så vi vet vad som ska tryckas efter betalning
+    const draft = {
+      kind: "printed",
+      story: state.story,
+      images: buildImagesPayload(),
+      trim: "square200",   // <- för Gelato 200x200 mm inlaga
+      mode: "final"
     };
+    try { localStorage.setItem(CHECKOUT_DRAFT_KEY, JSON.stringify(draft)); } catch {}
 
-    // 4) Välj/ange Gelato-produkt (tillfälligt prompt)
-    const productUid = prompt("productUid (Gelato)") || "";
-    if (!productUid) { alert("productUid saknas."); return; }
+    setStatus("🧾 Startar checkout…", 92);
 
-    // 5) Quote
-    setStatus("🚚 Hämtar frakt & pris…", 40);
-    const q = await fetchJSON(`${API}/api/gelato/quote`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ shipTo, productUid, quantity: 1, currency: "SEK" })
-    });
-
-    const total = q?.quote?.totals?.grandTotal?.amount;
-    const curr  = q?.quote?.totals?.grandTotal?.currency || "SEK";
-    const eta   = q?.quote?.estimatedDeliveryDate || "–";
-    const okGo  = confirm(`Pris (hela ordern): ${total ?? "okänt"} ${curr}\nETA: ${eta}\n\nFortsätt beställning?`);
-    if (!okGo) { setStatus(null); return; }
-
-    // 6) Order (använd shipmentMethodUid från quote-svaret)
-    setStatus("🖨️ Lägger tryckorder…", 78);
-    const o = await fetchJSON(`${API}/api/gelato/order`, {
+    // OBS: STRIPE_PRICE_PRINTED ska ligga i backend ENV. Här skickar vi gärna också, ifall din backend kräver det.
+    const r = await fetch(`${API}/api/checkout/printed`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        shipTo,
-        productUid,
-        shipmentMethodUid: q.shipmentMethodUid,
-        files: { interiorPdfUrl, coverPdfUrl },
-        quantity: 1,
-        currency: "SEK",
-        referenceId: `bp_${Date.now()}`
+        price_id: PRICE_ID,           // eller ta bort om backend läser från env. (Annars: sätt PRICE_ID = din STRIPE_PRICE_PRINTED.)
+        customer_email: "",           // kan lämnas tomt, Stripe samlar in
+        draft                          // sparas på ordern i KV
       })
     });
 
-    setStatus("✅ Order lagd! (Gelato)", 100);
-    alert(`Order skapad!\nGelato ID: ${o?.order?.orderId || o?.order?.id || "okänt"}`);
+    if (!r.ok) {
+      const body = await r.text().catch(()=> "");
+      setStatus(null);
+      throw new Error(`Checkout (printed) misslyckades (HTTP ${r.status})\n${body}`);
+    }
 
+    const { url, order_id, id: stripe_session_id, error } = await r.json();
+    if (error) { setStatus(null); throw new Error(error); }
+
+    if (order_id) saveOrderId(order_id);
+    location.href = url; // → Stripe Checkout
   } catch (e) {
     console.error(e);
     setStatus(null);
-    alert(e?.message || "Kunde inte lägga tryckorder.");
+    alert(e?.message || "Kunde inte starta checkout för tryckt bok.");
   }
 }
+
 
 
 

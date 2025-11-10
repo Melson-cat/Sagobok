@@ -19,7 +19,7 @@
     .btn:hover{ background:#1458c0; }
     .muted { color:#666; font-size:.95rem; }
     .hidden{ display:none; }
-    #err{ color:#b00020; font-weight:600; margin-top:16px; }
+    #err{ color:#b00020; font-weight:600; margin-top:16px; white-space:pre-wrap; }
     form { width:min(680px, 92vw); text-align:left; background:#fff; border:1px solid #eee; border-radius:12px; padding:16px; margin-top:16px; }
     .row{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
     label{ display:block; font-weight:600; margin-top:10px; }
@@ -49,9 +49,9 @@
   <p id="err" class="hidden"></p>
 
   <!-- PRINT FORM -->
-  <form id="printForm" class="hidden">
+  <form id="printForm" class="hidden" novalidate>
     <h3>Leveransuppgifter för tryckt bok</h3>
-    <p class="muted">Fyll i adress och välj frakt. När du skickar beställningen skickas din bok till tryck hos vår partner.</p>
+    <p class="muted">Fyll i adress och välj frakt. I testläge skapas en simulerad order (ingen riktig produktion).</p>
     <div class="row">
       <div>
         <label>Förnamn</label>
@@ -88,7 +88,6 @@
       <option value="DK">Danmark (DK)</option>
       <option value="DE">Tyskland (DE)</option>
       <option value="US">USA (US)</option>
-      <!-- utöka vid behov -->
     </select>
 
     <label style="margin-top:14px;">Fraktmetod</label>
@@ -104,7 +103,14 @@
 (() => {
   const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
 
+  // --- utils ---
+  const q = (k, fb=null) => new URLSearchParams(location.search).get(k) ?? fb;
   const $ = (id) => document.getElementById(id);
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const setHidden = (el, hide) => el && (hide ? el.classList.add("hidden") : el.classList.remove("hidden"));
+  const makeLink = (href, text) => { const a = document.createElement("a"); a.href = href; a.target="_blank"; a.rel="noopener"; a.className="btn"; a.textContent=text; return a; };
+
+  // --- els ---
   const elStatus      = $("status");
   const elSpinner     = $("spinner");
   const elOrderBox    = $("orderBox");
@@ -117,7 +123,6 @@
   const elLinks       = $("downloadLinks");
   const formPrint     = $("printForm");
 
-  // form fields
   const f = {
     firstName: $("firstName"),
     lastName: $("lastName"),
@@ -133,18 +138,15 @@
     printHint: $("printHint"),
   };
 
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const setHidden = (el, hide) => el && (hide ? el.classList.add("hidden") : el.classList.remove("hidden"));
-  const makeLink = (href, text) => { const a = document.createElement("a"); a.href = href; a.target="_blank"; a.rel="noopener"; a.className="btn"; a.textContent=text; return a; };
-
   async function fetchJSON(url, init) {
     const r = await fetch(url, init);
     const ct = r.headers.get("content-type") || "";
-    const body = ct.includes("application/json") ? await r.json() : await r.text();
-    if (!r.ok || (body && body.error)) {
-      throw new Error((body && body.error) || `HTTP ${r.status}`);
+    const isJSON = ct.includes("application/json");
+    const body = isJSON ? await r.json() : await r.text();
+    if (!r.ok || (isJSON && body && body.error)) {
+      throw new Error((isJSON && body && body.error) || `HTTP ${r.status}${!isJSON ? ": " + body : ""}`);
     }
-    return body;
+    return isJSON ? body : { text: body };
   }
 
   async function verifySession(session_id) {
@@ -175,14 +177,12 @@
       body: JSON.stringify({ order_id })
     });
   }
-
   function renderLinks(files) {
     if (!elLinks) return;
     elLinks.innerHTML = "";
     if (files?.interior_url) elLinks.appendChild(makeLink(files.interior_url, "Ladda ner inlagan (PDF)"));
     if (files?.cover_url)    elLinks.appendChild(makeLink(files.cover_url, "Ladda ner omslaget (PDF)"));
   }
-
   async function loadShipmentMethods(country) {
     try {
       const data = await fetchJSON(`${BACKEND}/api/gelato/shipment-methods?country=${encodeURIComponent(country)}`);
@@ -204,7 +204,6 @@
       f.shipmentMethod.innerHTML = `<option value="">Fel vid hämtning av fraktmetoder</option>`;
     }
   }
-
   async function ensurePdfFiles(order_id) {
     let o = await getOrder(order_id);
     const hasInt = !!o?.files?.interior_url;
@@ -221,7 +220,7 @@
 
   async function init() {
     try {
-      const sid = new URLSearchParams(location.search).get("session_id");
+      const sid = q("session_id");
       if (!sid) throw new Error("Saknar session_id i URL:en.");
 
       setHidden(elErr, true);
@@ -229,7 +228,7 @@
       elStatus.textContent = "Verifierar betalning…";
 
       // session → paid/order-id
-      let order_id = null, amount = null, currency = null, kind = null;
+      let order_id = null, amount = null, currency = null;
       try {
         const v = await verifySession(sid);
         order_id = v.order_id || order_id;
@@ -242,7 +241,10 @@
 
       // vänta på webhook → paid
       const paidOrder = await waitForPaid(order_id);
-      kind = paidOrder?.kind || paidOrder?.draft?.kind || "pdf";
+
+      // bestäm typ: URL vinner, annars från KV
+      const kindFromURL = (q("kind") || "").toLowerCase();
+      const kind = kindFromURL || paidOrder?.kind || paidOrder?.draft?.kind || "pdf";
 
       // visa toppinfo
       setHidden(elOrderBox, false);
@@ -266,17 +268,18 @@
       elStatus.textContent = "Betalning bekräftad! Förbereder tryck…";
       const o2 = await ensurePdfFiles(order_id);
       setHidden(elSpinner, true);
-      elStatusText.textContent = "Fyll i leveransadress och frakt för att skicka boken till tryck.";
+      elStatusText.textContent = "Fyll i leveransadress och frakt för att skicka boken till tryck (testläge skapar en simulerad order).";
 
       // förifyll email om vi har den
       if (paidOrder?.email) f.email.value = paidOrder.email;
 
-      // ladda fraktmetoder
+      // ladda fraktmetoder baserat på land
       await loadShipmentMethods(f.country.value);
 
       // visa formulär
       setHidden(formPrint, false);
 
+      // submit → create (dry-run respekteras i backend)
       formPrint.addEventListener("submit", async (e) => {
         e.preventDefault();
         try {
@@ -300,7 +303,6 @@
             phone: f.phone.value.trim(),
           };
 
-          // OBS: förutsätter att ordern redan har interior_url/cover_url i KV (ensurePdfFiles fixar det).
           const created = await fetchJSON(`${BACKEND}/api/gelato/create`, {
             method: "POST",
             headers: { "content-type":"application/json" },
@@ -308,9 +310,14 @@
           });
 
           elStatus.innerHTML = `Tryckorder skapad <span class="ok">✓</span>`;
-          elStatusText.textContent = "Vi uppdaterar din orderstatus när vi får besked från tryckpartnern.";
+          if (created?.simulated) {
+            elStatusText.textContent = "Test-order simulerad (GELATO_DRY_RUN=true). Inga verkliga kostnader uppstod.";
+          } else {
+            elStatusText.textContent = "Ordern har skickats till tryckpartnern. Vi uppdaterar status löpande.";
+          }
           f.printHint.textContent = "Klart!";
-          // valfritt: visa enkel info
+          setHidden(formPrint, true);
+
           if (created?.gelato?.id || created?.gelato?.orderId) {
             const gid = created.gelato.id || created.gelato.orderId;
             const info = document.createElement("p");
@@ -318,8 +325,7 @@
             info.textContent = `Gelato-ID: ${gid}`;
             document.body.appendChild(info);
           }
-          // dölja formulär
-          setHidden(formPrint, true);
+
         } catch (err) {
           f.btnSubmitPrint.disabled = false;
           f.printHint.textContent = "";
@@ -328,11 +334,9 @@
         }
       });
 
-      // land-change → uppdatera fraktlista
       f.country.addEventListener("change", () => loadShipmentMethods(f.country.value));
 
     } catch (e) {
-      console.error(e);
       setHidden(elSpinner, true);
       elStatus.textContent = "Ett fel uppstod.";
       elErr.textContent = e?.message || String(e);
