@@ -77,124 +77,173 @@
     <strong>Belopp:</strong> <span id="amount">—</span> <span id="currency"></span>
   </p>
 
-  <p id="err" class="hidden"></p>
-  <button id="dlBtn" class="btn hidden">Ladda ner boken igen</button>
+  <p id="statusText"></p>
+<div id="downloadLinks" style="display:flex; gap:.5rem; flex-wrap:wrap"></div>
 
-  <script>
-    const API = "https://bokpilot-backend.sebastian-runell.workers.dev";
-    const DRAFT_KEY = "bp_checkout_draft_v1"; // samma som i frontend
+<script>
+(() => {
+  // ====== KONFIG ======
+  const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
 
-    const $ = (id) => document.getElementById(id);
-    const qs = (name) => new URLSearchParams(location.search).get(name);
+  // ====== DOM HELPERS ======
+  const $ = (id) => document.getElementById(id);
+  const elStatus     = $("status");
+  const elSpinner    = $("spinner");
+  const elOrderInfo  = $("orderInfo");
+  const elOrderId    = $("orderId");
+  const elAmount     = $("amount");
+  const elCurrency   = $("currency");
+  const elErr        = $("err");
+  const elStatusText = $("statusText");
+  const elLinks      = $("downloadLinks");
 
-    async function verifySession(session_id) {
-      const r = await fetch(`${API}/api/checkout/verify?session_id=${encodeURIComponent(session_id)}`);
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
-      return j; // { paid, order_id, amount_total, currency }
+  // HJÄLPFUNKTIONER
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  async function fetchJSON(url, init) {
+    const r = await fetch(url, init);
+    const ct = r.headers.get("content-type") || "";
+    const isJSON = ct.includes("application/json");
+    const body = isJSON ? await r.json() : await r.text();
+    if (!r.ok || (body && body.error)) {
+      const msg = (body && body.error) || `HTTP ${r.status}`;
+      throw new Error(msg);
     }
+    return body;
+  }
 
-    async function getOrderIdFromSession(session_id) {
-      const r = await fetch(`${API}/api/checkout/order-id?session_id=${encodeURIComponent(session_id)}`);
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
-      return j.order_id || null;
-    }
+  function setHidden(el, hidden) {
+    if (!el) return;
+    hidden ? el.classList.add("hidden") : el.classList.remove("hidden");
+  }
 
-    async function getStatus(order_id) {
-      const url = `${API}/api/orders/status?id=${encodeURIComponent(order_id)}`;
-      const r = await fetch(url);
-      if (!r.ok) throw new Error(`status ${r.status}`);
-      return await r.json();
-    }
+  function makeLink(href, text) {
+    const a = document.createElement("a");
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.className = "btn";
+    a.textContent = text;
+    return a;
+  }
 
-    async function waitForPaid(order_id, timeoutMs = 90000, intervalMs = 1500) {
-      const t0 = Date.now();
-      while (Date.now() - t0 < timeoutMs) {
-        try {
-          const s = await getStatus(order_id);
-          if (s?.status === "paid" || s?.status === "ready") return s?.status;
-        } catch (_) {}
-        await new Promise(res => setTimeout(res, intervalMs));
-      }
-      throw new Error("Betalningen är inte bekräftad ännu. Prova att uppdatera sidan om en stund.");
-    }
+  async function verifySession(session_id) {
+    return fetchJSON(`${BACKEND}/api/checkout/verify?session_id=${encodeURIComponent(session_id)}`);
+    // -> { paid:boolean, order_id:string|null, amount_total:number|null, currency:string|null }
+  }
 
-    async function buildFinalPdfFromDraft() {
-      const raw = localStorage.getItem(DRAFT_KEY);
-      if (!raw) throw new Error("Ingen sparad draft hittades (kunde inte skapa PDF).");
-      const draft = JSON.parse(raw);
+  async function getOrderIdFromSession(session_id) {
+    const j = await fetchJSON(`${BACKEND}/api/checkout/order-id?session_id=${encodeURIComponent(session_id)}`);
+    return j.order_id || null;
+  }
 
-      const r = await fetch(`${API}/api/pdf`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          story: draft.story,
-          images: draft.images || [],
-          mode: "final",
-          trim: draft.trim || "square210",
-          watermark_text: ""
-        })
-      });
-      if (!r.ok) throw new Error(`PDF misslyckades (${r.status})`);
-      const blob = await r.blob();
-      const url  = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-    }
+  async function getOrder(order_id) {
+    return fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(order_id)}`);
+    // -> { id, status, ... , files?: {interior_url, cover_url} }
+  }
 
-    async function init() {
-      const errEl = $("err");
-      const dlBtn = $("dlBtn");
-      const spinner = $("spinner");
-      const orderInfo = $("orderInfo");
-      const orderIdEl = $("orderId");
-      const amountEl = $("amount");
-      const currencyEl = $("currency");
-      const statusEl = $("status");
-
+  async function waitForPaid(order_id, timeoutMs = 120000, pollMs = 1500) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
       try {
-        const session_id = qs("session_id");
-        if (!session_id) throw new Error("Saknar session_id i URL:en.");
+        const o = await getOrder(order_id);
+        if (o?.status === "paid" || o?.status === "ready") return o?.status;
+      } catch (_) {}
+      await sleep(pollMs);
+    }
+    throw new Error("Betalningen är ännu inte bekräftad. Uppdatera sidan om en liten stund.");
+  }
 
-        // Försök hämta orderinfo
-        let order_id = null, amount = null, currency = null;
-        try {
-          const v = await verifySession(session_id);
-          order_id = v.order_id;
-          amount = v.amount_total;
-          currency = v.currency;
-        } catch {
-          order_id = await getOrderIdFromSession(session_id);
-        }
+  async function buildAndAttach(order_id) {
+    return fetchJSON(`${BACKEND}/api/pdf/build-and-attach`, {
+      method: "POST",
+      headers: {"content-type":"application/json"},
+      body: JSON.stringify({ order_id })
+    });
+    // -> { ok:true } och KV uppdateras med files{interior_url, cover_url}
+  }
 
-        if (order_id) {
-          orderInfo.classList.remove("hidden");
-          orderIdEl.textContent = order_id;
-          if (amount) amountEl.textContent = (amount / 100).toFixed(2);
-          if (currency) currencyEl.textContent = currency.toUpperCase();
-        }
+  function renderLinks(files) {
+    if (!elLinks) return;
+    elLinks.innerHTML = "";
+    if (files?.interior_url) elLinks.appendChild(makeLink(files.interior_url, "Ladda ner inlagan (PDF)"));
+    if (files?.cover_url)    elLinks.appendChild(makeLink(files.cover_url, "Ladda ner omslaget (PDF)"));
+  }
 
-        statusEl.textContent = "Verifierar betalning...";
-        await waitForPaid(order_id);
-        statusEl.textContent = "Betalning bekräftad! Din bok laddas ner nu.";
-        spinner.classList.add("hidden");
+  async function init() {
+    try {
+      // 1) session_id i URL
+      const sid = new URLSearchParams(location.search).get("session_id");
+      if (!sid) throw new Error("Saknar session_id i URL:en.");
 
-        await buildFinalPdfFromDraft();
+      setHidden(elErr, true);
+      elStatus.textContent = "Verifierar betalning…";
+      setHidden(elSpinner, false);
 
-        dlBtn.classList.remove("hidden");
-        dlBtn.onclick = () => buildFinalPdfFromDraft();
+      // 2) Försök hämta verifiering + order-id + belopp
+      let order_id = null, amount = null, currency = null;
+      try {
+        const v = await verifySession(sid);
+        order_id = v.order_id || order_id;
+        amount   = v.amount_total ?? null;
+        currency = v.currency     ?? null;
+      } catch {
+        // Fallback: mappa session -> order
+        order_id = await getOrderIdFromSession(sid);
+      }
+      if (!order_id) throw new Error("Kunde inte koppla session till order.");
 
-      } catch (e) {
-        console.error(e);
-        spinner.classList.add("hidden");
-        statusEl.textContent = "Ett fel uppstod.";
-        if (errEl) {
-          errEl.textContent = e.message || String(e);
-          errEl.classList.remove("hidden");
-        }
+      // 3) Visa orderinfo (om belopp kändes av)
+      setHidden(elOrderInfo, false);
+      elOrderId.textContent = order_id;
+      if (amount != null)   elAmount.textContent   = (amount/100).toFixed(2);
+      if (currency)         elCurrency.textContent = String(currency).toUpperCase();
+
+      // 4) Vänta tills webhook markerat ordern som paid/ready
+      await waitForPaid(order_id);
+      elStatus.textContent = "Betalning bekräftad! Skapar och laddar upp dina PDF:er…";
+
+      // 5) Hämta order – bygg om filer saknas – hämta igen
+      let ord = await getOrder(order_id);
+      const hasInt = !!ord?.files?.interior_url;
+      const hasCov = !!ord?.files?.cover_url;
+
+      if (!hasInt || !hasCov) {
+        await buildAndAttach(order_id);
+        // kort delay för att KV ska säkert hinna uppdateras
+        await sleep(500);
+        ord = await getOrder(order_id);
+      }
+
+      // 6) Rendera länkar + autoöppna inlaga (kan blockas av popup-policy)
+      renderLinks(ord.files);
+      setHidden(elSpinner, true);
+      elStatus.textContent = "Klart! Dina filer är redo.";
+      if (elStatusText) elStatusText.textContent = "Du kan ladda ner igen via länkarna nedan.";
+
+      if (ord?.files?.interior_url) {
+        try { window.open(ord.files.interior_url, "_blank", "noopener"); } catch {}
+      }
+
+    } catch (e) {
+      console.error(e);
+      setHidden(elSpinner, true);
+      elStatus.textContent = "Ett fel uppstod.";
+      if (elErr) {
+        elErr.textContent = e?.message || String(e);
+        setHidden(elErr, false);
       }
     }
+  }
+
+  // Kör när DOM är redo
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init, { once: true });
+  } else {
     init();
-  </script>
+  }
+})();
+</script>
+
 </body>
 </html>

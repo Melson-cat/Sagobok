@@ -164,6 +164,24 @@ async function kvGetOrderFromSession(env, session_id) {
   return await env.ORDERS.get(`session:${session_id}`);
 }
 
+async function kvAttachFiles(env, order_id, files) {
+  const cur = await kvGetOrder(env, order_id);
+  if (!cur) throw new Error("order not found");
+  const next = {
+    ...cur,
+    updated_at: Date.now(),
+    files: {
+      ...(cur.files || {}),
+      interior_url: files.interior_url || (cur.files && cur.files.interior_url) || null,
+      cover_url:    files.cover_url    || (cur.files && cur.files.cover_url)    || null,
+      interior_key: files.interior_key || (cur.files && cur.files.interior_key) || null,
+      cover_key:    files.cover_key    || (cur.files && cur.files.cover_key)    || null,
+    },
+  };
+  await kvPutOrder(env, next);
+  return next;
+}
+
 
 /* --------------------- Stripe Webhook verifiering --------------------- */
 // Verifiera Stripe-signatur (v1) i Cloudflare Workers
@@ -2093,6 +2111,64 @@ const safeTitle = title
     return ok({ url: publicUrl, key });
   } catch (e) {
     return err(e?.message || "cover-url failed", 500);
+  }
+}
+
+// POST /api/pdf/build-and-attach
+// body: { order_id, story?, images? }
+if (req.method === "POST" && url.pathname === "/api/pdf/build-and-attach") {
+  try {
+    const b = await req.json().catch(()=> ({}));
+    const order_id = b?.order_id;
+    if (!order_id) return err("Missing order_id", 400);
+
+    // Hämta order, plocka draft som fallback
+    const ord = await kvGetOrder(env, order_id);
+    if (!ord) return err("Order not found", 404);
+
+    const story  = b?.story  || ord?.draft?.story;
+    const images = b?.images || ord?.draft?.images || [];
+    if (!story?.book?.pages) return err("Missing story (neither body nor draft had it)", 400);
+
+    // Bygg och ladda upp INTERIOR
+    const interiorBytes = await buildFinalInteriorPdf(env, story, images);
+    const ts = Date.now();
+
+    // Säkra filnamnskomponent
+    const safeTitle = String(story?.book?.title || "bok")
+      .normalize("NFKD")
+      .replace(/[^\p{L}\p{N}-]+/gu, "_")
+      .replace(/_{2,}/g, "_")
+      .replace(/^_|_$/g, "");
+
+    const interiorKey = `${safeTitle}_${ts}_INTERIOR.pdf`;
+    const interiorUrl = await r2PutPublic(env, interiorKey, interiorBytes);
+
+    // Bygg och ladda upp COVER
+    const coverBytes = await buildFinalCoverPdf(env, story, images);
+    const coverKey = `${safeTitle}_${ts}_COVER.pdf`;
+    const coverUrl = await r2PutPublic(env, coverKey, coverBytes);
+
+    // Spara på ordern
+    const updated = await kvAttachFiles(env, order_id, {
+      interior_url: interiorUrl,
+      cover_url: coverUrl,
+      interior_key: interiorKey,
+      cover_key: coverKey,
+    });
+
+    return ok({
+      order_id,
+      files: {
+        interior_url: interiorUrl,
+        cover_url: coverUrl,
+        interior_key: interiorKey,
+        cover_key: coverKey,
+      },
+      order: { id: updated.id, status: updated.status, files: updated.files },
+    });
+  } catch (e) {
+    return err(e?.message || "build-and-attach failed", 500);
   }
 }
 
