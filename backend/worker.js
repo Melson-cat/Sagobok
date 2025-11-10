@@ -238,7 +238,7 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
   if (!productUid) throw new Error("Missing GELATO_PRODUCT_UID");
   if (!order?.id) throw new Error("Missing order.id");
 
-  // Idempotency: return existing Gelato order if present
+  // Idempotency — return existing Gelato order if present
   if (order?.files?.gelato_order_id) {
     return {
       gelato: { id: order.files.gelato_order_id, status: order.files.gelato_status || "created" },
@@ -248,80 +248,41 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
 
   // Required files
   if (!order?.files?.interior_url) throw new Error("Order missing interior_url");
-  if (!order?.files?.cover_url) throw new Error("Order missing cover_url");
+  if (!order?.files?.cover_url)    throw new Error("Order missing cover_url");
 
-  // Files: Gelato expects "default" for interior, "cover" for cover
+  // Files: Gelato expects "default" for interior and "cover" for cover
   const files = [
     { type: "default", url: order.files.interior_url },
-    { type: "cover",   url: order.files.cover_url },
+    { type: "cover",   url: order.files.cover_url   },
   ];
 
-  // Page count: all pages incl. covers (book pages + title + end + 2 covers)
+  // --- Page count calculation ---
+  // storyPages = antal sidor i själva berättelsen (14 enligt din motor).
+  // innerPageCount = storyPages + 2 (titelsida + slutsida). Minst 16. Jämnt tal krävs.
   const storyPages = order?.draft?.story?.book?.pages?.length || 0;
-  let pageCount = storyPages ? storyPages + 2 + 2 : null; // title + end + front/back cover
+  let innerPageCount = storyPages + 2;         // titelsida + slutsida
+  if (innerPageCount < 16) innerPageCount = 16;
+  if (innerPageCount % 2 !== 0) innerPageCount += 1;
 
-  // Fetch product spec to discover required attributes
-  const spec = await gelatoGetProductSpec(env, productUid);
-  const attrs = Array.isArray(spec?.attributes) ? spec.attributes : [];
-  const requiredCodes = new Set(attrs.filter(a => a?.required).map(a => a.code));
+  // Total page count (inner + 2 omslag) används för cover-dimensions,
+  // men själva Orders API förväntar i praktiken "pageCount" = INNER.
+  const totalPageCount = innerPageCount + 2;
 
-  // Build attributes object
-  const attributes = {};
-
-  // pageCount (if required)
-  if (requiredCodes.has("pageCount")) {
-    if (!Number.isFinite(pageCount)) throw new Error("Missing pageCount for required attribute");
-    // Some products require even page counts; nudge to even if needed
-    if (pageCount % 2 !== 0) pageCount += 1;
-    attributes.pageCount = pageCount;
-  }
-
-  // Helper to pick first valid value from spec if not provided in env
-  function pickFromSpec(code, envValue) {
-    if (envValue) return envValue;
-    const a = attrs.find(x => x.code === code);
-    // Prefer uid if present, else code of first value
-    return a?.values?.[0]?.uid ?? a?.values?.[0]?.code ?? null;
-  }
-
-  // Common required attributes for photobooks (varies by product)
-  if (requiredCodes.has("sizeUid")) {
-    const v = pickFromSpec("sizeUid", env.GELATO_SIZE_UID);
-    if (!v) throw new Error("Missing sizeUid for product");
-    attributes.sizeUid = v;
-  }
-  if (requiredCodes.has("coverTypeUid")) {
-    const v = pickFromSpec("coverTypeUid", env.GELATO_COVER_TYPE_UID);
-    if (!v) throw new Error("Missing coverTypeUid");
-    attributes.coverTypeUid = v;
-  }
-  if (requiredCodes.has("paperTypeUid")) {
-    const v = pickFromSpec("paperTypeUid", env.GELATO_PAPER_TYPE_UID);
-    if (!v) throw new Error("Missing paperTypeUid");
-    attributes.paperTypeUid = v;
-  }
-  // Fill any other required attributes with a sensible default from spec
-  for (const code of requiredCodes) {
-    if (attributes[code] != null) continue;
-    const v = pickFromSpec(code, null);
-    if (v != null) attributes[code] = v;
-  }
-
-  // Shipment method (fallback to normal for country)
+  // Shipment method (fallback till "normal" för land)
   let shipmentMethodUid = shipment?.shipmentMethodUid || null;
   if (!shipmentMethodUid) {
     const meth = await gelatoGetShipmentMethods(
       env,
-      shipment?.country || env.GELATO_DEFAULT_COUNTRY || "SE"
+      (shipment?.country || env.GELATO_DEFAULT_COUNTRY || "SE").toUpperCase()
     );
     const pick = meth?.shipmentMethods?.find(m => m.type === "normal") || meth?.shipmentMethods?.[0];
     shipmentMethodUid = pick?.shipmentMethodUid || null;
   }
 
-  // Shipping address normalization
+  // Shipping address (lätta normaliseringar)
   const country = (shipment?.country || env.GELATO_DEFAULT_COUNTRY || "SE").toUpperCase();
-  const phoneRaw = customer?.phone || "";
-  const phone = /^\+[\d\s-]+$/.test(phoneRaw) ? phoneRaw : ""; // E.164 only; else blank to avoid 400
+  const phoneRaw = (customer?.phone || "").trim();
+  const phone = /^\+[\d\s-]+$/.test(phoneRaw) ? phoneRaw : ""; // lämna tom om ej E.164
 
   const shippingAddress = {
     companyName:  customer?.companyName || "",
@@ -337,36 +298,50 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
     phone,
   };
 
+  // --- Attributes ---
+  // Sätt pageCount i attributes OCH på item-nivå (båda behövs hos vissa produkter).
+  const attributes = { pageCount: innerPageCount };
+
   const payload = {
     orderType: env.GELATO_DRY_RUN ? "draft" : "order",
     orderReferenceId: order.id,
     customerReferenceId: customer?.id || "guest",
     currency: env.GELATO_DEFAULT_CURRENCY || "SEK",
-    items: [{
-      itemReferenceId: `item-${order.id}`,
-      productUid,
-      quantity: 1,
-      files,
-      attributes, // <-- required attributes live here
-    }],
+    items: [
+      {
+        itemReferenceId: `item-${order.id}`,
+        productUid,
+        quantity: 1,
+        files,
+        pageCount: innerPageCount, // 👈 viktig för "products[0].pageCount"
+        attributes,                 // 👈 behåll även här
+      }
+    ],
     ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
     shippingAddress,
   };
 
-  // Create order
+  // Skapa order
   const data = await gelatoFetch(`${GELATO_BASE.order}/orders`, env, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
   });
 
-  // Persist Gelato ids + reverse index for webhook
+  // Spara Gelato-id och status
   const saved = await kvAttachFiles(env, order.id, {
     gelato_order_id: data?.id || data?.orderId || null,
     gelato_status:   data?.status || "created",
+    // Bra att spara vilka counts vi använde, för diag
+    gelato_inner_page_count: innerPageCount,
+    gelato_total_page_count: totalPageCount,
   });
+
+  // Reverse-index för webhook
   const gelatoId = data?.id || data?.orderId;
-  if (gelatoId) await kvIndexGelatoOrder(env, gelatoId, saved.id, 60 * 24 * 60 * 60);
+  if (gelatoId) {
+    await kvIndexGelatoOrder(env, gelatoId, saved.id, 60 * 24 * 60 * 60);
+  }
 
   return { gelato: data, order: saved };
 }
