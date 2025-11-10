@@ -6,7 +6,12 @@
 const API = "https://bokpilot-backend.sebastian-runell.workers.dev";
 
 const CHECKOUT_DRAFT_KEY = "bp_checkout_draft_v1";
-const PRICE_ID = "price_1SPKvpLrEazOnLLm28yfGijH"; 
+// Två separata pris-ID:n: ett för digital PDF (explicit), ett för tryckt bok (valfritt – ENV i backend räcker)
+const PRICE_ID_PDF     = "price_1SPKvpLrEazOnLLm28yfGijH";
+// Om du vill tvinga pris för tryck från frontend, sätt detta = ditt printed price-id.
+// Annars: lämna tomt så backend läser STRIPE_PRICE_PRINTED från ENV:
+const PRICE_ID_PRINTED = "price_1SRstBLrEazOnLLmXbixVUmp"; // t.ex. "price_1SRstBLrEazOnLLmXbixVUmp" om du vill skicka in från frontend
+
 
 // === Checkout (KV/Webhook) ===
 const ORDER_ID_KEY    = "bp_last_order_id";  // sessionStorage
@@ -527,7 +532,7 @@ async function onBuyPdf() {
   const r = await fetch(`${API}/api/checkout/pdf`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ price_id: PRICE_ID, customer_email: "", draft })
+    body: JSON.stringify({ price_id: PRICE_ID_PDF, customer_email: "", draft })
   });
 
   if (!r.ok) {
@@ -562,16 +567,19 @@ async function onBuyPrint() {
 
     setStatus("🧾 Startar checkout…", 92);
 
-    // OBS: STRIPE_PRICE_PRINTED ska ligga i backend ENV. Här skickar vi gärna också, ifall din backend kräver det.
-    const r = await fetch(`${API}/api/checkout/printed`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        price_id: PRICE_ID,           // eller ta bort om backend läser från env. (Annars: sätt PRICE_ID = din STRIPE_PRICE_PRINTED.)
-        customer_email: "",           // kan lämnas tomt, Stripe samlar in
-        draft                          // sparas på ordern i KV
-      })
-    });
+   const printedPayload = {
+  customer_email: "", // Stripe samlar in
+  draft             // sparas på ordern i KV
+};
+// Om du **vill** åsidosätta ENV från frontend: sätt PRICE_ID_PRINTED ovan.
+if (PRICE_ID_PRINTED) printedPayload.price_id = PRICE_ID_PRINTED;
+
+const r = await fetch(`${API}/api/checkout/printed`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify(printedPayload)
+});
+
 
     if (!r.ok) {
       const body = await r.text().catch(()=> "");

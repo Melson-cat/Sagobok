@@ -310,11 +310,17 @@
           });
 
           elStatus.innerHTML = `Tryckorder skapad <span class="ok">✓</span>`;
-          if (created?.simulated) {
-            elStatusText.textContent = "Test-order simulerad (GELATO_DRY_RUN=true). Inga verkliga kostnader uppstod.";
-          } else {
-            elStatusText.textContent = "Ordern har skickats till tryckpartnern. Vi uppdaterar status löpande.";
-          }
+        const isDraft =
+  !!created?.simulated ||
+  (created?.gelato?.orderType === "draft") ||
+  (created?.gelato?.status === "draft");
+
+if (isDraft) {
+  elStatusText.textContent = "Test-order simulerad (GELATO_DRY_RUN=true). Inga verkliga kostnader uppstod.";
+} else {
+  elStatusText.textContent = "Ordern har skickats till tryckpartnern. Vi uppdaterar status löpande.";
+}
+
           f.printHint.textContent = "Klart!";
           setHidden(formPrint, true);
 

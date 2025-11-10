@@ -223,30 +223,29 @@ async function gelatoGetPrices(env, productUid, { country, currency, pageCount }
   return gelatoFetch(url.toString(), env);
 }
 
-/**
- * Skapar en Gelato-order för din befintliga order i KV.
- * Kräver att du redan har sparat `files.interior_url` och `files.cover_url`.
- * - productUid tas från ENV (sätt korrekt när du vet exakta Gelato UID).
- * - shipmentMethodUid: skicka in från frontend eller välj första “normal” som fallback.
- */
 async function gelatoCreateOrder(env, { order, shipment, customer }) {
   if (!env.GELATO_API_KEY) throw new Error("Missing GELATO_API_KEY");
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("Missing GELATO_PRODUCT_UID");
   if (!order?.id) throw new Error("Missing order.id");
+
+  // ✅ Idempotens: om det redan finns en Gelato-order, returnera den
+  if (order?.files?.gelato_order_id) {
+    return {
+      gelato: { id: order.files.gelato_order_id, status: order.files.gelato_status || "created" },
+      order,
+    };
+  }
+
   if (!order?.files?.interior_url) throw new Error("Order missing interior_url");
   if (!order?.files?.cover_url) throw new Error("Order missing cover_url");
 
-  // För fotobok med omslag + inlaga använder vi två filer:
-  // - type: "default"  => inlaga (multi-page PDF)
-  // - type: "cover"    => omslag/wrap (en- eller fler-sidig PDF beroende på mall)
-  // Om Gelatos variant kräver andra typer (ex "pages"), byt här.
+  // Filer för fotobok: inlaga + omslag
   const files = [
     { type: "default", url: order.files.interior_url },
     { type: "cover",   url: order.files.cover_url },
   ];
 
-  // Page count kan användas för pris/valideringar – räkna sidor i din story
   const pageCount = order?.draft?.story?.book?.pages?.length || null;
 
   // Hämta fraktmetod om inte given
@@ -257,11 +256,13 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
     shipmentMethodUid = pick?.shipmentMethodUid || "normal";
   }
 
-  // Bygg payload enligt Gelato v4
+  // ✅ Respektera DRY RUN
+  const orderType = env.GELATO_DRY_RUN ? "draft" : "order";
+
   const payload = {
-    orderType: "order", // eller "draft" om du vill stoppa innan produktion
-    orderReferenceId: order.id,          // din order
-    customerReferenceId: customer?.id || "guest", // vem som beställer hos dig
+    orderType,                             // ← "draft" i test, "order" i skarpt
+    orderReferenceId: order.id,
+    customerReferenceId: customer?.id || "guest",
     currency: env.GELATO_DEFAULT_CURRENCY || "SEK",
     items: [
       {
@@ -275,16 +276,16 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
     shipmentMethodUid,
     shippingAddress: {
       companyName: customer?.companyName || "",
-      firstName: customer?.firstName || "Kund",
-      lastName:  customer?.lastName  || "BokPiloten",
+      firstName:   customer?.firstName || "Kund",
+      lastName:    customer?.lastName  || "BokPiloten",
       addressLine1: shipment?.addressLine1 || "Adress 1",
       addressLine2: shipment?.addressLine2 || "",
-      state:       shipment?.state || "",
-      city:        shipment?.city  || "Örebro",
-      postCode:    shipment?.postCode || "70000",
-      country:     shipment?.country  || env.GELATO_DEFAULT_COUNTRY || "SE",
-      email:       customer?.email || "no-reply@example.com",
-      phone:       customer?.phone || "000000000",
+      state:        shipment?.state || "",
+      city:         shipment?.city  || "Örebro",
+      postCode:     shipment?.postCode || "70000",
+      country:      shipment?.country  || env.GELATO_DEFAULT_COUNTRY || "SE",
+      email:        customer?.email || "no-reply@example.com",
+      phone:        customer?.phone || "000000000",
     }
   };
 
@@ -293,21 +294,21 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
     body: JSON.stringify(payload),
   });
 
-  // Spara Gelato-orderId/status på din KV-order
+  // Spara Gelato-id och status
   const saved = await kvAttachFiles(env, order.id, {
     gelato_order_id: data?.id || data?.orderId || null,
     gelato_status:   data?.status || "created",
   });
 
   // Reverse-index för webhook: GELATO_IDX:{gelatoId} -> order.id (60 dagar)
-const gelatoId = data?.id || data?.orderId;
-if (gelatoId) {
-  await kvIndexGelatoOrder(env, gelatoId, saved.id, 60*24*60*60);
-}
-
+  const gelatoId = data?.id || data?.orderId;
+  if (gelatoId) {
+    await kvIndexGelatoOrder(env, gelatoId, saved.id, 60*24*60*60);
+  }
 
   return { gelato: data, order: saved };
 }
+
 
 async function buildWrapCoverPdfFromDims(env, story, images, dims) {
   const W = mmToPt(dims.wraparoundInsideSize.width);
@@ -399,8 +400,6 @@ async function verifyStripeSignature(rawPayload, sigHeader, secret, toleranceSec
   return ok === 0;
 }
 
-/* --------------------- Stripe Webhook handler (robust) --------------------- */
-// POST /api/stripe/webhook
 async function handleStripeWebhook(req, env) {
   // 1) Läs rå payload (måste vara text) och verifiera signatur
   const sig = req.headers.get("stripe-signature");
@@ -430,7 +429,6 @@ async function handleStripeWebhook(req, env) {
   }
 
   // 3) Idempotens: undvik dubbelbearbetning av samma event
-  //    (kort TTL räcker; Stripe kan retrigga under några minuter)
   const evtId = event?.id || "";
   if (!evtId) {
     return new Response(JSON.stringify({ ok:false, error:"Missing event id", reqId }), {
@@ -444,7 +442,6 @@ async function handleStripeWebhook(req, env) {
       status: 200, headers: { ...CORS, "content-type":"application/json" }
     });
   }
-  // markera som hanterad i 1 h
   await env.ORDERS.put(idemKey, "1", { expirationTtl: 3600 });
 
   // 4) Händelsehantering
@@ -456,7 +453,7 @@ async function handleStripeWebhook(req, env) {
         const orderId = session?.metadata?.order_id || session?.id;
         if (!orderId) throw new Error("No order_id on session");
 
-        // uppdatera betald status
+        // ✅ Endast markera betald + spara basinfo
         const exist = await kvGetOrder(env, orderId);
         const patch = {
           status: "paid",
@@ -465,6 +462,7 @@ async function handleStripeWebhook(req, env) {
           amount_total: session?.amount_total ?? null,
           currency: session?.currency ?? null,
           email: session?.customer_details?.email ?? exist?.customer_email ?? null,
+          kind: (session?.metadata?.kind || exist?.kind || null),
         };
         if (exist) {
           await kvUpdateStatus(env, orderId, "paid", patch);
@@ -472,71 +470,15 @@ async function handleStripeWebhook(req, env) {
           await kvPutOrder(env, { id: orderId, created_at: Date.now(), updated_at: Date.now(), ...patch });
         }
 
-        // 🔸 Printed-flöde: bygg filer (om saknas) och skapa Gelato-order med Stripe-shipping
-        if ((session?.metadata?.kind || "").toLowerCase() === "printed") {
-          let ord = await kvGetOrder(env, orderId);
-
-          // 4a) Bygg och bifoga PDFs om inte redan finns
-          if (!ord?.files?.interior_url || !ord?.files?.cover_url) {
-            const story  = ord?.draft?.story;
-            const images = ord?.draft?.images || [];
-            if (!story?.book?.pages?.length) throw new Error("Printed: missing story in draft");
-
-            const interiorBytes = await buildFinalInteriorPdf(env, story, images);
-            const coverBytes    = await buildFinalCoverPdf(env, story, images);
-
-            const ts = Date.now();
-            const safeTitle = String(story?.book?.title || "bok")
-              .normalize("NFKD")
-              .replace(/[^\p{L}\p{N}-]+/gu, "_")
-              .replace(/_{2,}/g, "_")
-              .replace(/^_|_$/g, "");
-
-            const interior_key = `${safeTitle}_${ts}_INTERIOR.pdf`;
-            const cover_key    = `${safeTitle}_${ts}_COVER.pdf`;
-
-            const interior_url = await r2PutPublic(env, interior_key, interiorBytes, "application/pdf");
-            const cover_url    = await r2PutPublic(env, cover_key,    coverBytes,    "application/pdf");
-
-            await kvAttachFiles(env, orderId, { interior_url, interior_key, cover_url, cover_key });
-            ord = await kvGetOrder(env, orderId); // refresha
-          }
-
-          // 4b) Mappa Stripe shipping → Gelato shipment/customer
-          const ship = session?.shipping_details || {};
-          const addr = ship?.address || {};
-          const shipment = {
-            addressLine1: addr?.line1 || "",
-            addressLine2: addr?.line2 || "",
-            city:         addr?.city || "",
-            state:        addr?.state || "",
-            postCode:     addr?.postal_code || "",
-            country:      addr?.country || (env.GELATO_DEFAULT_COUNTRY || "SE"),
-          };
-          const customer = {
-            firstName: (ship?.name || "").split(" ")[0] || "Kund",
-            lastName:  (ship?.name || "").split(" ").slice(1).join(" ") || "BokPiloten",
-            email:     session?.customer_details?.email || "no-reply@example.com",
-            phone:     session?.customer_details?.phone || "",
-          };
-
-          // 4c) Skapa Gelato-order (kräver R2-länkarna)
-          if (!ord?.files?.interior_url || !ord?.files?.cover_url) {
-            throw new Error("Printed: R2 files missing after build");
-          }
-          await gelatoCreateOrder(env, { order: ord, shipment, customer });
-        }
-
+        // ❌ INTE: bygga PDF eller skapa Gelato här
+        // Success-sidan ansvarar nu för:
+        // 1) /api/pdf/build-and-attach (om filer saknas)
+        // 2) /api/gelato/create (med användarens fraktval)
         break;
       }
 
-      // (valfritt) Lägg till fler fall om du vill spåra dem:
-      // case "payment_intent.succeeded": break;
-      // case "checkout.session.async_payment_succeeded": break;
-      // case "checkout.session.async_payment_failed": break;
-
       default:
-        // logga tyst – men svara 200 så Stripe inte spammar
+        // tyst logik – men svara 200 så Stripe inte spammar
         break;
     }
 
@@ -545,7 +487,6 @@ async function handleStripeWebhook(req, env) {
     });
   } catch (e) {
     // Viktigt: returnera 200 vid icke-kritiska fel så Stripe inte loopar.
-    // Men inkludera fel i svaret för enklare felsökning i Stripe Logs.
     return new Response(JSON.stringify({
       ok:false, error:"Webhook handler error", detail:String(e?.message || e), type:event?.type, reqId
     }), {
@@ -553,6 +494,7 @@ async function handleStripeWebhook(req, env) {
     });
   }
 }
+
 
 
 // ---------- R2 helpers (PDF) ----------
@@ -1770,9 +1712,18 @@ async function handleCheckoutPrinted(req, env) {
     if (!env.ORDERS) return err("ORDERS KV not bound", 500, { where: "handleCheckoutPrinted" });
     if (!env.STRIPE_SECRET_KEY) return err("STRIPE_SECRET_KEY missing", 500, { where: "handleCheckoutPrinted" });
 
-    const { price_id, customer_email, draft, order_id } = await req.json().catch(()=> ({}));
-    const PRICE = price_id || env.STRIPE_PRICE_PRINTED;
-    if (!PRICE) return err("Missing price_id (and STRIPE_PRICE_PRINTED not set)", 400, { where: "handleCheckoutPrinted" });
+  const { price_id, customer_email, draft, order_id } = await req.json().catch(()=> ({}));
+
+// ✅ Säkerställ att PRINTED använder rätt pris
+const PRICE = price_id || env.STRIPE_PRICE_PRINTED;
+if (!PRICE) {
+  return err(
+    "Missing printed price: pass `price_id` in body OR configure STRIPE_PRICE_PRINTED in ENV",
+    400,
+    { where: "handleCheckoutPrinted" }
+  );
+}
+
 
     // 1) Säkerställ order i KV
     let oid = order_id;
