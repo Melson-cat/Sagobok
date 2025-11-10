@@ -2226,8 +2226,10 @@ async function handleGelatoCreate(req, env) {
     }
     const result = await gelatoCreateOrder(env, { order: ord, shipment: body?.shipment || {}, customer: body?.customer || {} });
     return ok(result);
-  } catch (e) {
+} catch (e) {
   return err(e?.message || "gelato create failed", 500, { where:"gelato.create" });
+}
+
 }
 
 async function handleGelatoWebhook(req, env) {
