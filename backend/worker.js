@@ -31,21 +31,6 @@ async function stripe(env, path, init = {}) {
   return j;
 }
 
-// --- Gelato minimal client ---
-async function gelato(env, path, init = {}) {
-  const base = env.GELATO_BASE || "https://api.gelato.com";
-  const url = `${base}/v4/${path.replace(/^\/?v4\/?/, "")}`;
-  const headers = {
-    "x-api-key": env.GELATO_API_KEY,
-    "content-type": "application/json",
-  };
-  const r = await fetch(url, { ...init, headers: { ...headers, ...(init.headers || {}) }});
-  const txt = await r.text();
-  let j = {};
-  try { j = txt ? JSON.parse(txt) : {}; } catch { /* leave as text */ }
-  if (!r.ok) throw new Error(`Gelato ${r.status} ${txt || ""}`);
-  return j;
-}
 
 const GELATO_TTL = 30 * 24 * 60 * 60; // 30 dagar, tryckt bok tar längre tid än PDF
 
@@ -120,6 +105,14 @@ function fontSpecForReadingAge(ra = 6) {
   return { size: 16, leading: 1.34 };
 }
 
+async function gelatoGetCoverDimensions(env, productUid, pageCount) {
+  if (!productUid) throw new Error("Missing productUid");
+  if (!Number.isFinite(pageCount)) throw new Error("Missing/invalid pageCount");
+  const u = new URL(`${GELATO_BASE.product}/products/${encodeURIComponent(productUid)}/cover-dimensions`);
+  u.searchParams.set("pageCount", String(pageCount));
+  return gelatoFetch(u.toString(), env); // använder redan X-API-KEY headers
+}
+
 /* ------------------------- HTTP helpers ------------------------------ */
 async function fetchJSON(url, opts) {
   const r = await fetch(url, opts);
@@ -154,6 +147,13 @@ async function kvUpdateStatus(env, id, status, patch = {}) {
   return next;
 }
 
+// Mappar Gelatos orderId → din order.id (för webhook-lookup)
+async function kvIndexGelatoOrder(env, gelatoId, orderId, ttlSec = 60*24*60*60) {
+  if (!gelatoId || !orderId) return;
+  await env.ORDERS.put(`GELATO_IDX:${gelatoId}`, orderId, { expirationTtl: ttlSec });
+}
+
+
 // --- Session → Order mapping (för snabb lookup från success-sida) ---
 async function kvMapSessionToOrder(env, session_id, order_id, ttlSec = 24 * 60 * 60) {
   // 24h räcker – success-sidan ropas direkt efter betalning
@@ -178,7 +178,188 @@ async function kvAttachFiles(env, order_id, files) {
   return next;
 }
 
+/* ------------------------------ Gelato helpers ------------------------------ */
+const GELATO_BASE = {
+  order:   "https://order.gelatoapis.com/v4",
+  product: "https://product.gelatoapis.com/v3",
+  ship:    "https://shipment.gelatoapis.com/v1",
+};
 
+function gelatoHeaders(env) {
+  return {
+    "content-type": "application/json",
+    "X-API-KEY": env.GELATO_API_KEY,
+  };
+}
+
+async function gelatoFetch(url, env, init={}) {
+  const r = await fetch(url, {
+    ...init,
+    headers: { ...gelatoHeaders(env), ...(init.headers || {}) },
+  });
+  const txt = await r.text();
+  let data = null;
+  try { data = txt ? JSON.parse(txt) : null; } catch { data = { raw: txt }; }
+  if (!r.ok) {
+    const msg = data?.message || data?.error || `HTTP ${r.status}`;
+    throw new Error(`Gelato: ${msg}`);
+  }
+  return data;
+}
+
+/** Hämtar shipment methods (valfritt filtrera på land). */
+async function gelatoGetShipmentMethods(env, country) {
+  const url = new URL(`${GELATO_BASE.ship}/shipment-methods`);
+  if (country) url.searchParams.set("country", country);
+  return gelatoFetch(url.toString(), env);
+}
+
+/** Hämtar prislista för ett produktUid (valfritt pageCount/country/currency). */
+async function gelatoGetPrices(env, productUid, { country, currency, pageCount } = {}) {
+  const url = new URL(`${GELATO_BASE.product}/products/${encodeURIComponent(productUid)}/prices`);
+  if (country)   url.searchParams.set("country", country);
+  if (currency)  url.searchParams.set("currency", currency);
+  if (pageCount) url.searchParams.set("pageCount", String(pageCount));
+  return gelatoFetch(url.toString(), env);
+}
+
+/**
+ * Skapar en Gelato-order för din befintliga order i KV.
+ * Kräver att du redan har sparat `files.interior_url` och `files.cover_url`.
+ * - productUid tas från ENV (sätt korrekt när du vet exakta Gelato UID).
+ * - shipmentMethodUid: skicka in från frontend eller välj första “normal” som fallback.
+ */
+async function gelatoCreateOrder(env, { order, shipment, customer }) {
+  if (!env.GELATO_API_KEY) throw new Error("Missing GELATO_API_KEY");
+  const productUid = env.GELATO_PRODUCT_UID;
+  if (!productUid) throw new Error("Missing GELATO_PRODUCT_UID");
+  if (!order?.id) throw new Error("Missing order.id");
+  if (!order?.files?.interior_url) throw new Error("Order missing interior_url");
+  if (!order?.files?.cover_url) throw new Error("Order missing cover_url");
+
+  // För fotobok med omslag + inlaga använder vi två filer:
+  // - type: "default"  => inlaga (multi-page PDF)
+  // - type: "cover"    => omslag/wrap (en- eller fler-sidig PDF beroende på mall)
+  // Om Gelatos variant kräver andra typer (ex "pages"), byt här.
+  const files = [
+    { type: "default", url: order.files.interior_url },
+    { type: "cover",   url: order.files.cover_url },
+  ];
+
+  // Page count kan användas för pris/valideringar – räkna sidor i din story
+  const pageCount = order?.draft?.story?.book?.pages?.length || null;
+
+  // Hämta fraktmetod om inte given
+  let shipmentMethodUid = shipment?.shipmentMethodUid;
+  if (!shipmentMethodUid) {
+    const meth = await gelatoGetShipmentMethods(env, shipment?.country || env.GELATO_DEFAULT_COUNTRY || "SE");
+    const pick = meth?.shipmentMethods?.find(m => m.type === "normal") || meth?.shipmentMethods?.[0];
+    shipmentMethodUid = pick?.shipmentMethodUid || "normal";
+  }
+
+  // Bygg payload enligt Gelato v4
+  const payload = {
+    orderType: "order", // eller "draft" om du vill stoppa innan produktion
+    orderReferenceId: order.id,          // din order
+    customerReferenceId: customer?.id || "guest", // vem som beställer hos dig
+    currency: env.GELATO_DEFAULT_CURRENCY || "SEK",
+    items: [
+      {
+        itemReferenceId: `item-${order.id}`,
+        productUid,
+        files,
+        quantity: 1,
+        ...(pageCount ? { pageCount } : {}),
+      }
+    ],
+    shipmentMethodUid,
+    shippingAddress: {
+      companyName: customer?.companyName || "",
+      firstName: customer?.firstName || "Kund",
+      lastName:  customer?.lastName  || "BokPiloten",
+      addressLine1: shipment?.addressLine1 || "Adress 1",
+      addressLine2: shipment?.addressLine2 || "",
+      state:       shipment?.state || "",
+      city:        shipment?.city  || "Örebro",
+      postCode:    shipment?.postCode || "70000",
+      country:     shipment?.country  || env.GELATO_DEFAULT_COUNTRY || "SE",
+      email:       customer?.email || "no-reply@example.com",
+      phone:       customer?.phone || "000000000",
+    }
+  };
+
+  const data = await gelatoFetch(`${GELATO_BASE.order}/orders`, env, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  // Spara Gelato-orderId/status på din KV-order
+  const saved = await kvAttachFiles(env, order.id, {
+    gelato_order_id: data?.id || data?.orderId || null,
+    gelato_status:   data?.status || "created",
+  });
+
+  // Reverse-index för webhook: GELATO_IDX:{gelatoId} -> order.id (60 dagar)
+const gelatoId = data?.id || data?.orderId;
+if (gelatoId) {
+  await kvIndexGelatoOrder(env, gelatoId, saved.id, 60*24*60*60);
+}
+
+
+  return { gelato: data, order: saved };
+}
+
+async function buildWrapCoverPdfFromDims(env, story, images, dims) {
+  const W = mmToPt(dims.wraparoundInsideSize.width);
+  const H = mmToPt(dims.wraparoundInsideSize.height);
+
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([W, H]);
+
+  // Hjälpare: rita bild i en mm-box (cover-fit)
+  async function drawInto(box, srcRow) {
+    if (!srcRow || !box) return;
+    const bytes = await getImageBytes(env, srcRow);
+    const img = await embedImage(pdf, bytes);
+    if (!img) return;
+
+    const bx = mmToPt(box.left);
+    const by = mmToPt(box.top);
+    const bw = mmToPt(box.width);
+    const bh = mmToPt(box.height);
+
+    const scale = Math.max(bw / img.width, bh / img.height);
+    const w = img.width * scale, h = img.height * scale;
+    const x = bx + (bw - w) / 2;
+    const y = H - by - bh + (bh - h) / 2; // från topp-vänster (mm) till PDF-lib (nederkant-vänster)
+
+    page.drawImage(img, { x, y, width: w, height: h });
+  }
+
+  // Källor
+  const coverSrc = images?.find(x => x.kind === "cover") || images?.find(x => x.page === 1) || null;
+  // Back: ta en annan sida om möjligt så baksidan inte blir identisk
+  const backSrc  = images?.find(x => x.page === 2) || images?.find(x => x.page === (story?.book?.pages?.at(-1)?.page)) || coverSrc;
+
+  // Målytor
+  const front = dims.contentFrontSize;
+  const back  = dims.contentBackSize;
+  const spine = dims.spineSize;
+
+  await drawInto(front, coverSrc);
+  await drawInto(back,  backSrc);
+
+  // Enkel ryggrad (färg). Titel kan vi lägga till senare.
+  if (spine?.width && spine?.height) {
+    const sx = mmToPt(spine.left);
+    const sy = H - mmToPt(spine.top) - mmToPt(spine.height);
+    const sw = mmToPt(spine.width);
+    const sh = mmToPt(spine.height);
+    page.drawRectangle({ x: sx, y: sy, width: sw, height: sh, color: rgb(0.5, 0.36, 0.82) });
+  }
+
+  return await pdf.save();
+}
 
 /* --------------------- Stripe Webhook verifiering --------------------- */
 // Verifiera Stripe-signatur (v1) i Cloudflare Workers
@@ -306,14 +487,36 @@ async function buildFinalInteriorPdf(env, story, images) {
 }
 
 async function buildFinalCoverPdf(env, story, images) {
-  // Bygg "full" PDF och plocka bara första sidan (framsidan)
+  const productUid = env.GELATO_PRODUCT_UID;
+  // Inkludera alla inlagesidor + ev. titelsida + slutsida + (front/back) om din inlaga räknas så.
+  // Gelato kräver "all pages in the product, including front and back cover".
+  // Du har: 14 bildsidor + titelsida + slutsida = 16 inner + 2 cover = 18 totalt.
+  // Justera om din struktur avviker.
+  const innerCount = (story?.book?.pages?.length || 0) + 2; // + titelsida + slutsida
+  const pageCount = innerCount + 2; // + front/back cover
+
+  if (productUid && pageCount > 0) {
+    try {
+      const dims = await gelatoGetCoverDimensions(env, productUid, pageCount);
+      // Om wrap-dimensioner finns enligt Gelato – kör wrap
+      if (dims?.wraparoundInsideSize && dims?.contentFrontSize && dims?.contentBackSize) {
+        return await buildWrapCoverPdfFromDims(env, story, images, dims);
+      }
+    } catch {
+      // fall back nedan
+    }
+  }
+
+  // Fallback: enkel framsida från din befintliga full-PDF
   const fullBytes = await buildPdf({ story, images, mode: "print" }, env, null);
   const src = await PDFDocument.load(fullBytes);
   const out = await PDFDocument.create();
-  const [cover] = await out.copyPages(src, [0]); // första sidan = front cover
+  const [cover] = await out.copyPages(src, [0]);
   out.addPage(cover);
   return await out.save();
 }
+
+
 
 /* --------------------- OpenAI JSON-only helper ----------------------- */
 async function openaiJSON(env, system, user) {
@@ -1789,28 +1992,6 @@ async function handleCheckoutPdf(req, env) {
 }
 
 
-async function handleCheckoutPing(_req, env) {
-  return ok({
-    has_secret: !!env.STRIPE_SECRET_KEY,     // true/false
-    frontend_origin: env.FRONTEND_ORIGIN || null,
-    success_url: env.SUCCESS_URL || null,
-    cancel_url: env.CANCEL_URL || null,
-  });
-}
-
-async function handleCheckoutPrice(req, env) {
-  const url = new URL(req.url);
-  const id = url.searchParams.get("id");
-  if (!id) return err("Missing id", 400);
-  try {
-    const j = await stripe(env, `prices/${encodeURIComponent(id)}`, { method: "GET" });
-    return ok({ id: j.id, currency: j.currency, active: j.active, product: j.product, unit_amount: j.unit_amount });
-  } catch (e) {
-    return err(e?.message || "Stripe price lookup failed", 500, { where: "stripe.prices.get" });
-  }
-}
-
-
 
 async function handleCheckoutVerify(req, env) {
   const url = new URL(req.url);
@@ -2016,113 +2197,6 @@ if (req.method === "POST" && url.pathname === "/api/cover") {
 }
 
 
-// GET /api/gelato/shipment-methods?country=SE&productUid=...
-if (req.method === "GET" && url.pathname === "/api/gelato/shipment-methods") {
-  try {
-    const country = url.searchParams.get("country") || "SE";
-    const productUid = url.searchParams.get("productUid");
-    if (!productUid) return err("Missing productUid", 400);
-    const j = await gelato(env, `shipment-methods?country=${encodeURIComponent(country)}&productUid=${encodeURIComponent(productUid)}`, { method: "GET" });
-    return ok({ methods: j?.shipmentMethods || j || [] });
-  } catch (e) {
-    return err(e.message || "gelato shipment-methods failed", 500, { where: "gelato.shipment-methods" });
-  }
-}
-
-// POST /api/gelato/quote
-// body: { shipTo:{ name,email,phone,address1,city,zip,country }, productUid, shipmentMethodUid?, quantity, currency, pages? }
-if (req.method === "POST" && url.pathname === "/api/gelato/quote") {
-  try {
-    const b = await req.json().catch(()=> ({}));
-    const ship = b?.shipTo || {};
-    const productUid = b?.productUid;
-    if (!productUid) return err("Missing productUid", 400);
-
-    // Om shipmentMethodUid inte skickas, hämta en lista och ta första “Standard”
-    let shipmentMethodUid = b?.shipmentMethodUid;
-    if (!shipmentMethodUid) {
-      const m = await gelato(env, `shipment-methods?country=${encodeURIComponent(ship.country || "SE")}&productUid=${encodeURIComponent(productUid)}`, { method:"GET" });
-      const list = m?.shipmentMethods || [];
-      // välj “standard” fallback, annars första
-      shipmentMethodUid = (list.find(x => /standard/i.test(x.name)) || list[0] || {}).shipmentMethodUid;
-      if (!shipmentMethodUid) return err("No shipment methods for product/country", 400);
-    }
-
-    const payload = {
-      currency: b?.currency || "SEK",
-      shipmentMethodUid,
-      recipient: {
-        address: {
-          addressLine1: ship.address1,
-          addressLine2: ship.address2 || "",
-          city: ship.city, postalCode: ship.zip, country: ship.country || "SE"
-        }
-      },
-      items: [{ productUid, quantity: b?.quantity || 1 }]
-    };
-
-    const q = await gelato(env, "orders/quotes", { method: "POST", body: JSON.stringify(payload) });
-    return ok({ quote: q, shipmentMethodUid });
-  } catch (e) {
-    return err(e.message || "gelato quote failed", 500, { where: "gelato.orders.quotes" });
-  }
-}
-
-// POST /api/gelato/order
-// body: { shipTo, productUid, shipmentMethodUid, files:{ interiorPdfUrl, coverPdfUrl }, quantity, currency, referenceId, email, phone }
-if (req.method === "POST" && url.pathname === "/api/gelato/order") {
-  try {
-    const b = await req.json().catch(()=> ({}));
-    const ship = b?.shipTo || {};
-    if (!b?.productUid) return err("Missing productUid", 400);
-    if (!b?.files?.interiorPdfUrl || !b?.files?.coverPdfUrl) return err("Missing files urls", 400);
-    if (!b?.shipmentMethodUid) return err("Missing shipmentMethodUid", 400);
-
-    const orderPayload = {
-      currency: b?.currency || "SEK",
-      contactEmail: b?.email || ship.email || "",
-      shippingAddress: {
-        firstName: (ship.name || "").split(" ")[0] || ship.name || "Kund",
-        lastName:  (ship.name || "").split(" ").slice(1).join(" ") || "-",
-        phone: b?.phone || ship.phone || "",
-        addressLine1: ship.address1, addressLine2: ship.address2 || "",
-        city: ship.city, postalCode: ship.zip, country: ship.country || "SE"
-      },
-      shipmentMethodUid: b.shipmentMethodUid,
-      items: [
-        {
-          productUid: b.productUid,
-          quantity: b?.quantity || 1,
-          files: [
-            { type: "content", sourceUrl: b.files.interiorPdfUrl },
-            { type: "cover",   sourceUrl: b.files.coverPdfUrl }
-          ]
-        }
-      ],
-      referenceId: b?.referenceId || `bp_${crypto.randomUUID()}`
-    };
-
-    const created = await gelato(env, "orders", { method: "POST", body: JSON.stringify(orderPayload) });
-
-    // spara i KV för spårning
-    const gid = created?.orderId || created?.id || orderPayload.referenceId;
-    await kvPutGelato(env, gid, {
-      id: gid,
-      status: created?.status || "created",
-      ref: orderPayload.referenceId,
-      productUid: b.productUid,
-      shipmentMethodUid: b.shipmentMethodUid,
-      created_at: Date.now(),
-      shipTo: { ...ship, email: orderPayload.contactEmail },
-      files: b.files
-    });
-
-    return ok({ ok: true, order: created });
-  } catch (e) {
-    return err(e.message || "gelato order failed", 500, { where: "gelato.orders.create" });
-  }
-}
-
 // POST /api/pdf/interior-url
 // body: { story, images }
 if (req.method === "POST" && url.pathname === "/api/pdf/interior-url") {
@@ -2172,6 +2246,101 @@ if (req.method === "POST" && url.pathname === "/api/pdf/build-and-attach") {
   return handleBuildAndAttach(req, env);
 }
 
+/* ===== Gelato: fraktmetoder ===== */
+if (req.method === "GET" && url.pathname === "/api/gelato/shipment-methods") {
+  try {
+    const country = url.searchParams.get("country") || env.GELATO_DEFAULT_COUNTRY || "SE";
+    const data = await gelatoGetShipmentMethods(env, country);
+    return ok(data);
+  } catch (e) { return err(e.message || "gelato shipment-methods failed", 500); }
+}
+
+/* ===== Gelato: priser för vald produkt UID ===== */
+if (req.method === "GET" && url.pathname === "/api/gelato/prices") {
+  try {
+    const productUid = env.GELATO_PRODUCT_UID;
+    if (!productUid) return err("Missing GELATO_PRODUCT_UID", 400);
+    const country  = url.searchParams.get("country")  || env.GELATO_DEFAULT_COUNTRY || "SE";
+    const currency = url.searchParams.get("currency") || env.GELATO_DEFAULT_CURRENCY || "SEK";
+    const pageCount = url.searchParams.get("pageCount");
+    const prices = await gelatoGetPrices(env, productUid, {
+      country, currency, pageCount: pageCount ? Number(pageCount) : undefined,
+    });
+    return ok(prices);
+  } catch (e) { return err(e.message || "gelato prices failed", 500); }
+}
+
+/* ===== Gelato: skapa order från din KV-order ===== */
+// POST /api/gelato/create  body: { order_id, shipment?, customer? }
+if (req.method === "POST" && url.pathname === "/api/gelato/create") {
+  try {
+    const body = await req.json().catch(()=> ({}));
+    const order_id = body?.order_id;
+    if (!order_id) return err("Missing order_id", 400);
+
+    const ord = await kvGetOrder(env, order_id);
+    if (!ord) return err("Order not found", 404);
+
+    // Kräv att vi har R2-länkar (du har dem redan efter build-and-attach)
+    if (!ord?.files?.interior_url || !ord?.files?.cover_url) {
+      return err("Order is missing R2 files; run build-and-attach first", 400);
+    }
+
+    const result = await gelatoCreateOrder(env, {
+      order: ord,
+      shipment: body?.shipment || {},
+      customer: body?.customer || {},
+    });
+
+    return ok(result);
+  } catch (e) {
+    return err(e.message || "gelato create failed", 500);
+  }
+}
+
+/* ===== Gelato webhook ===== */
+// Ställ in denna URL i Gelatos dashboard: POST https://.../api/gelato/webhook
+if (req.method === "POST" && url.pathname === "/api/gelato/webhook") {
+  try {
+    const evt = await req.json().catch(()=> ({}));
+    // Gelato skickar bl.a. orderId/status – format kan variera; anpassa vid behov
+    const gelatoOrderId = evt?.orderId || evt?.id || evt?.data?.orderId;
+    const status = evt?.status || evt?.data?.status || evt?.eventType;
+
+    // Hitta din KV-order via lagrad gelato_order_id
+    // (om du inte har en index, kan du skicka med din orderReferenceId i webhook payload i Gelato, 
+    //  annars spara en "reverse index" i KV när du skapar ordern)
+    // Här antar vi att du sparade gelato_order_id i ord.files – hämta alla är dyrt; 
+    // enklast: låt frontend/worker skapa en KV "GELATO_IDX:{gelatoId} -> orderId" samtidigt vid create.
+
+    // Exempel på index: vid create:
+    // await env.ORDERS.put(`GELATO_IDX:${gelatoId}`, orderId)
+
+    let orderId = null;
+    if (gelatoOrderId) {
+      orderId = await env.ORDERS.get(`GELATO_IDX:${gelatoOrderId}`);
+    }
+    if (orderId) {
+      // uppdatera status på din order
+      await kvAttachFiles(env, orderId, { gelato_status: status });
+    }
+    return ok({ received: true });
+  } catch (e) {
+    return err(e.message || "webhook error", 500);
+  }
+}
+
+// GET /api/gelato/cover-dimensions?pageCount=34
+if (req.method === "GET" && url.pathname === "/api/gelato/cover-dimensions") {
+  try {
+    const productUid = env.GELATO_PRODUCT_UID;
+    const pageCount = Number(url.searchParams.get("pageCount"));
+    const dims = await gelatoGetCoverDimensions(env, productUid, pageCount);
+    return ok(dims);
+  } catch (e) {
+    return err(e.message || "gelato cover-dimensions failed", 500);
+  }
+}
 
 
       // Uploads
