@@ -6,161 +6,174 @@
   <title>Tack för ditt köp! – BokPiloten</title>
   <link rel="icon" href="images/pilot-logo.png">
   <link rel="stylesheet" href="./style.css">
-
   <style>
-    body {
-      font-family: "Quicksand", system-ui, sans-serif;
-      background: #fafafa;
-      color: #333;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      min-height: 100vh;
-      padding: 24px;
-    }
-    h1 {
-      font-size: 1.8rem;
-      margin-bottom: 0.5rem;
-      color: #1f6feb;
-    }
-    p {
-      font-size: 1rem;
-      margin: 0.4rem 0;
-    }
-    .spinner {
-      width: 36px;
-      height: 36px;
-      border: 4px solid #cce0ff;
-      border-top-color: #1f6feb;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-      margin: 20px auto;
-    }
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-    .btn {
-      display: inline-block;
-      padding: 10px 18px;
-      border-radius: 8px;
-      background: #1f6feb;
-      color: white;
-      border: none;
-      cursor: pointer;
-      font-size: 1rem;
-      margin-top: 20px;
-      transition: background 0.2s;
-    }
-    .btn:hover {
-      background: #1458c0;
-    }
-    .hidden {
-      display: none;
-    }
-    #err {
-      color: #b00020;
-      font-weight: 600;
-      margin-top: 16px;
-    }
+    body { font-family: "Quicksand", system-ui, sans-serif; background:#fafafa; color:#333;
+           display:flex; flex-direction:column; align-items:center; text-align:center; min-height:100vh; padding:24px;}
+    h1 { font-size:1.8rem; margin-bottom:.5rem; color:#1f6feb; }
+    p { font-size:1rem; margin:.4rem 0; }
+    .spinner{ width:36px;height:36px;border:4px solid #cce0ff;border-top-color:#1f6feb;border-radius:50%;
+              animation:spin 1s linear infinite;margin:20px auto; }
+    @keyframes spin{ to{ transform:rotate(360deg);} }
+    .btn{ display:inline-block; padding:10px 18px; border-radius:8px; background:#1f6feb; color:#fff; border:none; cursor:pointer;
+          font-size:1rem; margin-top:12px; transition:background .2s; text-decoration:none; }
+    .btn:hover{ background:#1458c0; }
+    .muted { color:#666; font-size:.95rem; }
+    .hidden{ display:none; }
+    #err{ color:#b00020; font-weight:600; margin-top:16px; }
+    form { width:min(680px, 92vw); text-align:left; background:#fff; border:1px solid #eee; border-radius:12px; padding:16px; margin-top:16px; }
+    .row{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    label{ display:block; font-weight:600; margin-top:10px; }
+    input, select{ width:100%; padding:10px; border-radius:8px; border:1px solid #ddd; font-size:1rem; }
+    .pill { display:inline-block; padding:.25rem .6rem; border-radius:999px; background:#eef4ff; color:#1f6feb; font-weight:600; font-size:.85rem; }
+    .stack { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; justify-content:center; }
+    .links { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; justify-content:center; margin-top:8px;}
+    .ok { color:#0a7f42; font-weight:700; }
+    .box { background:#fff; border:1px solid #eee; border-radius:12px; padding:12px 16px; margin-top:12px; }
   </style>
 </head>
-
 <body>
   <h1>Tack för ditt köp! 🎉</h1>
-  <p id="status">Din betalning verifieras och boken byggs just nu...</p>
+  <p id="status">Verifierar betalning…</p>
   <div class="spinner" id="spinner"></div>
 
-  <p id="orderInfo" class="hidden">
-    <strong>Order-ID:</strong> <span id="orderId">—</span><br>
-    <strong>Belopp:</strong> <span id="amount">—</span> <span id="currency"></span>
-  </p>
+  <div class="box hidden" id="orderBox">
+    <div class="stack">
+      <span class="pill" id="pillKind">—</span>
+      <span>Order-ID: <strong id="orderId">—</strong></span>
+      <span>Belopp: <strong id="amount">—</strong> <span id="currency"></span></span>
+    </div>
+  </div>
 
-  <p id="statusText"></p>
-<div id="downloadLinks" style="display:flex; gap:.5rem; flex-wrap:wrap"></div>
+  <p id="statusText" class="muted"></p>
+  <div class="links" id="downloadLinks"></div>
+  <p id="err" class="hidden"></p>
+
+  <!-- PRINT FORM -->
+  <form id="printForm" class="hidden">
+    <h3>Leveransuppgifter för tryckt bok</h3>
+    <p class="muted">Fyll i adress och välj frakt. När du skickar beställningen skickas din bok till tryck hos vår partner.</p>
+    <div class="row">
+      <div>
+        <label>Förnamn</label>
+        <input id="firstName" required />
+      </div>
+      <div>
+        <label>Efternamn</label>
+        <input id="lastName" required />
+      </div>
+    </div>
+    <label>E-post</label>
+    <input id="email" type="email" placeholder="namn@exempel.se" />
+    <label>Telefon</label>
+    <input id="phone" type="tel" placeholder="0701234567" />
+    <label>Adressrad 1</label>
+    <input id="address1" required />
+    <label>Adressrad 2 (valfritt)</label>
+    <input id="address2" />
+    <div class="row">
+      <div>
+        <label>Postnummer</label>
+        <input id="postCode" required />
+      </div>
+      <div>
+        <label>Ort</label>
+        <input id="city" required />
+      </div>
+    </div>
+    <label>Land</label>
+    <select id="country">
+      <option value="SE" selected>Sverige (SE)</option>
+      <option value="NO">Norge (NO)</option>
+      <option value="FI">Finland (FI)</option>
+      <option value="DK">Danmark (DK)</option>
+      <option value="DE">Tyskland (DE)</option>
+      <option value="US">USA (US)</option>
+      <!-- utöka vid behov -->
+    </select>
+
+    <label style="margin-top:14px;">Fraktmetod</label>
+    <select id="shipmentMethod"></select>
+
+    <div class="stack" style="justify-content:flex-start; margin-top:8px;">
+      <button class="btn" id="btnSubmitPrint" type="submit">Skicka till tryck</button>
+      <span class="muted" id="printHint"></span>
+    </div>
+  </form>
 
 <script>
 (() => {
-  // ====== KONFIG ======
   const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
 
-  // ====== DOM HELPERS ======
   const $ = (id) => document.getElementById(id);
-  const elStatus     = $("status");
-  const elSpinner    = $("spinner");
-  const elOrderInfo  = $("orderInfo");
-  const elOrderId    = $("orderId");
-  const elAmount     = $("amount");
-  const elCurrency   = $("currency");
-  const elErr        = $("err");
-  const elStatusText = $("statusText");
-  const elLinks      = $("downloadLinks");
+  const elStatus      = $("status");
+  const elSpinner     = $("spinner");
+  const elOrderBox    = $("orderBox");
+  const elPillKind    = $("pillKind");
+  const elOrderId     = $("orderId");
+  const elAmount      = $("amount");
+  const elCurrency    = $("currency");
+  const elStatusText  = $("statusText");
+  const elErr         = $("err");
+  const elLinks       = $("downloadLinks");
+  const formPrint     = $("printForm");
 
-  // HJÄLPFUNKTIONER
+  // form fields
+  const f = {
+    firstName: $("firstName"),
+    lastName: $("lastName"),
+    email: $("email"),
+    phone: $("phone"),
+    address1: $("address1"),
+    address2: $("address2"),
+    postCode: $("postCode"),
+    city: $("city"),
+    country: $("country"),
+    shipmentMethod: $("shipmentMethod"),
+    btnSubmitPrint: $("btnSubmitPrint"),
+    printHint: $("printHint"),
+  };
+
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const setHidden = (el, hide) => el && (hide ? el.classList.add("hidden") : el.classList.remove("hidden"));
+  const makeLink = (href, text) => { const a = document.createElement("a"); a.href = href; a.target="_blank"; a.rel="noopener"; a.className="btn"; a.textContent=text; return a; };
 
   async function fetchJSON(url, init) {
     const r = await fetch(url, init);
     const ct = r.headers.get("content-type") || "";
-    const isJSON = ct.includes("application/json");
-    const body = isJSON ? await r.json() : await r.text();
+    const body = ct.includes("application/json") ? await r.json() : await r.text();
     if (!r.ok || (body && body.error)) {
-      const msg = (body && body.error) || `HTTP ${r.status}`;
-      throw new Error(msg);
+      throw new Error((body && body.error) || `HTTP ${r.status}`);
     }
     return body;
   }
 
-  function setHidden(el, hidden) {
-    if (!el) return;
-    hidden ? el.classList.add("hidden") : el.classList.remove("hidden");
-  }
-
-  function makeLink(href, text) {
-    const a = document.createElement("a");
-    a.href = href;
-    a.target = "_blank";
-    a.rel = "noopener";
-    a.className = "btn";
-    a.textContent = text;
-    return a;
-  }
-
   async function verifySession(session_id) {
     return fetchJSON(`${BACKEND}/api/checkout/verify?session_id=${encodeURIComponent(session_id)}`);
-    // -> { paid:boolean, order_id:string|null, amount_total:number|null, currency:string|null }
   }
-
   async function getOrderIdFromSession(session_id) {
     const j = await fetchJSON(`${BACKEND}/api/checkout/order-id?session_id=${encodeURIComponent(session_id)}`);
     return j.order_id || null;
   }
-
   async function getOrder(order_id) {
     return fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(order_id)}`);
-    // -> { id, status, ... , files?: {interior_url, cover_url} }
   }
-
-  async function waitForPaid(order_id, timeoutMs = 120000, pollMs = 1500) {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
+  async function waitForPaid(order_id, timeoutMs=120000, pollMs=1500) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeoutMs) {
       try {
         const o = await getOrder(order_id);
-        if (o?.status === "paid" || o?.status === "ready") return o?.status;
-      } catch (_) {}
+        if (o?.status === "paid" || o?.status === "ready") return o;
+      } catch {}
       await sleep(pollMs);
     }
-    throw new Error("Betalningen är ännu inte bekräftad. Uppdatera sidan om en liten stund.");
+    throw new Error("Betalningen är ännu inte bekräftad. Prova att uppdatera sidan strax.");
   }
-
   async function buildAndAttach(order_id) {
     return fetchJSON(`${BACKEND}/api/pdf/build-and-attach`, {
       method: "POST",
-      headers: {"content-type":"application/json"},
+      headers: { "content-type":"application/json" },
       body: JSON.stringify({ order_id })
     });
-    // -> { ok:true } och KV uppdateras med files{interior_url, cover_url}
   }
 
   function renderLinks(files) {
@@ -170,80 +183,169 @@
     if (files?.cover_url)    elLinks.appendChild(makeLink(files.cover_url, "Ladda ner omslaget (PDF)"));
   }
 
+  async function loadShipmentMethods(country) {
+    try {
+      const data = await fetchJSON(`${BACKEND}/api/gelato/shipment-methods?country=${encodeURIComponent(country)}`);
+      const list = data?.shipmentMethods || [];
+      f.shipmentMethod.innerHTML = "";
+      for (const m of list) {
+        const opt = document.createElement("option");
+        opt.value = m.shipmentMethodUid;
+        opt.textContent = `${m.displayName || m.name || m.type} (${m.shipmentMethodUid})`;
+        f.shipmentMethod.appendChild(opt);
+      }
+      if (!list.length) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "Inga fraktmetoder hittades";
+        f.shipmentMethod.appendChild(opt);
+      }
+    } catch (e) {
+      f.shipmentMethod.innerHTML = `<option value="">Fel vid hämtning av fraktmetoder</option>`;
+    }
+  }
+
+  async function ensurePdfFiles(order_id) {
+    let o = await getOrder(order_id);
+    const hasInt = !!o?.files?.interior_url;
+    const hasCov = !!o?.files?.cover_url;
+    if (!hasInt || !hasCov) {
+      elStatus.textContent = "Skapar tryckfiler…";
+      await buildAndAttach(order_id);
+      await sleep(500);
+      o = await getOrder(order_id);
+    }
+    renderLinks(o.files || {});
+    return o;
+  }
+
   async function init() {
     try {
-      // 1) session_id i URL
       const sid = new URLSearchParams(location.search).get("session_id");
       if (!sid) throw new Error("Saknar session_id i URL:en.");
 
       setHidden(elErr, true);
-      elStatus.textContent = "Verifierar betalning…";
       setHidden(elSpinner, false);
+      elStatus.textContent = "Verifierar betalning…";
 
-      // 2) Försök hämta verifiering + order-id + belopp
-      let order_id = null, amount = null, currency = null;
+      // session → paid/order-id
+      let order_id = null, amount = null, currency = null, kind = null;
       try {
         const v = await verifySession(sid);
         order_id = v.order_id || order_id;
         amount   = v.amount_total ?? null;
-        currency = v.currency     ?? null;
+        currency = v.currency ?? null;
       } catch {
-        // Fallback: mappa session -> order
         order_id = await getOrderIdFromSession(sid);
       }
       if (!order_id) throw new Error("Kunde inte koppla session till order.");
 
-      // 3) Visa orderinfo (om belopp kändes av)
-      setHidden(elOrderInfo, false);
+      // vänta på webhook → paid
+      const paidOrder = await waitForPaid(order_id);
+      kind = paidOrder?.kind || paidOrder?.draft?.kind || "pdf";
+
+      // visa toppinfo
+      setHidden(elOrderBox, false);
       elOrderId.textContent = order_id;
-      if (amount != null)   elAmount.textContent   = (amount/100).toFixed(2);
-      if (currency)         elCurrency.textContent = String(currency).toUpperCase();
+      elPillKind.textContent = kind === "printed" ? "Tryckt bok" : "Digital PDF";
+      elAmount.textContent = amount != null ? (amount/100).toFixed(2) : "—";
+      elCurrency.textContent = currency ? String(currency).toUpperCase() : "";
 
-      // 4) Vänta tills webhook markerat ordern som paid/ready
-      await waitForPaid(order_id);
-      elStatus.textContent = "Betalning bekräftad! Skapar och laddar upp dina PDF:er…";
-
-      // 5) Hämta order – bygg om filer saknas – hämta igen
-      let ord = await getOrder(order_id);
-      const hasInt = !!ord?.files?.interior_url;
-      const hasCov = !!ord?.files?.cover_url;
-
-      if (!hasInt || !hasCov) {
-        await buildAndAttach(order_id);
-        // kort delay för att KV ska säkert hinna uppdateras
-        await sleep(500);
-        ord = await getOrder(order_id);
+      if (kind !== "printed") {
+        // DIGITAL FLOW
+        elStatus.textContent = "Betalning bekräftad! Bygger dina filer…";
+        const o = await ensurePdfFiles(order_id);
+        setHidden(elSpinner, true);
+        elStatus.textContent = "Klart! Din PDF är redo.";
+        elStatusText.textContent = "Du kan ladda ner via länkarna nedan. Ett kvitto skickas via Stripe.";
+        if (o?.files?.interior_url) { try { window.open(o.files.interior_url, "_blank", "noopener"); } catch {} }
+        return;
       }
 
-      // 6) Rendera länkar + autoöppna inlaga (kan blockas av popup-policy)
-      renderLinks(ord.files);
+      // PRINTED FLOW
+      elStatus.textContent = "Betalning bekräftad! Förbereder tryck…";
+      const o2 = await ensurePdfFiles(order_id);
       setHidden(elSpinner, true);
-      elStatus.textContent = "Klart! Dina filer är redo.";
-      if (elStatusText) elStatusText.textContent = "Du kan ladda ner igen via länkarna nedan.";
+      elStatusText.textContent = "Fyll i leveransadress och frakt för att skicka boken till tryck.";
 
-      if (ord?.files?.interior_url) {
-        try { window.open(ord.files.interior_url, "_blank", "noopener"); } catch {}
-      }
+      // förifyll email om vi har den
+      if (paidOrder?.email) f.email.value = paidOrder.email;
+
+      // ladda fraktmetoder
+      await loadShipmentMethods(f.country.value);
+
+      // visa formulär
+      setHidden(formPrint, false);
+
+      formPrint.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        try {
+          f.btnSubmitPrint.disabled = true;
+          f.printHint.textContent = "Skickar ordern till tryck…";
+          elStatus.textContent = "Skickar till tryck…";
+
+          const shipment = {
+            addressLine1: f.address1.value.trim(),
+            addressLine2: f.address2.value.trim(),
+            city: f.city.value.trim(),
+            postCode: f.postCode.value.trim(),
+            country: f.country.value,
+            state: "",
+            shipmentMethodUid: f.shipmentMethod.value || undefined,
+          };
+          const customer = {
+            firstName: f.firstName.value.trim(),
+            lastName: f.lastName.value.trim(),
+            email: f.email.value.trim() || (paidOrder?.email || ""),
+            phone: f.phone.value.trim(),
+          };
+
+          // OBS: förutsätter att ordern redan har interior_url/cover_url i KV (ensurePdfFiles fixar det).
+          const created = await fetchJSON(`${BACKEND}/api/gelato/create`, {
+            method: "POST",
+            headers: { "content-type":"application/json" },
+            body: JSON.stringify({ order_id: order_id, shipment, customer }),
+          });
+
+          elStatus.innerHTML = `Tryckorder skapad <span class="ok">✓</span>`;
+          elStatusText.textContent = "Vi uppdaterar din orderstatus när vi får besked från tryckpartnern.";
+          f.printHint.textContent = "Klart!";
+          // valfritt: visa enkel info
+          if (created?.gelato?.id || created?.gelato?.orderId) {
+            const gid = created.gelato.id || created.gelato.orderId;
+            const info = document.createElement("p");
+            info.className = "muted";
+            info.textContent = `Gelato-ID: ${gid}`;
+            document.body.appendChild(info);
+          }
+          // dölja formulär
+          setHidden(formPrint, true);
+        } catch (err) {
+          f.btnSubmitPrint.disabled = false;
+          f.printHint.textContent = "";
+          elErr.textContent = err?.message || String(err);
+          setHidden(elErr, false);
+        }
+      });
+
+      // land-change → uppdatera fraktlista
+      f.country.addEventListener("change", () => loadShipmentMethods(f.country.value));
 
     } catch (e) {
       console.error(e);
       setHidden(elSpinner, true);
       elStatus.textContent = "Ett fel uppstod.";
-      if (elErr) {
-        elErr.textContent = e?.message || String(e);
-        setHidden(elErr, false);
-      }
+      elErr.textContent = e?.message || String(e);
+      setHidden(elErr, false);
     }
   }
 
-  // Kör när DOM är redo
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init, { once: true });
+    document.addEventListener("DOMContentLoaded", init, { once:true });
   } else {
     init();
   }
 })();
 </script>
-
 </body>
 </html>

@@ -399,25 +399,64 @@ async function verifyStripeSignature(rawPayload, sigHeader, secret, toleranceSec
   return ok === 0;
 }
 
-/* --------------------- Stripe Webhook handler ------------------------- */
+/* --------------------- Stripe Webhook handler (robust) --------------------- */
 // POST /api/stripe/webhook
 async function handleStripeWebhook(req, env) {
-  // Läs rå body (måste vara text, inte json()) för signatur
+  // 1) Läs rå payload (måste vara text) och verifiera signatur
   const sig = req.headers.get("stripe-signature");
   const raw = await req.text();
+  const reqId = req.headers.get("cf-ray") || crypto.randomUUID();
 
-  const valid = await verifyStripeSignature(raw, sig, env.STRIPE_WEBHOOK_SECRET);
-  if (!valid) return new Response("Invalid signature", { status: 400, headers: CORS });
+  try {
+    const valid = await verifyStripeSignature(raw, sig, env.STRIPE_WEBHOOK_SECRET);
+    if (!valid) {
+      return new Response(JSON.stringify({ ok:false, error:"Invalid signature", reqId }), {
+        status: 400, headers: { ...CORS, "content-type":"application/json" }
+      });
+    }
+  } catch (e) {
+    return new Response(JSON.stringify({ ok:false, error:"Signature check failed", detail:String(e?.message||e), reqId }), {
+      status: 400, headers: { ...CORS, "content-type":"application/json" }
+    });
+  }
 
+  // 2) Parsning
   let event;
   try { event = JSON.parse(raw); }
-  catch { return new Response("Bad JSON", { status: 400, headers: CORS }); }
+  catch {
+    return new Response(JSON.stringify({ ok:false, error:"Bad JSON", reqId }), {
+      status: 400, headers: { ...CORS, "content-type":"application/json" }
+    });
+  }
 
+  // 3) Idempotens: undvik dubbelbearbetning av samma event
+  //    (kort TTL räcker; Stripe kan retrigga under några minuter)
+  const evtId = event?.id || "";
+  if (!evtId) {
+    return new Response(JSON.stringify({ ok:false, error:"Missing event id", reqId }), {
+      status: 400, headers: { ...CORS, "content-type":"application/json" }
+    });
+  }
+  const idemKey = `stripe_evt:${evtId}`;
+  const already = await env.ORDERS.get(idemKey);
+  if (already) {
+    return new Response(JSON.stringify({ ok:true, dedup:true, reqId }), {
+      status: 200, headers: { ...CORS, "content-type":"application/json" }
+    });
+  }
+  // markera som hanterad i 1 h
+  await env.ORDERS.put(idemKey, "1", { expirationTtl: 3600 });
+
+  // 4) Händelsehantering
   try {
     switch (event.type) {
       case "checkout.session.completed": {
         const session = event.data.object;
+
         const orderId = session?.metadata?.order_id || session?.id;
+        if (!orderId) throw new Error("No order_id on session");
+
+        // uppdatera betald status
         const exist = await kvGetOrder(env, orderId);
         const patch = {
           status: "paid",
@@ -432,18 +471,89 @@ async function handleStripeWebhook(req, env) {
         } else {
           await kvPutOrder(env, { id: orderId, created_at: Date.now(), updated_at: Date.now(), ...patch });
         }
+
+        // 🔸 Printed-flöde: bygg filer (om saknas) och skapa Gelato-order med Stripe-shipping
+        if ((session?.metadata?.kind || "").toLowerCase() === "printed") {
+          let ord = await kvGetOrder(env, orderId);
+
+          // 4a) Bygg och bifoga PDFs om inte redan finns
+          if (!ord?.files?.interior_url || !ord?.files?.cover_url) {
+            const story  = ord?.draft?.story;
+            const images = ord?.draft?.images || [];
+            if (!story?.book?.pages?.length) throw new Error("Printed: missing story in draft");
+
+            const interiorBytes = await buildFinalInteriorPdf(env, story, images);
+            const coverBytes    = await buildFinalCoverPdf(env, story, images);
+
+            const ts = Date.now();
+            const safeTitle = String(story?.book?.title || "bok")
+              .normalize("NFKD")
+              .replace(/[^\p{L}\p{N}-]+/gu, "_")
+              .replace(/_{2,}/g, "_")
+              .replace(/^_|_$/g, "");
+
+            const interior_key = `${safeTitle}_${ts}_INTERIOR.pdf`;
+            const cover_key    = `${safeTitle}_${ts}_COVER.pdf`;
+
+            const interior_url = await r2PutPublic(env, interior_key, interiorBytes, "application/pdf");
+            const cover_url    = await r2PutPublic(env, cover_key,    coverBytes,    "application/pdf");
+
+            await kvAttachFiles(env, orderId, { interior_url, interior_key, cover_url, cover_key });
+            ord = await kvGetOrder(env, orderId); // refresha
+          }
+
+          // 4b) Mappa Stripe shipping → Gelato shipment/customer
+          const ship = session?.shipping_details || {};
+          const addr = ship?.address || {};
+          const shipment = {
+            addressLine1: addr?.line1 || "",
+            addressLine2: addr?.line2 || "",
+            city:         addr?.city || "",
+            state:        addr?.state || "",
+            postCode:     addr?.postal_code || "",
+            country:      addr?.country || (env.GELATO_DEFAULT_COUNTRY || "SE"),
+          };
+          const customer = {
+            firstName: (ship?.name || "").split(" ")[0] || "Kund",
+            lastName:  (ship?.name || "").split(" ").slice(1).join(" ") || "BokPiloten",
+            email:     session?.customer_details?.email || "no-reply@example.com",
+            phone:     session?.customer_details?.phone || "",
+          };
+
+          // 4c) Skapa Gelato-order (kräver R2-länkarna)
+          if (!ord?.files?.interior_url || !ord?.files?.cover_url) {
+            throw new Error("Printed: R2 files missing after build");
+          }
+          await gelatoCreateOrder(env, { order: ord, shipment, customer });
+        }
+
         break;
       }
-      // (valfritt) fler fall: 'payment_intent.succeeded', etc.
+
+      // (valfritt) Lägg till fler fall om du vill spåra dem:
+      // case "payment_intent.succeeded": break;
+      // case "checkout.session.async_payment_succeeded": break;
+      // case "checkout.session.async_payment_failed": break;
+
       default:
-        // log-only
+        // logga tyst – men svara 200 så Stripe inte spammar
         break;
     }
-    return new Response("ok", { status: 200, headers: CORS });
+
+    return new Response(JSON.stringify({ ok:true, type:event.type, reqId }), {
+      status: 200, headers: { ...CORS, "content-type":"application/json" }
+    });
   } catch (e) {
-    return new Response("Webhook handler error: " + (e?.message || e), { status: 500, headers: CORS });
+    // Viktigt: returnera 200 vid icke-kritiska fel så Stripe inte loopar.
+    // Men inkludera fel i svaret för enklare felsökning i Stripe Logs.
+    return new Response(JSON.stringify({
+      ok:false, error:"Webhook handler error", detail:String(e?.message || e), type:event?.type, reqId
+    }), {
+      status: 200, headers: { ...CORS, "content-type":"application/json" }
+    });
   }
 }
+
 
 // ---------- R2 helpers (PDF) ----------
 async function r2PutPublic(env, key, bytes, contentType = "application/pdf") {
@@ -1654,6 +1764,71 @@ async function handleDiagRequest(_req, env) {
   return ok({ font_base: base, has_fontkit: !!fontkit, checks });
 }
 
+// === PRINTED CHECKOUT (Stripe) ===
+async function handleCheckoutPrinted(req, env) {
+  try {
+    if (!env.ORDERS) return err("ORDERS KV not bound", 500, { where: "handleCheckoutPrinted" });
+    if (!env.STRIPE_SECRET_KEY) return err("STRIPE_SECRET_KEY missing", 500, { where: "handleCheckoutPrinted" });
+
+    const { price_id, customer_email, draft, order_id } = await req.json().catch(()=> ({}));
+    const PRICE = price_id || env.STRIPE_PRICE_PRINTED;
+    if (!PRICE) return err("Missing price_id (and STRIPE_PRICE_PRINTED not set)", 400, { where: "handleCheckoutPrinted" });
+
+    // 1) Säkerställ order i KV
+    let oid = order_id;
+    if (oid) {
+      const ex = await kvGetOrder(env, oid);
+      if (!ex) {
+        const o = newOrder(draft);
+        o.id = oid;
+        o.kind = "printed";
+        await kvPutOrder(env, o);
+      }
+    } else {
+      const o = newOrder(draft);
+      o.kind = "printed";
+      await kvPutOrder(env, o);
+      oid = o.id;
+    }
+
+    // 2) Stripe checkout (metadata viktig!)
+    const FRONTEND_ORIGIN = env.FRONTEND_ORIGIN || "https://example.com";
+    const success = (env.SUCCESS_URL || `${FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
+    const cancel  = env.CANCEL_URL  || `${FRONTEND_ORIGIN}/`;
+
+    const base = {
+      mode: "payment",
+      "line_items[0][price]": PRICE,
+      "line_items[0][quantity]": 1,
+      success_url: success,
+      cancel_url: cancel,
+      allow_promotion_codes: "true",
+      // viktigt för att veta vad detta är i webhook + success
+      "metadata[order_id]": oid,
+      "metadata[kind]": "printed",
+    };
+    if (customer_email) base.customer_email = customer_email;
+
+    const body = formEncode(base);
+
+    let session;
+    try {
+      session = await stripe(env, "checkout/sessions", { body });
+    } catch (e) {
+      return err(e?.message || "Stripe checkout failed", 500, {
+        where: "stripe.checkout.sessions (printed)",
+      });
+    }
+
+    await kvUpdateStatus(env, oid, "pending", { stripe_session_id: session.id, kind: "printed", customer_email: customer_email || null });
+    await kvMapSessionToOrder(env, session.id, oid);
+
+    return ok({ url: session.url, id: session.id, order_id: oid });
+  } catch (e) {
+    return err(e?.message || "checkout printed failed", 500, { where: "handleCheckoutPrinted" });
+  }
+}
+
 /* --------------------------- Story endpoints ------------------------- */
 export default {
   async fetch(req, env) {
@@ -1720,6 +1895,62 @@ if (req.method === "POST" && url.pathname === "/api/checkout/pdf") {
   try { return await handleCheckoutPdf(req, env); }
   catch (e) { return err(e?.message || "checkout create failed", 500, { where: "handleCheckoutPdf" }); }
 }
+
+// Skapa checkout-session (PRINTED BOOK)
+if (req.method === "POST" && url.pathname === "/api/checkout/printed") {
+  try {
+    if (!env.STRIPE_SECRET_KEY) return err("STRIPE_SECRET_KEY missing", 500);
+    const { price_id, customer_email, order_id, draft } = await req.json().catch(()=> ({}));
+    if (!price_id) return err("Missing price_id", 400);
+
+    // 1) Säkerställ order i KV
+    let oid = order_id;
+    if (oid) {
+      const ex = await kvGetOrder(env, oid);
+      if (!ex) { const o = newOrder(draft); o.id = oid; await kvPutOrder(env, o); }
+    } else {
+      const o = newOrder(draft);
+      await kvPutOrder(env, o);
+      oid = o.id;
+    }
+
+    // 2) URLs
+    const FRONTEND_ORIGIN = env.FRONTEND_ORIGIN || "https://example.com";
+    const success = (env.SUCCESS_URL || `${FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
+    const cancel  = env.CANCEL_URL  || `${FRONTEND_ORIGIN}/`;
+
+    // 3) Stripe body – med shipping address collection
+    const base = {
+      mode: "payment",
+      "line_items[0][price]": price_id,
+      "line_items[0][quantity]": 1,
+      success_url: success,
+      cancel_url: cancel,
+      allow_promotion_codes: "true",
+      "metadata[order_id]": oid,
+      "metadata[kind]": "printed"
+    };
+    if (customer_email) base.customer_email = customer_email;
+
+    // Shipping via Checkout
+    base["shipping_address_collection[allowed_countries][0]"] = (env.GELATO_DEFAULT_COUNTRY || "SE");
+    base["phone_number_collection[enabled]"] = "true";
+
+    const body = formEncode(base);
+
+    // 4) Skapa session
+    const session = await stripe(env, "checkout/sessions", { body });
+
+    // 5) Status + KV-map
+    await kvUpdateStatus(env, oid, "pending", { stripe_session_id: session.id });
+    await kvMapSessionToOrder(env, session.id, oid);
+
+    return ok({ url: session.url, id: session.id, order_id: oid });
+  } catch (e) {
+    return err(e?.message || "checkout printed failed", 500, { where: "handleCheckoutPrinted" });
+  }
+}
+
 
 // Verifiera checkout
 if (req.method === "GET" && url.pathname === "/api/checkout/verify") {
@@ -2340,6 +2571,12 @@ if (req.method === "GET" && url.pathname === "/api/gelato/cover-dimensions") {
   } catch (e) {
     return err(e.message || "gelato cover-dimensions failed", 500);
   }
+}
+
+// Skapa checkout-session (TRYCKT BOK)
+if (req.method === "POST" && url.pathname === "/api/checkout/printed") {
+  try { return await handleCheckoutPrinted(req, env); }
+  catch (e) { return err(e?.message || "checkout printed failed", 500, { where: "handleCheckoutPrinted" }); }
 }
 
 
