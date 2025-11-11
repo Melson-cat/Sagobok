@@ -526,6 +526,27 @@ async function r2PutPublic(env, key, bytes, contentType = "application/pdf") {
   return `${base}/${encodeURIComponent(key)}`;
 }
 
+// ---------- Title / pages helpers ----------
+function safeTitleFrom(story) {
+  const raw = String(story?.book?.title || "bok");
+  // Normalisera till säkert filnamn
+  return raw
+    .normalize("NFKD")
+    .replace(/[^\p{L}\p{N}\- ]+/gu, "_")  // behåll bokstäver/siffror/streck/mellanslag
+    .replace(/\s+/g, "_")                 // mellanslag -> underscore
+    .replace(/_{2,}/g, "_")               // komprimera __
+    .replace(/^_+|_+$/g, "")              // trimma _
+    || "bok";
+}
+
+function computeInteriorPagesFromStory(story) {
+  // Vår layout: 1 titelsida + 14 uppslag (bild+text = 28 sidor) + 1 slutsida = 30
+  // Om du i framtiden ändrar sidlogiken, uppdatera denna.
+  const sceneCount = Array.isArray(story?.book?.pages) ? story.book.pages.length : 14;
+  const spreads = Math.max(1, sceneCount); // vi förväntar 14
+  return 1 /*title*/ + spreads * 2 /*bild+text*/ + 1 /*slut*/;
+}
+
 
 // ---------- PDF split helpers ----------
 async function buildFinalInteriorPdf(env, story, images) {
@@ -2201,23 +2222,21 @@ async function handlePdfInteriorUrl(req, env) {
     return ok({ url, key });
   } catch (e) { return err(e?.message || "interior-url failed", 500); }
 }
+
 async function handlePdfCoverUrl(req, env) {
   try {
     const { story, images } = await req.json().catch(() => ({}));
     if (!story?.book?.pages) return err("Missing story", 400);
-   // Härled interiorPages för omslagets dimensioner
-const interiorBytes = await buildFinalInteriorPdf(env, story, images || []);
-const interiorDoc   = await PDFDocument.load(interiorBytes);
-const interiorPages = interiorDoc.getPageCount();
 
-const bytes = await buildFinalCoverPdf(env, story, images || [], interiorPages);
+    // Räkna inlagans sidor från storyn (bör bli 30)
+    const interiorPages = computeInteriorPagesFromStory(story);
 
+    const bytes = await buildFinalCoverPdf(env, story, images || [], interiorPages);
     const ts = Date.now();
-    const title = story?.book?.title ?? "bok";
-    const safeTitle = String(title).normalize("NFKD").replace(/[^\p{L}\p{N}-]+/gu, "_").replace(/_{2,}/g, "_").replace(/^_|_$/g, "");
+    const safeTitle = safeTitleFrom(story);
     const key = `${safeTitle}_${ts}_COVER.pdf`;
     const url = await r2PutPublic(env, key, bytes);
-    return ok({ url, key });
+    return ok({ url, key, interior_pages: interiorPages });
   } catch (e) { return err(e?.message || "cover-url failed", 500); }
 }
 
