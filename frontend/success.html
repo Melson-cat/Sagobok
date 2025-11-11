@@ -7,8 +7,26 @@
   <link rel="icon" href="images/pilot-logo.png">
   <link rel="stylesheet" href="./style.css">
   <style>
+    /* ===== Global header ===== */
+    header.site {
+      position: sticky; top: 0; z-index: 10;
+      background: rgba(10,15,31,.7);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(0,0,0,.08);
+    }
+    header.site nav {
+      max-width: 960px; margin: 0 auto; padding: 12px 16px;
+      display: flex; align-items: center; gap: 12px;
+      color: #e6e9f2;
+    }
+    header.site .brand { font-weight: 700; letter-spacing: .2px; }
+    header.site a { color: #c3c9ff; text-decoration: none; padding: 6px 10px; border-radius: 8px; }
+    header.site a.active { background: rgba(91,74,217,.2); border: 1px solid rgba(91,74,217,.5); }
+
+    /* ===== Page styles (din befintliga stil) ===== */
     body { font-family: "Quicksand", system-ui, sans-serif; background:#fafafa; color:#333;
            display:flex; flex-direction:column; align-items:center; text-align:center; min-height:100vh; padding:24px;}
+    main { width: 100%; max-width: 960px; }
     h1 { font-size:1.8rem; margin-bottom:.5rem; color:#1f6feb; }
     p { font-size:1rem; margin:.4rem 0; }
     .spinner{ width:36px;height:36px;border:4px solid #cce0ff;border-top-color:#1f6feb;border-radius:50%;
@@ -20,7 +38,7 @@
     .muted { color:#666; font-size:.95rem; }
     .hidden{ display:none; }
     #err{ color:#b00020; font-weight:600; margin-top:16px; white-space:pre-wrap; }
-    form { width:min(680px, 92vw); text-align:left; background:#fff; border:1px solid #eee; border-radius:12px; padding:16px; margin-top:16px; }
+    form { width:min(680px, 92vw); text-align:left; background:#fff; border:1px solid #eee; border-radius:12px; padding:16px; margin:16px auto 0; }
     .row{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
     label{ display:block; font-weight:600; margin-top:10px; }
     input, select{ width:100%; padding:10px; border-radius:8px; border:1px solid #ddd; font-size:1rem; }
@@ -32,76 +50,101 @@
   </style>
 </head>
 <body>
-  <h1>Tack för ditt köp! 🎉</h1>
-  <p id="status">Verifierar betalning…</p>
-  <div class="spinner" id="spinner"></div>
 
-  <div class="box hidden" id="orderBox">
-    <div class="stack">
-      <span class="pill" id="pillKind">—</span>
-      <span>Order-ID: <strong id="orderId">—</strong></span>
-      <span>Belopp: <strong id="amount">—</strong> <span id="currency"></span></span>
-    </div>
-  </div>
+  <!-- GLOBAL HEADER -->
+  <header class="site" id="globalHeader"></header>
 
-  <p id="statusText" class="muted"></p>
-  <div class="links" id="downloadLinks"></div>
-  <p id="err" class="hidden"></p>
+  <main>
+    <h1>Tack för ditt köp! 🎉</h1>
+    <p id="status">Verifierar betalning…</p>
+    <div class="spinner" id="spinner"></div>
 
-  <!-- PRINT FORM -->
-  <form id="printForm" class="hidden" novalidate>
-    <h3>Leveransuppgifter för tryckt bok</h3>
-    <p class="muted">Fyll i adress och välj frakt. I testläge skapas en simulerad order (ingen riktig produktion).</p>
-    <div class="row">
-      <div>
-        <label>Förnamn</label>
-        <input id="firstName" required />
+    <div class="box hidden" id="orderBox">
+      <div class="stack">
+        <span class="pill" id="pillKind">—</span>
+        <span>Order-ID: <strong id="orderId">—</strong></span>
+        <span>Belopp: <strong id="amount">—</strong> <span id="currency"></span></span>
       </div>
-      <div>
-        <label>Efternamn</label>
-        <input id="lastName" required />
+      <div class="links" style="margin-top:8px;">
+        <!-- Status-knapp dyker upp när order_id finns -->
+        <a id="toStatus" class="btn hidden" href="#">Visa orderstatus</a>
       </div>
     </div>
-    <label>E-post</label>
-    <input id="email" type="email" placeholder="namn@exempel.se" />
-    <label>Telefon</label>
-    <input id="phone" type="tel" placeholder="0701234567" />
-    <label>Adressrad 1</label>
-    <input id="address1" required />
-    <label>Adressrad 2 (valfritt)</label>
-    <input id="address2" />
-    <div class="row">
-      <div>
-        <label>Postnummer</label>
-        <input id="postCode" required />
-      </div>
-      <div>
-        <label>Ort</label>
-        <input id="city" required />
-      </div>
-    </div>
-    <label>Land</label>
-    <select id="country">
-      <option value="SE" selected>Sverige (SE)</option>
-      <option value="NO">Norge (NO)</option>
-      <option value="FI">Finland (FI)</option>
-      <option value="DK">Danmark (DK)</option>
-      <option value="DE">Tyskland (DE)</option>
-      <option value="US">USA (US)</option>
-    </select>
 
-    <label style="margin-top:14px;">Fraktmetod</label>
-    <select id="shipmentMethod"></select>
+    <p id="statusText" class="muted"></p>
+    <div class="links" id="downloadLinks"></div>
+    <p id="err" class="hidden"></p>
 
-    <div class="stack" style="justify-content:flex-start; margin-top:8px;">
-      <button class="btn" id="btnSubmitPrint" type="submit">Skicka till tryck</button>
-      <span class="muted" id="printHint"></span>
-    </div>
-  </form>
+    <!-- PRINT FORM -->
+    <form id="printForm" class="hidden" novalidate>
+      <h3>Leveransuppgifter för tryckt bok</h3>
+      <p class="muted">Fyll i adress och välj frakt. I testläge skapas en simulerad order (ingen riktig produktion).</p>
+      <div class="row">
+        <div>
+          <label>Förnamn</label>
+          <input id="firstName" required />
+        </div>
+        <div>
+          <label>Efternamn</label>
+          <input id="lastName" required />
+        </div>
+      </div>
+      <label>E-post</label>
+      <input id="email" type="email" placeholder="namn@exempel.se" />
+      <label>Telefon</label>
+      <input id="phone" type="tel" placeholder="0701234567" />
+      <label>Adressrad 1</label>
+      <input id="address1" required />
+      <label>Adressrad 2 (valfritt)</label>
+      <input id="address2" />
+      <div class="row">
+        <div>
+          <label>Postnummer</label>
+          <input id="postCode" required />
+        </div>
+        <div>
+          <label>Ort</label>
+          <input id="city" required />
+        </div>
+      </div>
+      <label>Land</label>
+      <select id="country">
+        <option value="SE" selected>Sverige (SE)</option>
+        <option value="NO">Norge (NO)</option>
+        <option value="FI">Finland (FI)</option>
+        <option value="DK">Danmark (DK)</option>
+        <option value="DE">Tyskland (DE)</option>
+        <option value="US">USA (US)</option>
+      </select>
+
+      <label style="margin-top:14px;">Fraktmetod</label>
+      <select id="shipmentMethod"></select>
+
+      <div class="stack" style="justify-content:flex-start; margin-top:8px;">
+        <button class="btn" id="btnSubmitPrint" type="submit">Skicka till tryck</button>
+        <span class="muted" id="printHint"></span>
+      </div>
+    </form>
+  </main>
 
 <script>
 (() => {
   const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
+
+  /* ===== Global Header mount ===== */
+  function loadGlobalHeader(activePath = location.pathname) {
+    const mount = document.getElementById("globalHeader");
+    if (!mount) return;
+    mount.innerHTML = `
+      <nav>
+        <div class="brand">📚 BokPiloten</div>
+        <a href="/index.html" class="${activePath.endsWith("index.html") ? "active": ""}">Hem</a>
+        <a href="/success.html" class="${activePath.endsWith("success.html") ? "active": ""}">Tack</a>
+        <a href="/status.html" class="${activePath.endsWith("status.html") ? "active": ""}">Status</a>
+      </nav>
+    `;
+  }
+  loadGlobalHeader();
 
   /* -------------------- DOM helpers -------------------- */
   const qs   = (k, fb=null) => new URLSearchParams(location.search).get(k) ?? fb;
@@ -125,6 +168,7 @@
     err:      $id("err"),
     links:    $id("downloadLinks"),
     form:     $id("printForm"),
+    toStatus: $id("toStatus"),
     f: {
       firstName: $id("firstName"),
       lastName:  $id("lastName"),
@@ -287,8 +331,7 @@
 
   async function init() {
     try {
-      clearErr();
-      show(el.spinner);
+      show($id("spinner"));
       setBanner("Verifierar betalning…");
 
       const sid = qs("session_id");
@@ -299,13 +342,20 @@
       try { v = await verifySession(sid); } catch {}
       order_id = v?.order_id || await getOrderId(sid);
       if (!order_id) throw new Error("Kunde inte koppla session till order.");
+
+      // ===== HOOK: spara order_id för status-sidan =====
+      localStorage.setItem("bp_last_order_id", order_id);
+      // visa status-knapp
+      el.toStatus.href = `/status.html?order_id=${encodeURIComponent(order_id)}`;
+      show(el.toStatus);
+
       amount   = v?.amount_total ?? null;
       currency = v?.currency ?? "SEK";
 
       // vänta in 'paid' (webhook)
       const paidOrder = await ensurePaid(order_id);
 
-      // typ: printed/pdf (URL vinner, annars KV/draft/kind)
+      // typ: printed/pdf
       const kind = (qs("kind") || paidOrder?.kind || paidOrder?.draft?.kind || "pdf").toLowerCase();
 
       // topp-rad
@@ -328,14 +378,12 @@
       hide(el.spinner);
 
       if (kind !== "printed") {
-        // Digitalt flöde
         setBanner("Klart! Din PDF är redo.");
         setSub("Du kan ladda ner via länkarna nedan. Ett kvitto skickas via Stripe.");
         hide(el.form);
         return;
       }
 
-      // Tryckt flöde
       if (paidOrder?.email) el.f.email.value = paidOrder.email;
       await fillShipMethods(el.f.country.value);
 
@@ -343,16 +391,14 @@
       if (gelatoAlready) {
         hide(el.form);
         setBanner("Ordern är skickad till tryckpartnern ✔");
-        setSub("Vi uppdaterar status löpande.");
+        setSub("Vi uppdaterar status löpande. Du kan följa den på status-sidan.");
       } else {
-        // visa & wire formuläret
         show(el.form);
         setBanner("Betalning bekräftad! Förbered tryck…");
         setSub("Fyll i leveransadress och välj frakt för att skicka boken till tryck.");
         wireForm(order_id, paidOrder);
       }
 
-      // logg för felsökning
       console.table({
         order_id,
         kind,
@@ -362,7 +408,7 @@
       });
 
     } catch (e) {
-      hide(el.spinner);
+      hide($id("spinner"));
       setBanner("Ett fel uppstod.");
       showErr(e?.message || "Okänt fel.");
     }

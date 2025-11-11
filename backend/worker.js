@@ -351,6 +351,47 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
 }
 
 
+async function handleOrderGet(req, env) {
+  const { searchParams } = new URL(req.url);
+  const order_id = searchParams.get("order_id") || searchParams.get("id");
+  if (!order_id) return err("Missing order_id", 400);
+
+  const ord = await kvGetOrder(env, order_id);
+  if (!ord) return err("Order not found", 404);
+
+  return ok({ order: ord });
+}
+
+async function handleGelatoStatus(req, env) {
+  const { searchParams } = new URL(req.url);
+  const order_id = searchParams.get("order_id");
+  if (!order_id) return err("Missing order_id", 400);
+
+  const ord = await kvGetOrder(env, order_id);
+  if (!ord) return err("Order not found", 404);
+
+  const gelatoId = ord?.files?.gelato_order_id;
+  if (!gelatoId) return err("No gelato_order_id on this order", 404);
+
+  const g = await gelatoFetch(`${GELATO_BASE.order}/orders/${gelatoId}`, env, { method: "GET" });
+
+  // Liten normalisering + derived status
+  const status = (g.fulfillmentStatus || g.status || "").toLowerCase() || "unknown";
+  const hist = Array.isArray(g.statusHistory) ? g.statusHistory : [];
+  const lastHist = hist.length ? (hist[hist.length - 1]?.status || hist[hist.length - 1]) : null;
+
+  return ok({
+    order: ord,
+    gelato: g,
+    derived: {
+      status,
+      lastHistory: lastHist,
+      pageCount: g?.items?.[0]?.pageCount ?? ord?.files?.interior_pages ?? null,
+      productUid: g?.items?.[0]?.productUid ?? null,
+      shippingAddress: g?.shippingAddress ?? null
+    }
+  });
+}
 
 
 
@@ -2520,6 +2561,14 @@ export default {
       if (req.method === "GET" && pathname === "/api/gelato/order-status") {
         return await handleGelatoOrderStatus(req, env);
       }
+      // --- ROUTES ---
+if (req.method === "GET" && url.pathname === "/api/order/get") {
+  return handleOrderGet(req, env);
+}
+if (req.method === "GET" && url.pathname === "/api/gelato/status") {
+  return handleGelatoStatus(req, env);
+}
+
 
       // 9) 404
       return err("Not found", 404);
