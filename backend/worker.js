@@ -2415,6 +2415,71 @@ async function handleGelatoWebhook(req, env) {
   } catch (e) { return err(e?.message || "webhook error", 500); }
 }
 
+const GELATO_BASE_V4 = { product: "https://product.gelatoapis.com/v4" };
+
+async function gelatoFetchV4(url, env, init = {}) {
+  const r = await fetch(url, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      "X-API-KEY": env.GELATO_API_KEY,
+      ...(init.headers || {})
+    }
+  });
+  const txt = await r.text();
+  let data = null;
+  try { data = txt ? JSON.parse(txt) : null; } catch { data = { raw: txt }; }
+  if (!r.ok) {
+    const e = new Error(`Gelato ${r.status}: ${data?.message || data?.error || "Request contains errors"}`);
+    e.name = "GelatoError"; e.status = r.status; e.data = data; e.raw = txt;
+    throw e;
+  }
+  return data;
+}
+
+function corsJson(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, OPTIONS",
+      "access-control-allow-headers": "*",
+      "access-control-expose-headers": "X-Request-Id",
+    }
+  });
+}
+
+async function handleGelatoProductInfo(req, env) {
+  try {
+    const u = new URL(req.url);
+    const uid = u.searchParams.get("uid");
+    if (!uid) return corsJson({ error: "Missing uid" }, 400);
+
+    const url = `${GELATO_BASE_V4.product}/products/${encodeURIComponent(uid)}`;
+    const data = await gelatoFetchV4(url, env);
+
+    // Plocka ut de fält vi bryr oss mest om om de finns
+    const spec =
+      data?.printSpec || data?.printSpecification || data?.specification || data || {};
+
+    // Vanliga nycklar som förekommer för multipage-produkter:
+    const pageInfo = {
+      pageCountMin:      spec.pageCountMin ?? null,
+      pageCountDefault:  spec.pageCountDefault ?? null,
+      pageCountMax:      spec.pageCountMax ?? null,
+      pageIncrement:     spec.pageIncrement ?? null,
+      // ibland förekommer flaggor:
+      includesCoverInCount: spec.includesCoverInCount ?? spec.pageCountIncludesCover ?? null,
+    };
+
+    return corsJson({ ok: true, raw: data, pageInfo });
+  } catch (e) {
+    const status = e?.status || 500;
+    return corsJson({ ok: false, error: String(e?.message || e), details: e?.data || null }, status);
+  }
+}
 
 async function handleGelatoOrderStatus(req, env) {
   try {
@@ -2568,6 +2633,12 @@ if (req.method === "GET" && url.pathname === "/api/order/get") {
 if (req.method === "GET" && url.pathname === "/api/gelato/status") {
   return handleGelatoStatus(req, env);
 }
+
+// i din fetch-router
+if (url.pathname === "/api/gelato/product-info" && req.method === "GET") {
+  return handleGelatoProductInfo(req, env);
+}
+
 
 
       // 9) 404
