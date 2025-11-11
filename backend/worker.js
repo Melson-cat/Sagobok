@@ -272,18 +272,18 @@ async function gelatoCreateOrder(env, { order, shipment, customer }) {
     { type: "cover",   url: order.files.cover_url },    // omslag (separat PDF)
   ];
 
-  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-  // 1) Hämta antal inlaga-sidor (du sa att din pipeline ger 30 just nu)
-  //    Spara gärna detta i order.files.interior_pages när du genererar PDF:en.
- // 1) Hämtas från handleBuildAndAttach → kvAttachFiles
-const interiorPages = order?.files?.interior_pages;
-if (!Number.isFinite(interiorPages)) {
-  throw new Error("Missing order.files.interior_pages (ensure handleBuildAndAttach saved it)");
-}
+  // 1) Antal inlaga-sidor MÅSTE finnas (sparas i handleBuildAndAttach)
+  const interiorPages = order?.files?.interior_pages;
+  if (!Number.isFinite(interiorPages)) {
+    throw new Error("Missing order.files.interior_pages (ensure handleBuildAndAttach saved it)");
+  }
 
-const itemPageCount = interiorPages;
+  // 2) Gelato total page count = inlaga + 4 (ytter/inner fram+baksida)
+  //    ↓ HÅLL DETTA NAMN I SYNC MED PAYLOAD
+  const pageCount = interiorPages + 4;
+  if (pageCount % 2 !== 0) throw new Error("Total pageCount must be even");
 
-  // Fraktmetod
+  // Fraktmetod (fallback: normal)
   let shipmentMethodUid = shipment?.shipmentMethodUid;
   if (!shipmentMethodUid) {
     const meth = await gelatoGetShipmentMethods(env, shipment?.country || env.GELATO_DEFAULT_COUNTRY || "SE");
@@ -291,57 +291,58 @@ const itemPageCount = interiorPages;
     shipmentMethodUid = pick?.shipmentMethodUid || undefined;
   }
 
-  // Adress
+  // Adress + e-post – i test/draft kör vi intern e-post så kunder inte får Gelato-mail
   const country = (shipment?.country || env.GELATO_DEFAULT_COUNTRY || "SE").toUpperCase();
   const phoneRaw = customer?.phone || "";
   const phone = /^\+[\d\s-]+$/.test(phoneRaw) ? phoneRaw : "";
+  const isDraft = !!env.GELATO_DRY_RUN;
 
-  // Payload – VIKTIGT: pageCount ligger på item-nivå
- const payload = {
-  orderType: env.GELATO_DRY_RUN ? "draft" : "order",
-  orderReferenceId: order.id,
-  customerReferenceId: customer?.id || "guest",
-  currency: env.GELATO_DEFAULT_CURRENCY || "SEK",
-  items: [{
-    itemReferenceId: `item-${order.id}`,
-    productUid,
-    quantity: 1,
-    files: [
-      { type: "default", url: order.files.interior_url }, // inlaga (PDF)
-      { type: "cover",   url: order.files.cover_url },    // omslag (PDF)
-    ],
-    pageCount: itemPageCount, // ← EXAKT inlaga, inte +4
-  }],
-  ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
-  shippingAddress: {
-    companyName:  customer?.companyName || "",
-    firstName:    customer?.firstName   || "Kund",
-    lastName:     customer?.lastName    || "BokPiloten",
-    addressLine1: shipment?.addressLine1 || "Adress 1",
-    addressLine2: shipment?.addressLine2 || "",
-    state:        shipment?.state || "",
-    city:         shipment?.city  || "Örebro",
-    postCode:     shipment?.postCode || "70000",
-    country:      (shipment?.country || env.GELATO_DEFAULT_COUNTRY || "SE").toUpperCase(),
-    email:        customer?.email || "support@bokpiloten.se",
-    phone:        (/^\+[\d\s-]+$/.test(customer?.phone || "") ? customer.phone : ""),
-  }
-};
+  // Om du vill tvinga bort kundmail under test:
+  const safeEmail =
+    isDraft
+      ? (env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se")
+      : (customer?.email || "noreply@bokpiloten.se");
 
-  // Skapa order
+  // Payload – OBS: pageCount i items[*]
+  const payload = {
+    orderType: isDraft ? "draft" : "order",
+    orderReferenceId: order.id,
+    customerReferenceId: customer?.id || "guest",
+    currency: env.GELATO_DEFAULT_CURRENCY || "SEK",
+    items: [{
+      itemReferenceId: `item-${order.id}`,
+      productUid,
+      quantity: 1,
+      files,
+      pageCount, // ← NU finns variabeln i scope
+    }],
+    ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
+    shippingAddress: {
+      companyName:  customer?.companyName || "",
+      firstName:    customer?.firstName   || "Kund",
+      lastName:     customer?.lastName    || "BokPiloten",
+      addressLine1: shipment?.addressLine1 || "Adress 1",
+      addressLine2: shipment?.addressLine2 || "",
+      state:        shipment?.state || "",
+      city:         shipment?.city  || "Örebro",
+      postCode:     shipment?.postCode || "70000",
+      country,
+      email:        safeEmail,
+      phone,
+    }
+  };
+
   const data = await gelatoFetch(`${GELATO_BASE.order}/orders`, env, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
   });
 
-  // Persist
   const saved = await kvAttachFiles(env, order.id, {
     gelato_order_id: data?.id || data?.orderId || null,
     gelato_status:   data?.status || "created",
-    // valfritt: lagra valda pageCount & interiorPages för spårbarhet
-    gelato_page_count: pageCount,
-    interior_pages: interiorPages,
+    gelato_page_count: pageCount,   // total = inlaga + 4
+    interior_pages: interiorPages,  // faktiska inlaga-sidor
   });
 
   const gelatoId = data?.id || data?.orderId;
@@ -349,8 +350,6 @@ const itemPageCount = interiorPages;
 
   return { gelato: data, order: saved };
 }
-
-
 
 
 async function buildWrapCoverPdfFromDims(env, story, images, dims) {
