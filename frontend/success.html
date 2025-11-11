@@ -6,421 +6,427 @@
   <title>Tack för ditt köp! – BokPiloten</title>
   <link rel="icon" href="images/pilot-logo.png">
   <link rel="stylesheet" href="./style.css">
-  <style>
-    /* ===== Global header ===== */
-    header.site {
-      position: sticky; top: 0; z-index: 10;
-      background: rgba(10,15,31,.7);
-      backdrop-filter: blur(10px);
-      border-bottom: 1px solid rgba(0,0,0,.08);
-    }
-    header.site nav {
-      max-width: 960px; margin: 0 auto; padding: 12px 16px;
-      display: flex; align-items: center; gap: 12px;
-      color: #e6e9f2;
-    }
-    header.site .brand { font-weight: 700; letter-spacing: .2px; }
-    header.site a { color: #c3c9ff; text-decoration: none; padding: 6px 10px; border-radius: 8px; }
-    header.site a.active { background: rgba(91,74,217,.2); border: 1px solid rgba(91,74,217,.5); }
-
-    /* ===== Page styles (din befintliga stil) ===== */
-    body { font-family: "Quicksand", system-ui, sans-serif; background:#fafafa; color:#333;
-           display:flex; flex-direction:column; align-items:center; text-align:center; min-height:100vh; padding:24px;}
-    main { width: 100%; max-width: 960px; }
-    h1 { font-size:1.8rem; margin-bottom:.5rem; color:#1f6feb; }
-    p { font-size:1rem; margin:.4rem 0; }
-    .spinner{ width:36px;height:36px;border:4px solid #cce0ff;border-top-color:#1f6feb;border-radius:50%;
-              animation:spin 1s linear infinite;margin:20px auto; }
-    @keyframes spin{ to{ transform:rotate(360deg);} }
-    .btn{ display:inline-block; padding:10px 18px; border-radius:8px; background:#1f6feb; color:#fff; border:none; cursor:pointer;
-          font-size:1rem; margin-top:12px; transition:background .2s; text-decoration:none; }
-    .btn:hover{ background:#1458c0; }
-    .muted { color:#666; font-size:.95rem; }
-    .hidden{ display:none; }
-    #err{ color:#b00020; font-weight:600; margin-top:16px; white-space:pre-wrap; }
-    form { width:min(680px, 92vw); text-align:left; background:#fff; border:1px solid #eee; border-radius:12px; padding:16px; margin:16px auto 0; }
-    .row{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-    label{ display:block; font-weight:600; margin-top:10px; }
-    input, select{ width:100%; padding:10px; border-radius:8px; border:1px solid #ddd; font-size:1rem; }
-    .pill { display:inline-block; padding:.25rem .6rem; border-radius:999px; background:#eef4ff; color:#1f6feb; font-weight:600; font-size:.85rem; }
-    .stack { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; justify-content:center; }
-    .links { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; justify-content:center; margin-top:8px;}
-    .ok { color:#0a7f42; font-weight:700; }
-    .box { background:#fff; border:1px solid #eee; border-radius:12px; padding:12px 16px; margin-top:12px; }
-  </style>
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;600;700&display=swap" rel="stylesheet" />
 </head>
-<body>
+<body data-theme="kids">
+  <!-- Global Header -->
+  <header class="site-header" role="banner">
+    <a href="/index.html" class="brand" aria-label="BokPiloten startsida">
+      <img src="images/pilot-logo.png" alt="BokPiloten" />
+      <span>BokPiloten</span>
+    </a>
+    <nav class="main-nav" aria-label="Huvudmeny">
+      <a href="/index.html" data-nav="home">Hem</a>
+      <a href="/index.html#bookForm" data-nav="create">Skapa bok</a>
+      <a href="/index.html#examples" data-nav="examples">Exempel</a>
+      <a href="/index.html#about" data-nav="about">Om oss</a>
+      <a href="/status.html" data-nav="status">Status</a>
+    </nav>
+    <button id="navToggle" class="hamburger" aria-label="Meny" aria-expanded="false" aria-controls="mobileMenu">☰</button>
+  </header>
+  <div class="mobile-menu" id="mobileMenu" aria-hidden="true">
+    <nav>
+      <a href="/index.html">Hem</a>
+      <a href="/index.html#bookForm">Skapa bok</a>
+      <a href="/index.html#examples">Exempel</a>
+      <a href="/index.html#about">Om oss</a>
+      <a href="/status.html">Status</a>
+    </nav>
+  </div>
 
-  <!-- GLOBAL HEADER -->
-  <header class="site" id="globalHeader"></header>
+  <main class="container">
+    <section class="panel" aria-labelledby="thanksTitle">
+      <h1 id="thanksTitle" style="margin:0 0 8px">Tack för ditt köp! 🎉</h1>
+      <p id="status" class="muted">Verifierar betalning…</p>
+      <div class="spinner-lg" id="spinner" aria-hidden="true"></div>
 
-  <main>
-    <h1>Tack för ditt köp! 🎉</h1>
-    <p id="status">Verifierar betalning…</p>
-    <div class="spinner" id="spinner"></div>
-
-    <div class="box hidden" id="orderBox">
-      <div class="stack">
-        <span class="pill" id="pillKind">—</span>
-        <span>Order-ID: <strong id="orderId">—</strong></span>
-        <span>Belopp: <strong id="amount">—</strong> <span id="currency"></span></span>
-      </div>
-      <div class="links" style="margin-top:8px;">
-        <!-- Status-knapp dyker upp när order_id finns -->
-        <a id="toStatus" class="btn hidden" href="#">Visa orderstatus</a>
-      </div>
-    </div>
-
-    <p id="statusText" class="muted"></p>
-    <div class="links" id="downloadLinks"></div>
-    <p id="err" class="hidden"></p>
-
-    <!-- PRINT FORM -->
-    <form id="printForm" class="hidden" novalidate>
-      <h3>Leveransuppgifter för tryckt bok</h3>
-      <p class="muted">Fyll i adress och välj frakt. I testläge skapas en simulerad order (ingen riktig produktion).</p>
-      <div class="row">
-        <div>
-          <label>Förnamn</label>
-          <input id="firstName" required />
-        </div>
-        <div>
-          <label>Efternamn</label>
-          <input id="lastName" required />
-        </div>
-      </div>
-      <label>E-post</label>
-      <input id="email" type="email" placeholder="namn@exempel.se" />
-      <label>Telefon</label>
-      <input id="phone" type="tel" placeholder="0701234567" />
-      <label>Adressrad 1</label>
-      <input id="address1" required />
-      <label>Adressrad 2 (valfritt)</label>
-      <input id="address2" />
-      <div class="row">
-        <div>
-          <label>Postnummer</label>
-          <input id="postCode" required />
-        </div>
-        <div>
-          <label>Ort</label>
-          <input id="city" required />
+      <div class="box hidden" id="orderBox" style="margin-top:12px">
+        <div class="stack">
+          <span class="pill" id="pillKind">—</span>
+          <span>Order-ID: <strong id="orderId">—</strong></span>
+          <span>Belopp: <strong id="amount">—</strong> <span id="currency"></span></span>
         </div>
       </div>
-      <label>Land</label>
-      <select id="country">
-        <option value="SE" selected>Sverige (SE)</option>
-        <option value="NO">Norge (NO)</option>
-        <option value="FI">Finland (FI)</option>
-        <option value="DK">Danmark (DK)</option>
-        <option value="DE">Tyskland (DE)</option>
-        <option value="US">USA (US)</option>
-      </select>
 
-      <label style="margin-top:14px;">Fraktmetod</label>
-      <select id="shipmentMethod"></select>
+      <p id="statusText" class="muted"></p>
+      <div class="links" id="downloadLinks"></div>
+      <p id="err" class="hidden muted"></p>
 
-      <div class="stack" style="justify-content:flex-start; margin-top:8px;">
-        <button class="btn" id="btnSubmitPrint" type="submit">Skicka till tryck</button>
-        <span class="muted" id="printHint"></span>
-      </div>
-    </form>
+      <!-- PRINT FORM -->
+      <form id="printForm" class="form-card hidden" novalidate>
+        <h3>Leveransuppgifter för tryckt bok</h3>
+        <p class="muted">Fyll i adress och välj frakt. I testläge skapas en simulerad order.</p>
+
+        <div class="form-row">
+          <div class="field">
+            <label>Förnamn</label>
+            <input id="firstName" required />
+          </div>
+          <div class="field">
+            <label>Efternamn</label>
+            <input id="lastName" required />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="field">
+            <label>E-post</label>
+            <input id="email" type="email" placeholder="namn@exempel.se" />
+          </div>
+          <div class="field">
+            <label>Telefon</label>
+            <input id="phone" type="tel" placeholder="0701234567" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Adressrad 1</label>
+          <input id="address1" required />
+        </div>
+        <div class="field">
+          <label>Adressrad 2 (valfritt)</label>
+          <input id="address2" />
+        </div>
+
+        <div class="form-row">
+          <div class="field">
+            <label>Postnummer</label>
+            <input id="postCode" required />
+          </div>
+          <div class="field">
+            <label>Ort</label>
+            <input id="city" required />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="field">
+            <label>Land</label>
+            <select id="country">
+              <option value="SE" selected>Sverige (SE)</option>
+              <option value="NO">Norge (NO)</option>
+              <option value="FI">Finland (FI)</option>
+              <option value="DK">Danmark (DK)</option>
+              <option value="DE">Tyskland (DE)</option>
+              <option value="US">USA (US)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Fraktmetod</label>
+            <select id="shipmentMethod"></select>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary" id="btnSubmitPrint" type="submit">Skicka till tryck</button>
+          <span class="muted" id="printHint"></span>
+        </div>
+      </form>
+    </section>
   </main>
 
-<script>
-(() => {
-  const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
+  <footer class="site-footer" role="contentinfo">
+    <p>© 2025 BokPiloten</p>
+  </footer>
 
-  /* ===== Global Header mount ===== */
-  function loadGlobalHeader(activePath = location.pathname) {
-    const mount = document.getElementById("globalHeader");
-    if (!mount) return;
-    mount.innerHTML = `
-      <nav>
-        <div class="brand">📚 BokPiloten</div>
-        <a href="/index.html" class="${activePath.endsWith("index.html") ? "active": ""}">Hem</a>
-        <a href="/success.html" class="${activePath.endsWith("success.html") ? "active": ""}">Tack</a>
-        <a href="/status.html" class="${activePath.endsWith("status.html") ? "active": ""}">Status</a>
-      </nav>
-    `;
-  }
-  loadGlobalHeader();
-
-  /* -------------------- DOM helpers -------------------- */
-  const qs   = (k, fb=null) => new URLSearchParams(location.search).get(k) ?? fb;
-  const $id  = (id) => document.getElementById(id);
-  const hide = (el) => el && (el.classList.add("hidden"));
-  const show = (el) => el && (el.classList.remove("hidden"));
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const setText = (el, v) => { if (el) el.textContent = v ?? ""; };
-  const makeLink = (href, text) => { const a = document.createElement("a"); a.href = href; a.target="_blank"; a.rel="noopener"; a.className="btn"; a.textContent=text; return a; };
-
-  /* -------------------- UI refs -------------------- */
-  const el = {
-    status:   $id("status"),
-    spinner:  $id("spinner"),
-    box:      $id("orderBox"),
-    pillKind: $id("pillKind"),
-    orderId:  $id("orderId"),
-    amount:   $id("amount"),
-    currency: $id("currency"),
-    statusText:$id("statusText"),
-    err:      $id("err"),
-    links:    $id("downloadLinks"),
-    form:     $id("printForm"),
-    toStatus: $id("toStatus"),
-    f: {
-      firstName: $id("firstName"),
-      lastName:  $id("lastName"),
-      email:     $id("email"),
-      phone:     $id("phone"),
-      address1:  $id("address1"),
-      address2:  $id("address2"),
-      postCode:  $id("postCode"),
-      city:      $id("city"),
-      country:   $id("country"),
-      shipMeth:  $id("shipmentMethod"),
-      btn:       $id("btnSubmitPrint"),
-      hint:      $id("printHint"),
+  <script>
+  // Header controller (delad)
+  (function () {
+    const toggle = document.getElementById("navToggle");
+    const menu = document.getElementById("mobileMenu");
+    if (toggle && menu) {
+      const setOpen = (open) => {
+        toggle.setAttribute("aria-expanded", String(open));
+        menu.setAttribute("aria-hidden", String(!open));
+        menu.classList.toggle("open", open);
+      };
+      setOpen(false);
+      toggle.addEventListener("click", () => {
+        const isOpen = toggle.getAttribute("aria-expanded") === "true";
+        setOpen(!isOpen);
+      });
+      menu.addEventListener("click", (e) => {
+        if (e.target && e.target.tagName === "A") setOpen(false);
+      });
     }
-  };
+  })();
+  </script>
 
-  /* -------------------- Net helpers -------------------- */
-  async function fetchJSON(url, init) {
-    const r = await fetch(url, init);
-    const ct = r.headers.get("content-type") || "";
-    const isJSON = ct.includes("application/json");
-    const body = isJSON ? await r.json() : await r.text();
-    if (!r.ok || (isJSON && body && body.error)) {
-      const msg = (isJSON && body && body.error) || `HTTP ${r.status}`;
-      throw new Error(msg);
-    }
-    return isJSON ? body : { text: body };
-  }
-  const verifySession   = (sid) => fetchJSON(`${BACKEND}/api/checkout/verify?session_id=${encodeURIComponent(sid)}`);
-  const getOrderId      = (sid) => fetchJSON(`${BACKEND}/api/checkout/order-id?session_id=${encodeURIComponent(sid)}`).then(j => j.order_id || null);
-  const getOrder        = (id)  => fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(id)}`);
-  const buildAndAttach  = (id)  => fetchJSON(`${BACKEND}/api/pdf/build-and-attach`, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ order_id:id }) });
-  const getShipMethods  = (country) => fetchJSON(`${BACKEND}/api/gelato/shipment-methods?country=${encodeURIComponent(country)}`);
-  const createGelato    = (order_id, shipment, customer) =>
-    fetchJSON(`${BACKEND}/api/gelato/create`, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ order_id, shipment, customer }) });
+  <!-- Success-logik (samma som vi arbetat fram, lätt städad) -->
+  <script>
+  (() => {
+    const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
 
-  /* -------------------- View state -------------------- */
-  function setBanner(msg) { setText(el.status, msg); }
-  function setSub(msg)    { setText(el.statusText, msg); }
-  function clearErr()     { if (el.err) { el.err.textContent = ""; hide(el.err); } }
-  function showErr(msg)   { if (el.err) { el.err.textContent = msg; show(el.err); } }
+    /* DOM helpers */
+    const qs   = (k, fb=null) => new URLSearchParams(location.search).get(k) ?? fb;
+    const $id  = (id) => document.getElementById(id);
+    const hide = (el) => el && el.classList.add("hidden");
+    const show = (el) => el && el.classList.remove("hidden");
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const setText = (el, v) => { if (el) el.textContent = v ?? ""; };
+    const makeLink = (href, text) => { const a = document.createElement("a"); a.href = href; a.target="_blank"; a.rel="noopener"; a.className="btn"; a.textContent=text; return a; };
 
-  function renderFiles(files) {
-    if (!el.links) return;
-    el.links.innerHTML = "";
-    if (files?.interior_url) el.links.appendChild(makeLink(files.interior_url, "Ladda ner inlagan (PDF)"));
-    if (files?.cover_url)    el.links.appendChild(makeLink(files.cover_url, "Ladda ner omslaget (PDF)"));
-  }
-
-  async function ensurePaid(order_id, timeoutMs=120000, pollMs=1500) {
-    const t0 = Date.now();
-    while (Date.now() - t0 < timeoutMs) {
-      const o = await getOrder(order_id);
-      if (o?.status === "paid" || o?.status === "ready") return o;
-      await sleep(pollMs);
-    }
-    throw new Error("Betalningen är inte bekräftad ännu. Uppdatera sidan om en stund.");
-  }
-
-  async function ensureFiles(order_id) {
-    let o = await getOrder(order_id);
-    const needInt = !o?.files?.interior_url;
-    const needCov = !o?.files?.cover_url;
-    if (needInt || needCov) {
-      setBanner("Skapar tryckfiler…");
-      await buildAndAttach(order_id);
-      await sleep(600);
-      o = await getOrder(order_id);
-    }
-    renderFiles(o.files || {});
-    return o;
-  }
-
-  function oncePerSession(key, fn) {
-    const k = `bp:once:${key}`;
-    if (sessionStorage.getItem(k)) return;
-    sessionStorage.setItem(k, "1");
-    try { fn(); } catch {}
-  }
-
-  function gelatoSubmittedKey(order_id) { return `bp:g:submitted:${order_id}`; }
-  function markGelatoSubmitted(order_id, gelato_id) {
-    sessionStorage.setItem(gelatoSubmittedKey(order_id), gelato_id || "1");
-  }
-  function wasGelatoSubmitted(order_id) {
-    return !!sessionStorage.getItem(gelatoSubmittedKey(order_id));
-  }
-
-  async function fillShipMethods(country) {
-    try {
-      const data = await getShipMethods(country);
-      const list = data?.shipmentMethods || [];
-      el.f.shipMeth.innerHTML = "";
-      if (!list.length) {
-        el.f.shipMeth.innerHTML = `<option value="">Inga fraktmetoder</option>`;
-        return;
+    /* UI refs */
+    const el = {
+      status:   $id("status"),
+      spinner:  $id("spinner"),
+      box:      $id("orderBox"),
+      pillKind: $id("pillKind"),
+      orderId:  $id("orderId"),
+      amount:   $id("amount"),
+      currency: $id("currency"),
+      statusText:$id("statusText"),
+      err:      $id("err"),
+      links:    $id("downloadLinks"),
+      form:     $id("printForm"),
+      f: {
+        firstName: $id("firstName"),
+        lastName:  $id("lastName"),
+        email:     $id("email"),
+        phone:     $id("phone"),
+        address1:  $id("address1"),
+        address2:  $id("address2"),
+        postCode:  $id("postCode"),
+        city:      $id("city"),
+        country:   $id("country"),
+        shipMeth:  $id("shipmentMethod"),
+        btn:       $id("btnSubmitPrint"),
+        hint:      $id("printHint"),
       }
-      for (const m of list) {
-        const opt = document.createElement("option");
-        opt.value = m.shipmentMethodUid;
-        opt.textContent = `${m.displayName || m.name || m.type}`;
-        el.f.shipMeth.appendChild(opt);
-      }
-    } catch (e) {
-      el.f.shipMeth.innerHTML = `<option value="">Kunde inte hämta fraktmetoder</option>`;
-    }
-  }
+    };
 
-  function wireForm(order_id, paidOrder) {
-    el.f.country.addEventListener("change", () => fillShipMethods(el.f.country.value));
-    el.form.addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      clearErr();
-      if (wasGelatoSubmitted(order_id)) {
-        hide(el.form);
-        setBanner("Ordern är redan skickad till tryckpartnern ✔");
-        return;
+    /* Net helpers */
+    async function fetchJSON(url, init) {
+      const r = await fetch(url, init);
+      const ct = r.headers.get("content-type") || "";
+      const isJSON = ct.includes("application/json");
+      const body = isJSON ? await r.json() : await r.text();
+      if (!r.ok || (isJSON && body && body.error)) {
+        const msg = (isJSON && body && body.error) || `HTTP ${r.status}`;
+        throw new Error(msg);
       }
+      return isJSON ? body : { text: body };
+    }
+    const verifySession   = (sid) => fetchJSON(`${BACKEND}/api/checkout/verify?session_id=${encodeURIComponent(sid)}`);
+    const getOrderId      = (sid) => fetchJSON(`${BACKEND}/api/checkout/order-id?session_id=${encodeURIComponent(sid)}`).then(j => j.order_id || null);
+    const getOrder        = (id)  => fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(id)}`);
+    const buildAndAttach  = (id)  => fetchJSON(`${BACKEND}/api/pdf/build-and-attach`, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ order_id:id }) });
+    const getShipMethods  = (country) => fetchJSON(`${BACKEND}/api/gelato/shipment-methods?country=${encodeURIComponent(country)}`);
+    const createGelato    = (order_id, shipment, customer) =>
+      fetchJSON(`${BACKEND}/api/gelato/create`, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ order_id, shipment, customer }) });
+
+    /* View state */
+    function setBanner(msg) { setText(el.status, msg); }
+    function setSub(msg)    { setText(el.statusText, msg); }
+    function clearErr()     { if (el.err) { el.err.textContent = ""; hide(el.err); } }
+    function showErr(msg)   { if (el.err) { el.err.textContent = msg; show(el.err); } }
+
+    function renderFiles(files) {
+      if (!el.links) return;
+      el.links.innerHTML = "";
+      if (files?.interior_url) el.links.appendChild(makeLink(files.interior_url, "Ladda ner inlagan (PDF)"));
+      if (files?.cover_url)    el.links.appendChild(makeLink(files.cover_url, "Ladda ner omslaget (PDF)"));
+    }
+
+    async function ensurePaid(order_id, timeoutMs=120000, pollMs=1500) {
+      const t0 = Date.now();
+      while (Date.now() - t0 < timeoutMs) {
+        const o = await getOrder(order_id);
+        if (o?.status === "paid" || o?.status === "ready") return o;
+        await sleep(pollMs);
+      }
+      throw new Error("Betalningen är inte bekräftad ännu. Uppdatera sidan om en stund.");
+    }
+
+    async function ensureFiles(order_id) {
+      let o = await getOrder(order_id);
+      const needInt = !o?.files?.interior_url;
+      const needCov = !o?.files?.cover_url;
+      if (needInt || needCov) {
+        setBanner("Skapar tryckfiler…");
+        await buildAndAttach(order_id);
+        await sleep(600);
+        o = await getOrder(order_id);
+      }
+      renderFiles(o.files || {});
+      return o;
+    }
+
+    function oncePerSession(key, fn) {
+      const k = `bp:once:${key}`;
+      if (sessionStorage.getItem(k)) return;
+      sessionStorage.setItem(k, "1");
+      try { fn(); } catch {}
+    }
+
+    function gelatoSubmittedKey(order_id) { return `bp:g:submitted:${order_id}`; }
+    function markGelatoSubmitted(order_id, gelato_id) {
+      sessionStorage.setItem(gelatoSubmittedKey(order_id), gelato_id || "1");
+    }
+    function wasGelatoSubmitted(order_id) {
+      return !!sessionStorage.getItem(gelatoSubmittedKey(order_id));
+    }
+
+    async function fillShipMethods(country) {
       try {
-        el.f.btn.disabled = true;
-        setBanner("Skickar till tryck…");
-        setText(el.f.hint, "Skickar ordern…");
-
-        const shipment = {
-          addressLine1: el.f.address1.value.trim(),
-          addressLine2: el.f.address2.value.trim(),
-          city:         el.f.city.value.trim(),
-          postCode:     el.f.postCode.value.trim(),
-          country:      el.f.country.value,
-          state:        "",
-          shipmentMethodUid: el.f.shipMeth.value || undefined,
-        };
-        const customer = {
-          firstName: el.f.firstName.value.trim(),
-          lastName:  el.f.lastName.value.trim(),
-          email:     (el.f.email.value.trim() || paidOrder?.email || ""),
-          phone:     el.f.phone.value.trim(),
-        };
-
-        const res = await createGelato(order_id, shipment, customer);
-        const gelatoId = res?.gelato?.id || res?.gelato?.orderId || res?.gelato?.data?.id || null;
-        markGelatoSubmitted(order_id, gelatoId);
-
-        setBanner("Tryckorder skapad ✓");
-        if (res?.gelato?.orderType === "draft" || res?.gelato?.status === "draft") {
-          setSub("Test-order simulerad (GELATO_DRY_RUN=true). Inga verkliga kostnader uppstod.");
-        } else {
-          setSub("Ordern har skickats till tryckpartnern. Vi uppdaterar status löpande.");
+        const data = await getShipMethods(country);
+        const list = data?.shipmentMethods || [];
+        el.f.shipMeth.innerHTML = "";
+        if (!list.length) {
+          el.f.shipMeth.innerHTML = `<option value="">Inga fraktmetoder</option>`;
+          return;
         }
-        hide(el.form);
+        for (const m of list) {
+          const opt = document.createElement("option");
+          opt.value = m.shipmentMethodUid;
+          opt.textContent = `${m.displayName || m.name || m.type}`;
+          el.f.shipMeth.appendChild(opt);
+        }
+      } catch (e) {
+        el.f.shipMeth.innerHTML = `<option value="">Kunde inte hämta fraktmetoder</option>`;
+      }
+    }
+
+    function wireForm(order_id, paidOrder) {
+      el.f.country.addEventListener("change", () => fillShipMethods(el.f.country.value));
+      el.form.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        clearErr();
+        if (wasGelatoSubmitted(order_id)) {
+          hide(el.form);
+          setBanner("Ordern är redan skickad till tryckpartnern ✔");
+          return;
+        }
+        try {
+          el.f.btn.disabled = true;
+          setBanner("Skickar till tryck…");
+          setText(el.f.hint, "Skickar ordern…");
+
+          const shipment = {
+            addressLine1: el.f.address1.value.trim(),
+            addressLine2: el.f.address2.value.trim(),
+            city:         el.f.city.value.trim(),
+            postCode:     el.f.postCode.value.trim(),
+            country:      el.f.country.value,
+            state:        "",
+            shipmentMethodUid: el.f.shipMeth.value || undefined,
+          };
+          const customer = {
+            firstName: el.f.firstName.value.trim(),
+            lastName:  el.f.lastName.value.trim(),
+            email:     (el.f.email.value.trim() || paidOrder?.email || ""),
+            phone:     el.f.phone.value.trim(),
+          };
+
+          const res = await createGelato(order_id, shipment, customer);
+          const gelatoId = res?.gelato?.id || res?.gelato?.orderId || res?.gelato?.data?.id || null;
+          markGelatoSubmitted(order_id, gelatoId);
+
+          setBanner("Tryckorder skapad ✓");
+          if (res?.gelato?.orderType === "draft" || res?.gelato?.status === "draft") {
+            setSub("Test-order simulerad (GELATO_DRY_RUN=true). Inga verkliga kostnader uppstod.");
+          } else {
+            setSub("Ordern har skickats till tryckpartnern. Vi uppdaterar status löpande.");
+          }
+          hide(el.form);
+
+        } catch (e) {
+          el.f.btn.disabled = false;
+          setText(el.f.hint, "");
+          showErr(e?.message || "Kunde inte skapa tryckorder.");
+          setBanner("Ett fel uppstod.");
+        }
+      }, { once:true });
+    }
+
+    async function init() {
+      try {
+        show(el.spinner);
+        setBanner("Verifierar betalning…");
+
+        const sid = qs("session_id");
+        if (!sid) throw new Error("Saknar session_id i URL:en.");
+
+        // session → order_id (+ belopp)
+        let order_id=null, amount=null, currency=null, v=null;
+        try { v = await verifySession(sid); } catch {}
+        order_id = v?.order_id || await getOrderId(sid);
+        if (!order_id) throw new Error("Kunde inte koppla session till order.");
+        amount   = v?.amount_total ?? null;
+        currency = v?.currency ?? "SEK";
+
+        // vänta in 'paid'
+        const paidOrder = await ensurePaid(order_id);
+
+        // typ: printed/pdf
+        const kind = (new URLSearchParams(location.search).get("kind") || paidOrder?.kind || paidOrder?.draft?.kind || "pdf").toLowerCase();
+
+        // topp-rad
+        show(el.box);
+        setText(el.orderId, order_id);
+        setText(el.pillKind, kind === "printed" ? "Tryckt bok" : "Digital PDF");
+        setText(el.amount, amount != null ? (amount/100).toFixed(2) : "—");
+        setText(el.currency, (currency || "SEK").toUpperCase());
+
+        // se till att filer finns
+        const o = await ensureFiles(order_id);
+
+        // auto-öppna PDF en gång
+        if (o?.files?.interior_url) {
+          (function once() {
+            const k = `bp:open:${o.files.interior_url}`;
+            if (sessionStorage.getItem(k)) return;
+            sessionStorage.setItem(k, "1");
+            try { window.open(o.files.interior_url, "_blank", "noopener"); } catch {}
+          })();
+        }
+
+        hide(el.spinner);
+
+        if (kind !== "printed") {
+          setBanner("Klart! Din PDF är redo.");
+          setSub("Du kan ladda ner via länkarna nedan. Ett kvitto skickas via Stripe.");
+          hide(el.form);
+          return;
+        }
+
+        // Tryckt flöde
+        if (paidOrder?.email) el.f.email.value = paidOrder.email;
+        await fillShipMethods(el.f.country.value);
+
+        const gelatoAlready = !!o?.files?.gelato_order_id || sessionStorage.getItem(`bp:g:submitted:${order_id}`);
+        if (gelatoAlready) {
+          hide(el.form);
+          setBanner("Ordern är skickad till tryckpartnern ✔");
+          setSub("Vi uppdaterar status löpande.");
+        } else {
+          show(el.form);
+          setBanner("Betalning bekräftad! Förbered tryck…");
+          setSub("Fyll i leveransadress och välj frakt för att skicka boken till tryck.");
+          wireForm(order_id, paidOrder);
+        }
+
+        console.table({
+          order_id,
+          kind,
+          has_interior: !!o?.files?.interior_url,
+          has_cover:    !!o?.files?.cover_url,
+          gelato_order: o?.files?.gelato_order_id || "(none)"
+        });
 
       } catch (e) {
-        el.f.btn.disabled = false;
-        setText(el.f.hint, "");
-        showErr(e?.message || "Kunde inte skapa tryckorder.");
+        hide(el.spinner);
         setBanner("Ett fel uppstod.");
+        showErr(e?.message || "Okänt fel.");
       }
-    }, { once:true });
-  }
-
-  async function init() {
-    try {
-      show($id("spinner"));
-      setBanner("Verifierar betalning…");
-
-      const sid = qs("session_id");
-      if (!sid) throw new Error("Saknar session_id i URL:en.");
-
-      // session → order_id (+ belopp)
-      let order_id=null, amount=null, currency=null, v=null;
-      try { v = await verifySession(sid); } catch {}
-      order_id = v?.order_id || await getOrderId(sid);
-      if (!order_id) throw new Error("Kunde inte koppla session till order.");
-
-      // ===== HOOK: spara order_id för status-sidan =====
-      localStorage.setItem("bp_last_order_id", order_id);
-      // visa status-knapp
-      el.toStatus.href = `/status.html?order_id=${encodeURIComponent(order_id)}`;
-      show(el.toStatus);
-
-      amount   = v?.amount_total ?? null;
-      currency = v?.currency ?? "SEK";
-
-      // vänta in 'paid' (webhook)
-      const paidOrder = await ensurePaid(order_id);
-
-      // typ: printed/pdf
-      const kind = (qs("kind") || paidOrder?.kind || paidOrder?.draft?.kind || "pdf").toLowerCase();
-
-      // topp-rad
-      show(el.box);
-      setText(el.orderId, order_id);
-      setText(el.pillKind, kind === "printed" ? "Tryckt bok" : "Digital PDF");
-      setText(el.amount, amount != null ? (amount/100).toFixed(2) : "—");
-      setText(el.currency, (currency || "SEK").toUpperCase());
-
-      // se till att filer finns
-      const o = await ensureFiles(order_id);
-
-      // auto-öppna PDF en gång per session
-      if (o?.files?.interior_url) {
-        oncePerSession(`open:${o.files.interior_url}`, () => {
-          try { window.open(o.files.interior_url, "_blank", "noopener"); } catch {}
-        });
-      }
-
-      hide(el.spinner);
-
-      if (kind !== "printed") {
-        setBanner("Klart! Din PDF är redo.");
-        setSub("Du kan ladda ner via länkarna nedan. Ett kvitto skickas via Stripe.");
-        hide(el.form);
-        return;
-      }
-
-      if (paidOrder?.email) el.f.email.value = paidOrder.email;
-      await fillShipMethods(el.f.country.value);
-
-      const gelatoAlready = !!o?.files?.gelato_order_id || wasGelatoSubmitted(order_id);
-      if (gelatoAlready) {
-        hide(el.form);
-        setBanner("Ordern är skickad till tryckpartnern ✔");
-        setSub("Vi uppdaterar status löpande. Du kan följa den på status-sidan.");
-      } else {
-        show(el.form);
-        setBanner("Betalning bekräftad! Förbered tryck…");
-        setSub("Fyll i leveransadress och välj frakt för att skicka boken till tryck.");
-        wireForm(order_id, paidOrder);
-      }
-
-      console.table({
-        order_id,
-        kind,
-        has_interior: !!o?.files?.interior_url,
-        has_cover:    !!o?.files?.cover_url,
-        gelato_order: o?.files?.gelato_order_id || "(none)"
-      });
-
-    } catch (e) {
-      hide($id("spinner"));
-      setBanner("Ett fel uppstod.");
-      showErr(e?.message || "Okänt fel.");
     }
-  }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init, { once:true });
-  } else {
-    init();
-  }
-})();
-</script>
-
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", init, { once:true });
+    } else {
+      init();
+    }
+  })();
+  </script>
 </body>
 </html>

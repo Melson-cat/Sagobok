@@ -2,218 +2,234 @@
 <html lang="sv">
 <head>
   <meta charset="utf-8" />
-  <title>BokPiloten – Orderstatus</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    :root {
-      --ink:#0f172a; --muted:#64748b; --ok:#16a34a; --warn:#f59e0b; --bad:#ef4444; --brand:#5b4ad9; --bg:#0b1020; --card:#121833; --chip:#1b2447;
-    }
-    body{margin:0;background:linear-gradient(180deg,#0a0f1f,#0f1630);color:#e6e9f2;font:16px/1.5 system-ui,Segoe UI,Roboto,Helvetica,Arial}
-    a{color:#c3c9ff;text-decoration:none}
-    .container{max-width:960px;margin:24px auto;padding:0 16px}
-    .card{background:rgba(255,255,255,.04);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:20px}
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-    @media (max-width:800px){.row{grid-template-columns:1fr}}
-    .kvs{display:grid;grid-template-columns:160px 1fr;gap:8px 16px;margin-top:8px}
-    .kvs div:nth-child(odd){color:#aab1c5}
-    .badge{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:#1b2447;border:1px solid rgba(255,255,255,.08);font-size:13px}
-    .badge.ok{background:rgba(22,163,74,.15);border-color:rgba(22,163,74,.3)}
-    .badge.warn{background:rgba(245,158,11,.15);border-color:rgba(245,158,11,.35)}
-    .badge.bad{background:rgba(239,68,68,.15);border-color:rgba(239,68,68,.35)}
-    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
-    .muted{color:#aab1c5}
-    .progress{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 0}
-    .step{padding:6px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:#101736}
-    .step.active{outline:2px solid #5b4ad9}
-    .small{font-size:13px;color:#aab1c5}
-    .spacer{height:12px}
-    .btn{display:inline-block;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.1);background:#202a55;color:#fff}
-    header{position:sticky;top:0;background:rgba(10,15,31,.7);backdrop-filter:blur(10px);border-bottom:1px solid rgba(255,255,255,.08);z-index:10}
-    nav{max-width:960px;margin:0 auto;padding:12px 16px;display:flex;gap:12px;align-items:center}
-    nav .brand{font-weight:700;letter-spacing:.2px}
-    nav a{padding:6px 10px;border-radius:8px}
-    nav a.active{background:rgba(91,74,217,.2);border:1px solid rgba(91,74,217,.5)}
-  </style>
+  <title>Orderstatus – BokPiloten</title>
+  <link rel="icon" href="images/pilot-logo.png">
+  <link rel="stylesheet" href="./style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;600;700&display=swap" rel="stylesheet" />
 </head>
-<body>
-  <!-- Global Header mount -->
-  <header id="globalHeader"></header>
-
-  <div class="container">
-    <h1>Orderstatus</h1>
-    <div class="small">Följ tryck och leverans i realtid.</div>
-    <div class="spacer"></div>
-
-    <div class="card" id="statusCard">
-      <div id="statusTop">
-        <div class="badge warn" id="badge">Laddar status…</div>
-        <div class="small mono" id="orderHint"></div>
-      </div>
-
-      <div class="spacer"></div>
-
-      <div class="row">
-        <div>
-          <h3>Översikt</h3>
-          <div class="kvs">
-            <div>Order-ID</div><div class="mono" id="k_orderId">–</div>
-            <div>Gelato Order</div><div class="mono" id="k_gelatoId">–</div>
-            <div>Status</div><div id="k_status">–</div>
-            <div>Sidor</div><div id="k_pages">–</div>
-            <div>Produkt</div><div id="k_product">–</div>
-          </div>
-
-          <div class="spacer"></div>
-          <h3>Förlopp</h3>
-          <div class="progress" id="progress"></div>
-        </div>
-
-        <div>
-          <h3>Leveransadress</h3>
-          <div class="kvs" id="addr">
-            <div>Namn</div><div id="a_name">–</div>
-            <div>E-post</div><div id="a_email">–</div>
-            <div>Telefon</div><div id="a_phone">–</div>
-            <div>Adress</div><div id="a_line1">–</div>
-            <div>Stad / Postnr</div><div id="a_cityzip">–</div>
-            <div>Land</div><div id="a_country">–</div>
-          </div>
-
-          <div class="spacer"></div>
-          <a class="btn" id="btnRefresh" href="#">Uppdatera nu</a>
-        </div>
-      </div>
-
-      <div class="spacer"></div>
-      <details>
-        <summary>Teknisk rådata</summary>
-        <pre class="mono small" id="raw" style="white-space:pre-wrap;"></pre>
-      </details>
-    </div>
+<body data-theme="kids">
+  <!-- Global Header -->
+  <header class="site-header" role="banner">
+    <a href="/index.html" class="brand" aria-label="BokPiloten startsida">
+      <img src="images/pilot-logo.png" alt="BokPiloten" />
+      <span>BokPiloten</span>
+    </a>
+    <nav class="main-nav" aria-label="Huvudmeny">
+      <a href="/index.html" data-nav="home">Hem</a>
+      <a href="/index.html#bookForm" data-nav="create">Skapa bok</a>
+      <a href="/index.html#examples" data-nav="examples">Exempel</a>
+      <a href="/index.html#about" data-nav="about">Om oss</a>
+      <a href="/status.html" data-nav="status">Status</a>
+    </nav>
+    <button id="navToggle" class="hamburger" aria-label="Meny" aria-expanded="false" aria-controls="mobileMenu">☰</button>
+  </header>
+  <div class="mobile-menu" id="mobileMenu" aria-hidden="true">
+    <nav>
+      <a href="/index.html">Hem</a>
+      <a href="/index.html#bookForm">Skapa bok</a>
+      <a href="/index.html#examples">Exempel</a>
+      <a href="/index.html#about">Om oss</a>
+      <a href="/status.html">Status</a>
+    </nav>
   </div>
 
+  <main class="container">
+    <section class="panel" aria-labelledby="statusTitle">
+      <h1 id="statusTitle" style="margin:0 0 8px">Orderstatus</h1>
+      <div id="statusBar" class="status-bar" aria-live="polite">Ange order-id eller session-id för att visa status.</div>
+
+      <form id="statusForm" class="form-card" style="margin-top:12px">
+        <div class="form-row">
+          <div class="field">
+            <label for="orderIdInput">Order-ID</label>
+            <input id="orderIdInput" placeholder="t.ex. 996a9557-...." />
+            <p class="hint">Om du har ett order-id kan du använda det direkt.</p>
+          </div>
+          <div class="field">
+            <label for="sessionIdInput">Stripe Session-ID</label>
+            <input id="sessionIdInput" placeholder="cs_test_..." />
+            <p class="hint">Alternativt: ange checkout session-id så slår vi upp din order.</p>
+          </div>
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn btn-primary">Visa status</button>
+          <button id="pollBtn" type="button" class="btn btn-secondary">Starta auto-uppdatering</button>
+        </div>
+      </form>
+
+      <div id="orderBox" class="box hidden" style="margin-top:12px">
+        <div class="stack">
+          <span class="pill" id="pillKind">—</span>
+          <span>Order-ID: <strong id="orderId">—</strong></span>
+          <span>Status: <strong id="orderState">—</strong></span>
+        </div>
+        <div class="links" id="downloadLinks"></div>
+      </div>
+
+      <div class="spinner-lg hidden" id="spinner" aria-hidden="true"></div>
+      <p id="err" class="muted hidden"></p>
+    </section>
+  </main>
+
+  <footer class="site-footer" role="contentinfo">
+    <p>© 2025 BokPiloten</p>
+  </footer>
+
   <script>
-    // ===== Global header loader (återanvänds på alla sidor) =====
-    async function loadGlobalHeader(activePath = location.pathname) {
-      const mount = document.getElementById("globalHeader");
-      if (!mount) return;
-      const html = `
-        <nav>
-          <div class="brand">📚 BokPiloten</div>
-          <a href="/index.html" class="${activePath.endsWith("index.html") ? "active": ""}">Hem</a>
-          <a href="/success.html" class="${activePath.endsWith("success.html") ? "active": ""}">Tack</a>
-          <a href="/status.html" class="${activePath.endsWith("status.html") ? "active": ""}">Status</a>
-        </nav>
-      `;
-      mount.innerHTML = html;
+  // Header controller (delad)
+  (function () {
+    const toggle = document.getElementById("navToggle");
+    const menu = document.getElementById("mobileMenu");
+    if (toggle && menu) {
+      const setOpen = (open) => {
+        toggle.setAttribute("aria-expanded", String(open));
+        menu.setAttribute("aria-hidden", String(!open));
+        menu.classList.toggle("open", open);
+      };
+      setOpen(false);
+      toggle.addEventListener("click", () => {
+        const isOpen = toggle.getAttribute("aria-expanded") === "true";
+        setOpen(!isOpen);
+      });
+      menu.addEventListener("click", (e) => {
+        if (e.target && e.target.tagName === "A") setOpen(false);
+      });
     }
-    loadGlobalHeader();
+  })();
+  </script>
 
-    // ===== Status-page logic =====
-    const API_BASE = "https://bokpilot-backend.sebastian-runell.workers.dev";
+  <script>
+  (function () {
+    const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
+    const $ = (id) => document.getElementById(id);
+    const show = (el) => el && el.classList.remove("hidden");
+    const hide = (el) => el && el.classList.add("hidden");
+    const setText = (el, v) => { if (el) el.textContent = v ?? ""; };
 
-    function getOrderId() {
-      const url = new URL(location.href);
-      return url.searchParams.get("order_id") || localStorage.getItem("bp_last_order_id") || "";
-    }
+    const el = {
+      form: $("statusForm"),
+      orderInput: $("orderIdInput"),
+      sessionInput: $("sessionIdInput"),
+      pollBtn: $("pollBtn"),
+      bar: $("statusBar"),
+      box: $("orderBox"),
+      pillKind: $("pillKind"),
+      orderId: $("orderId"),
+      orderState: $("orderState"),
+      links: $("downloadLinks"),
+      spinner: $("spinner"),
+      err: $("err"),
+    };
 
-    function statusToSteps(s) {
-      // Mappa Gelato-status till en enkel funnel
-      const k = String(s || "").toLowerCase();
-      const steps = [
-        { key:"created", label:"Skapad" },
-        { key:"pending", label:"Väntar/Valideras" },
-        { key:"in_production", label:"I produktion" },
-        { key:"shipped", label:"Skickad" },
-        { key:"delivered", label:"Levererad" }
-      ];
-      // Heuristik
-      let active = 0;
-      if (["created","pending"].includes(k)) active = 1;
-      if (k.includes("production") || k === "printed") active = 2;
-      if (k.includes("ship")) active = 3;
-      if (k.includes("deliver")) active = 4;
-      return { steps, activeIndex: active };
-    }
-
-    function setBadge(status) {
-      const b = document.getElementById("badge");
-      const k = String(status || "").toLowerCase();
-      b.classList.remove("ok","warn","bad");
-      let text = k || "unknown";
-      if (k === "pending" || k === "created") { b.classList.add("warn"); text = "Väntar/valideras"; }
-      else if (k.includes("production") || k === "printed") { b.classList.add("ok"); text = "I produktion"; }
-      else if (k.includes("ship")) { b.classList.add("ok"); text = "Skickad"; }
-      else if (k.includes("deliver")) { b.classList.add("ok"); text = "Levererad"; }
-      else { b.classList.add("warn"); }
-      b.textContent = `Status: ${text}`;
-    }
-
-    function renderProgress(status) {
-      const { steps, activeIndex } = statusToSteps(status);
-      const el = document.getElementById("progress");
-      el.innerHTML = steps.map((s, i) =>
-        `<div class="step ${i<=activeIndex ? "active": ""}">${s.label}</div>`
-      ).join("");
+    async function fetchJSON(url) {
+      const r = await fetch(url);
+      const ct = r.headers.get("content-type") || "";
+      const isJSON = ct.includes("application/json");
+      const body = isJSON ? await r.json() : await r.text();
+      if (!r.ok || (isJSON && body && body.error)) {
+        const msg = (isJSON && body && body.error) || `HTTP ${r.status}`;
+        throw new Error(msg);
+      }
+      return isJSON ? body : { text: body };
     }
 
-    async function fetchStatus(orderId) {
-      const u = `${API_BASE}/api/gelato/status?order_id=${encodeURIComponent(orderId)}`;
-      const r = await fetch(u);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return r.json();
-    }
+    const getOrder     = (id)  => fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(id)}`);
+    const getOrderId   = (sid) => fetchJSON(`${BACKEND}/api/checkout/order-id?session_id=${encodeURIComponent(sid)}`).then(j => j.order_id || null);
 
-    async function refresh() {
-      const orderId = getOrderId();
-      const hint = document.getElementById("orderHint");
-      hint.textContent = orderId ? `(order_id=${orderId})` : "(ingen order_id hittades)";
-      if (!orderId) return;
-
-      try {
-        const data = await fetchStatus(orderId);
-        const g = data.gelato || {};
-        const d = data.derived || {};
-        const ord = data.order || {};
-
-        // Översikt
-        document.getElementById("k_orderId").textContent = ord.id || "–";
-        document.getElementById("k_gelatoId").textContent = g.id || g.orderId || "–";
-        document.getElementById("k_status").textContent = (d.status || "unknown");
-        document.getElementById("k_pages").textContent = d.pageCount ?? "–";
-        document.getElementById("k_product").textContent = d.productUid || "–";
-
-        // Badge + progress
-        setBadge(d.status || g.fulfillmentStatus || g.status);
-        renderProgress(d.status || g.fulfillmentStatus || g.status);
-
-        // Adress
-        const a = d.shippingAddress || {};
-        document.getElementById("a_name").textContent = [a.firstName, a.lastName].filter(Boolean).join(" ") || "–";
-        document.getElementById("a_email").textContent = a.email || "–";
-        document.getElementById("a_phone").textContent = a.phone || "–";
-        document.getElementById("a_line1").textContent = [a.addressLine1, a.addressLine2].filter(Boolean).join(", ") || "–";
-        document.getElementById("a_cityzip").textContent = [a.city, a.postCode].filter(Boolean).join(" ") || "–";
-        document.getElementById("a_country").textContent = a.country || "–";
-
-        // Rådata
-        document.getElementById("raw").textContent = JSON.stringify(data, null, 2);
-      } catch (e) {
-        document.getElementById("badge").classList.remove("ok","warn"); 
-        document.getElementById("badge").classList.add("bad");
-        document.getElementById("badge").textContent = "Kunde inte hämta status";
-        console.error(e);
+    function renderFiles(files) {
+      el.links.innerHTML = "";
+      if (files?.interior_url) {
+        const a = document.createElement("a");
+        a.className = "btn";
+        a.href = files.interior_url;
+        a.target = "_blank"; a.rel="noopener";
+        a.textContent = "Ladda ner inlagan (PDF)";
+        el.links.appendChild(a);
+      }
+      if (files?.cover_url) {
+        const a = document.createElement("a");
+        a.className = "btn";
+        a.href = files.cover_url;
+        a.target = "_blank"; a.rel="noopener";
+        a.textContent = "Ladda ner omslaget (PDF)";
+        el.links.appendChild(a);
       }
     }
 
-    document.getElementById("btnRefresh").addEventListener("click", (e) => {
-      e.preventDefault();
-      refresh();
+    function setBar(msg) { setText(el.bar, msg); }
+    function showErr(msg) { setText(el.err, msg); show(el.err); }
+    function clearErr() { setText(el.err, ""); hide(el.err); }
+
+    async function resolveOrderId() {
+      const url = new URL(location.href);
+      const q = url.searchParams;
+      const id = q.get("id");
+      const sid = q.get("session_id");
+      if (id) return id;
+      if (sid) return await getOrderId(sid);
+      return null;
+    }
+
+    async function loadStatus(orderId) {
+      clearErr();
+      show(el.spinner);
+      try {
+        const o = await getOrder(orderId);
+        show(el.box);
+        setText(el.orderId, orderId);
+        setText(el.orderState, o?.status || "okänd");
+        setText(el.pillKind, (o?.kind || o?.draft?.kind || "pdf") === "printed" ? "Tryckt bok" : "Digital PDF");
+        renderFiles(o.files || {});
+        setBar(`Senast uppdaterad: ${new Date().toLocaleString()}`);
+      } catch (e) {
+        showErr(e?.message || "Kunde inte hämta order.");
+      } finally {
+        hide(el.spinner);
+      }
+    }
+
+    let pollTimer = null;
+    function startPolling(orderId, ms=3000) {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(() => loadStatus(orderId), ms);
+      setBar(`Auto-uppdatering var ${ms/1000}s – pågår…`);
+    }
+
+    // Init
+    el.form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const id = el.orderInput.value.trim();
+      const sid = el.sessionInput.value.trim();
+      try {
+        const orderId = id || (sid ? await getOrderId(sid) : null);
+        if (!orderId) throw new Error("Ange order-id eller session-id.");
+        await loadStatus(orderId);
+        history.replaceState({}, "", `?id=${encodeURIComponent(orderId)}`);
+      } catch (e) {
+        showErr(e?.message || "Felaktiga uppgifter.");
+      }
     });
 
-    // Init + polling
-    refresh();
-    setInterval(refresh, 20000);
+    el.pollBtn.addEventListener("click", async () => {
+      const idInUrl = new URL(location.href).searchParams.get("id");
+      let orderId = (el.orderInput.value.trim() || idInUrl);
+      if (!orderId && el.sessionInput.value.trim()) {
+        orderId = await getOrderId(el.sessionInput.value.trim());
+      }
+      if (!orderId) return showErr("Ange order-id eller session-id innan auto-uppdatering.");
+      await loadStatus(orderId);
+      startPolling(orderId);
+    });
+
+    // Auto-ladda om ?id= eller ?session_id= finns
+    (async () => {
+      const orderId = await resolveOrderId();
+      if (orderId) {
+        await loadStatus(orderId);
+      }
+    })();
+  })();
   </script>
 </body>
 </html>
