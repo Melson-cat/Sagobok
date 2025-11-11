@@ -154,316 +154,357 @@
 
   <!-- Success-logik (samma som vi arbetat fram, lätt städad) -->
   <script>
-  (() => {
-    const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
 
-    /* DOM helpers */
-    const qs   = (k, fb=null) => new URLSearchParams(location.search).get(k) ?? fb;
-    const $id  = (id) => document.getElementById(id);
-    const hide = (el) => el && el.classList.add("hidden");
-    const show = (el) => el && el.classList.remove("hidden");
-    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    const setText = (el, v) => { if (el) el.textContent = v ?? ""; };
-    const makeLink = (href, text) => { const a = document.createElement("a"); a.href = href; a.target="_blank"; a.rel="noopener"; a.className="btn"; a.textContent=text; return a; };
+(() => {
+  const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
+  const PUBLIC_BASE = "https://sagobok.pages.dev"; // byt vid behov
 
-    /* UI refs */
-    const el = {
-      status:   $id("status"),
-      spinner:  $id("spinner"),
-      box:      $id("orderBox"),
-      pillKind: $id("pillKind"),
-      orderId:  $id("orderId"),
-      amount:   $id("amount"),
-      currency: $id("currency"),
-      statusText:$id("statusText"),
-      err:      $id("err"),
-      links:    $id("downloadLinks"),
-      form:     $id("printForm"),
-      f: {
-        firstName: $id("firstName"),
-        lastName:  $id("lastName"),
-        email:     $id("email"),
-        phone:     $id("phone"),
-        address1:  $id("address1"),
-        address2:  $id("address2"),
-        postCode:  $id("postCode"),
-        city:      $id("city"),
-        country:   $id("country"),
-        shipMeth:  $id("shipmentMethod"),
-        btn:       $id("btnSubmitPrint"),
-        hint:      $id("printHint"),
+  /* -------------------------- DOM helpers -------------------------- */
+  const $id  = (id) => document.getElementById(id);
+  const qs   = (k, fb=null) => new URLSearchParams(location.search).get(k) ?? fb;
+  const show = (el) => el && el.classList.remove("hidden");
+  const hide = (el) => el && el.classList.add("hidden");
+  const setText = (el, v) => { if (el) el.textContent = v ?? ""; };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  const el = {
+    status:   $id("status"),
+    spinner:  $id("spinner"),
+    box:      $id("orderBox"),
+    pillKind: $id("pillKind"),
+    orderId:  $id("orderId"),
+    amount:   $id("amount"),
+    currency: $id("currency"),
+    statusText:$id("statusText"),
+    err:      $id("err"),
+    links:    $id("downloadLinks"),
+    form:     $id("printForm"),
+    f: {
+      firstName: $id("firstName"),
+      lastName:  $id("lastName"),
+      email:     $id("email"),
+      phone:     $id("phone"),
+      address1:  $id("address1"),
+      address2:  $id("address2"),
+      postCode:  $id("postCode"),
+      city:      $id("city"),
+      country:   $id("country"),
+      shipMeth:  $id("shipmentMethod"),
+      btn:       $id("btnSubmitPrint"),
+      hint:      $id("printHint"),
+    }
+  };
+
+  /* -------------------------- Net helpers -------------------------- */
+  async function fetchJSON(url, init) {
+    const r = await fetch(url, init);
+    const ct = r.headers.get("content-type") || "";
+    const isJSON = ct.includes("application/json");
+    const body = isJSON ? await r.json() : await r.text();
+    if (!r.ok || (isJSON && body && body.error)) {
+      const msg = (isJSON && body && body.error) || `HTTP ${r.status}`;
+      const err = new Error(msg);
+      if (isJSON) err.details = body;
+      throw err;
+    }
+    return isJSON ? body : { text: body };
+  }
+
+  const api = {
+    verifySession: (sid) =>
+      fetchJSON(`${BACKEND}/api/checkout/verify?session_id=${encodeURIComponent(sid)}`),
+    mapOrderId: (sid) =>
+      fetchJSON(`${BACKEND}/api/checkout/order-id?session_id=${encodeURIComponent(sid)}`),
+    getOrder: (id) =>
+      fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(id)}`),
+    buildAndAttach: (id) =>
+      fetchJSON(`${BACKEND}/api/pdf/build-and-attach`, {
+        method:"POST",
+        headers:{ "content-type":"application/json" },
+        body: JSON.stringify({ order_id:id })
+      }),
+    getShipMethods: (country) =>
+      fetchJSON(`${BACKEND}/api/gelato/shipment-methods?country=${encodeURIComponent(country)}`),
+    createGelato: (order_id, shipment, customer) =>
+      fetchJSON(`${BACKEND}/api/gelato/create`, {
+        method:"POST",
+        headers:{ "content-type":"application/json" },
+        body: JSON.stringify({ order_id, shipment, customer })
+      }),
+  };
+
+  /* -------------------------- UI helpers --------------------------- */
+  function setBanner(msg){ setText(el.status, msg); }
+  function setSub(msg){ setText(el.statusText, msg); }
+  function clearErr(){ if (el.err){ el.err.textContent=""; hide(el.err); } }
+  function showErr(msg){
+    if (el.err){ el.err.textContent = String(msg || "Ett fel uppstod."); show(el.err); }
+  }
+  function link(href, text){
+    const a = document.createElement("a");
+    a.href = href; a.target="_blank"; a.rel="noopener";
+    a.className = "btn btn-secondary";
+    a.textContent = text;
+    return a;
+  }
+  function renderFiles(files){
+    if (!el.links) return;
+    el.links.innerHTML = "";
+    if (files?.interior_url) el.links.appendChild(link(files.interior_url, "Ladda ner inlagan (PDF)"));
+    if (files?.cover_url)    el.links.appendChild(link(files.cover_url, "Ladda ner omslaget (PDF)"));
+  }
+
+  /* ----------------------- Session + Order ------------------------- */
+  function persistSessionId(sid){
+    try{
+      sessionStorage.setItem("bp:last_session_id", sid);
+      localStorage.setItem("bp:last_session_id", sid);
+    }catch{}
+    // säkerställ att session_id finns i URL:en för framtida klick/refresh
+    const url = new URL(location.href);
+    if (url.searchParams.get("session_id") !== sid){
+      url.searchParams.set("session_id", sid);
+      history.replaceState(null, "", url.toString());
+    }
+  }
+  function loadSessionId(){
+    return qs("session_id")
+        || sessionStorage.getItem("bp:last_session_id")
+        || localStorage.getItem("bp:last_session_id")
+        || null;
+  }
+  function gelatoSubmittedKey(order_id){ return `bp:g:submitted:${order_id}`; }
+  function markGelatoSubmitted(order_id, gelato_id){
+    try { sessionStorage.setItem(gelatoSubmittedKey(order_id), gelato_id || "1"); }catch{}
+  }
+  function wasGelatoSubmitted(order_id){
+    try { return !!sessionStorage.getItem(gelatoSubmittedKey(order_id)); }catch{ return false; }
+  }
+
+  /* ------------------------ Core flows ----------------------------- */
+  async function ensurePaid(order_id, timeoutMs=120000, pollMs=1500){
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeoutMs){
+      const o = await api.getOrder(order_id);
+      if (o?.status === "paid" || o?.status === "ready") return o;
+      await sleep(pollMs);
+    }
+    throw new Error("Betalningen är inte bekräftad ännu. Uppdatera sidan om en stund.");
+  }
+
+  async function ensureFiles(order_id){
+    let o = await api.getOrder(order_id);
+    const needInt = !o?.files?.interior_url;
+    const needCov = !o?.files?.cover_url;
+    if (needInt || needCov){
+      setBanner("Skapar tryckfiler…");
+      await api.buildAndAttach(order_id);
+      await sleep(800);
+      o = await api.getOrder(order_id);
+    }
+    renderFiles(o.files || {});
+    return o;
+  }
+
+  async function fillShipMethods(country){
+    try{
+      const data = await api.getShipMethods(country);
+      const list = data?.shipmentMethods || [];
+      el.f.shipMeth.innerHTML = "";
+      if (!list.length){
+        el.f.shipMeth.innerHTML = `<option value="">Inga fraktmetoder</option>`;
+        return;
       }
-    };
-
-    /* Net helpers */
-    async function fetchJSON(url, init) {
-      const r = await fetch(url, init);
-      const ct = r.headers.get("content-type") || "";
-      const isJSON = ct.includes("application/json");
-      const body = isJSON ? await r.json() : await r.text();
-      if (!r.ok || (isJSON && body && body.error)) {
-        const msg = (isJSON && body && body.error) || `HTTP ${r.status}`;
-        throw new Error(msg);
+      for (const m of list){
+        const opt = document.createElement("option");
+        opt.value = m.shipmentMethodUid;
+        opt.textContent = `${m.displayName || m.name || m.type}`;
+        el.f.shipMeth.appendChild(opt);
       }
-      return isJSON ? body : { text: body };
+    }catch{
+      el.f.shipMeth.innerHTML = `<option value="">Kunde inte hämta fraktmetoder</option>`;
     }
-    const verifySession   = (sid) => fetchJSON(`${BACKEND}/api/checkout/verify?session_id=${encodeURIComponent(sid)}`);
-    const getOrderId      = (sid) => fetchJSON(`${BACKEND}/api/checkout/order-id?session_id=${encodeURIComponent(sid)}`).then(j => j.order_id || null);
-    const getOrder        = (id)  => fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(id)}`);
-    const buildAndAttach  = (id)  => fetchJSON(`${BACKEND}/api/pdf/build-and-attach`, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ order_id:id }) });
-    const getShipMethods  = (country) => fetchJSON(`${BACKEND}/api/gelato/shipment-methods?country=${encodeURIComponent(country)}`);
-    const createGelato    = (order_id, shipment, customer) =>
-      fetchJSON(`${BACKEND}/api/gelato/create`, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ order_id, shipment, customer }) });
+  }
 
-    /* View state */
-    function setBanner(msg) { setText(el.status, msg); }
-    function setSub(msg)    { setText(el.statusText, msg); }
-    function clearErr()     { if (el.err) { el.err.textContent = ""; hide(el.err); } }
-    function showErr(msg)   { if (el.err) { el.err.textContent = msg; show(el.err); } }
+  function wireForm(order_id, paidOrder){
+    el.f.country.addEventListener("change", () => fillShipMethods(el.f.country.value));
 
-    function renderFiles(files) {
-      if (!el.links) return;
-      el.links.innerHTML = "";
-      if (files?.interior_url) el.links.appendChild(makeLink(files.interior_url, "Ladda ner inlagan (PDF)"));
-      if (files?.cover_url)    el.links.appendChild(makeLink(files.cover_url, "Ladda ner omslaget (PDF)"));
-    }
+    // skydda mot dubbel-submit
+    let submitting = false;
 
-    async function ensurePaid(order_id, timeoutMs=120000, pollMs=1500) {
-      const t0 = Date.now();
-      while (Date.now() - t0 < timeoutMs) {
-        const o = await getOrder(order_id);
-        if (o?.status === "paid" || o?.status === "ready") return o;
-        await sleep(pollMs);
+    el.form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      if (submitting) return;
+      clearErr();
+
+      // om redan skickad: dölj form och visa banner
+      if (wasGelatoSubmitted(order_id)){
+        hide(el.form);
+        setBanner("Ordern är redan skickad till tryckpartnern ✔");
+        return;
       }
-      throw new Error("Betalningen är inte bekräftad ännu. Uppdatera sidan om en stund.");
-    }
 
-    async function ensureFiles(order_id) {
-      let o = await getOrder(order_id);
-      const needInt = !o?.files?.interior_url;
-      const needCov = !o?.files?.cover_url;
-      if (needInt || needCov) {
-        setBanner("Skapar tryckfiler…");
-        await buildAndAttach(order_id);
-        await sleep(600);
-        o = await getOrder(order_id);
-      }
-      renderFiles(o.files || {});
-      return o;
-    }
+      try{
+        submitting = true;
+        el.f.btn.disabled = true;
+        setBanner("Skickar till tryck…");
+        setText(el.f.hint, "Skickar ordern…");
 
-    function oncePerSession(key, fn) {
-      const k = `bp:once:${key}`;
-      if (sessionStorage.getItem(k)) return;
-      sessionStorage.setItem(k, "1");
-      try { fn(); } catch {}
-    }
+        const shipment = {
+          addressLine1: el.f.address1.value.trim(),
+          addressLine2: el.f.address2.value.trim(),
+          city:         el.f.city.value.trim(),
+          postCode:     el.f.postCode.value.trim(),
+          country:      el.f.country.value,
+          state:        "",
+          shipmentMethodUid: el.f.shipMeth.value || undefined,
+        };
+        const customer = {
+          firstName: el.f.firstName.value.trim(),
+          lastName:  el.f.lastName.value.trim(),
+          email:     (el.f.email.value.trim() || paidOrder?.email || ""),
+          phone:     el.f.phone.value.trim(),
+        };
 
-    function gelatoSubmittedKey(order_id) { return `bp:g:submitted:${order_id}`; }
-    function markGelatoSubmitted(order_id, gelato_id) {
-      sessionStorage.setItem(gelatoSubmittedKey(order_id), gelato_id || "1");
-    }
-    function wasGelatoSubmitted(order_id) {
-      return !!sessionStorage.getItem(gelatoSubmittedKey(order_id));
-    }
-
-    async function fillShipMethods(country) {
-      try {
-        const data = await getShipMethods(country);
-        const list = data?.shipmentMethods || [];
-        el.f.shipMeth.innerHTML = "";
-        if (!list.length) {
-          el.f.shipMeth.innerHTML = `<option value="">Inga fraktmetoder</option>`;
-          return;
+        // mini-validering så vi inte skickar tom adress
+        if (!shipment.addressLine1 || !shipment.city || !shipment.postCode || !shipment.country){
+          throw new Error("Fyll i adress, postnummer, ort och land.");
         }
-        for (const m of list) {
-          const opt = document.createElement("option");
-          opt.value = m.shipmentMethodUid;
-          opt.textContent = `${m.displayName || m.name || m.type}`;
-          el.f.shipMeth.appendChild(opt);
+        if (!customer.firstName || !customer.lastName){
+          throw new Error("Fyll i för- och efternamn.");
         }
-      } catch (e) {
-        el.f.shipMeth.innerHTML = `<option value="">Kunde inte hämta fraktmetoder</option>`;
+
+        const res = await api.createGelato(order_id, shipment, customer);
+        const gelatoId = res?.gelato?.id || res?.gelato?.orderId || res?.gelato?.data?.id || null;
+        markGelatoSubmitted(order_id, gelatoId);
+
+        setBanner("Tryckorder skapad ✓");
+        if (res?.gelato?.orderType === "draft" || res?.gelato?.status === "draft") {
+          setSub("Test-order simulerad (GELATO_DRY_RUN=true). Inga verkliga kostnader uppstod.");
+        } else {
+          setSub("Ordern har skickats till tryckpartnern. Vi uppdaterar status löpande.");
+        }
+        hide(el.form);
+
+      } catch (e){
+        el.f.btn.disabled = false;
+        submitting = false;
+        setText(el.f.hint, "");
+        showErr(e?.message || "Kunde inte skapa tryckorder.");
+        setBanner("Ett fel uppstod.");
       }
-    }
+    }, { once:false });
+  }
 
-    function wireForm(order_id, paidOrder) {
-      el.f.country.addEventListener("change", () => fillShipMethods(el.f.country.value));
-      el.form.addEventListener("submit", async (ev) => {
-        ev.preventDefault();
-        clearErr();
-        if (wasGelatoSubmitted(order_id)) {
-          hide(el.form);
-          setBanner("Ordern är redan skickad till tryckpartnern ✔");
-          return;
+  /* --------------------------- Init ------------------------------- */
+  async function init(){
+    try{
+      clearErr();
+      show(el.spinner);
+      setBanner("Verifierar betalning…");
+
+      // 1) Hämta + persist session_id
+      let sid = loadSessionId();
+      if (!sid){
+        // om stripe redan gav rätt URL, kommer sid finnas; annars mjuk fallback
+        showErr("Saknar session_id i URL:en.");
+        setSub("Om du nyss betalade, vänta 1–2 sekunder och uppdatera – eller gå tillbaka till kassan.");
+        hide(el.spinner);
+        return;
+      }
+      persistSessionId(sid);
+
+      // 2) session → order_id (+ belopp)
+      let order_id = qs("order_id") || null;
+      let amount=null, currency="SEK";
+
+      let v = null;
+      try { v = await api.verifySession(sid); } catch {}
+      order_id = order_id || v?.order_id || (await api.mapOrderId(sid)).order_id;
+      if (!order_id) throw new Error("Kunde inte koppla session till order.");
+
+      amount   = v?.amount_total ?? null;
+      currency = (v?.currency || "SEK").toUpperCase();
+
+      // 3) Vänta in 'paid'
+      const paidOrder = await ensurePaid(order_id);
+
+      // 4) Typ (printed/pdf). URL vinner → annars KV/draft/kind → default pdf
+      const kind = (qs("kind") || paidOrder?.kind || paidOrder?.draft?.kind || "pdf").toLowerCase();
+
+      // 5) Topprad
+      show(el.box);
+      setText(el.orderId, order_id);
+      setText(el.pillKind, kind === "printed" ? "Tryckt bok" : "Digital PDF");
+      setText(el.amount, amount != null ? (amount/100).toFixed(2) : "—");
+      setText(el.currency, currency);
+
+      // 6) Säkerställ filer
+      const o = await ensureFiles(order_id);
+
+      // 7) Auto-öppna inlaga en gång per session (trevlig UX)
+      if (o?.files?.interior_url){
+        const key = `bp:open:${o.files.interior_url}`;
+        if (!sessionStorage.getItem(key)){
+          try { window.open(o.files.interior_url, "_blank", "noopener"); } catch {}
+          sessionStorage.setItem(key, "1");
         }
-        try {
-          el.f.btn.disabled = true;
-          setBanner("Skickar till tryck…");
-          setText(el.f.hint, "Skickar ordern…");
+      }
 
-          const shipment = {
-            addressLine1: el.f.address1.value.trim(),
-            addressLine2: el.f.address2.value.trim(),
-            city:         el.f.city.value.trim(),
-            postCode:     el.f.postCode.value.trim(),
-            country:      el.f.country.value,
-            state:        "",
-            shipmentMethodUid: el.f.shipMeth.value || undefined,
-          };
-          const customer = {
-            firstName: el.f.firstName.value.trim(),
-            lastName:  el.f.lastName.value.trim(),
-            email:     (el.f.email.value.trim() || paidOrder?.email || ""),
-            phone:     el.f.phone.value.trim(),
-          };
+      hide(el.spinner);
 
+      // 8) Branch enligt produkt
+      if (kind !== "printed"){
+        setBanner("Klart! Din PDF är redo.");
+        setSub("Du kan ladda ner via länkarna nedan. Ett kvitto skickas via Stripe.");
+        hide(el.form);
+        return;
+      }
 
-          // --- Diagnostic log just before sending to Gelato ---
-console.group("🧩 GELATO ORDER DEBUG");
-console.table({
-  order_id,
-  kind,
-  has_interior: !!o?.files?.interior_url,
-  has_cover: !!o?.files?.cover_url,
-  interior_pages_reported: o?.files?.interior_pages,
-  total_pages_computed: (o?.files?.interior_pages || 0) + 1,
-  gelato_product_uid: "<DIN_PRODUCT_UID>", // byt till din riktiga UID
-});
+      // ---- Tryckt flöde ----
+      if (paidOrder?.email) el.f.email.value = paidOrder.email;
+      await fillShipMethods(el.f.country.value);
 
-console.log("🔗 interior_url:", o?.files?.interior_url);
-console.log("🔗 cover_url:", o?.files?.cover_url);
+      const alreadyGelato = !!o?.files?.gelato_order_id || wasGelatoSubmitted(order_id);
+      if (alreadyGelato){
+        hide(el.form);
+        setBanner("Ordern är skickad till tryckpartnern ✔");
+        setSub("Vi uppdaterar status löpande.");
+      } else {
+        show(el.form);
+        setBanner("Betalning bekräftad! Förbered tryck…");
+        setSub("Fyll i leveransadress och välj frakt för att skicka boken till tryck.");
+        wireForm(order_id, paidOrder);
+      }
 
-(async () => {
-  try {
-    const head1 = await fetch(o.files.interior_url, { method: "HEAD" });
-    const head2 = await fetch(o.files.cover_url, { method: "HEAD" });
-    console.table({
-      interior_status: head1.status,
-      interior_ct: head1.headers.get("content-type"),
-      interior_len: head1.headers.get("content-length"),
-      cover_status: head2.status,
-      cover_ct: head2.headers.get("content-type"),
-      cover_len: head2.headers.get("content-length"),
-    });
-  } catch (e) {
-    console.warn("⚠️ HEAD-check failed:", e.message);
+      // Dev-diagnostik
+      console.table({
+        order_id,
+        session_id: sid,
+        kind,
+        amount,
+        currency,
+        has_interior: !!o?.files?.interior_url,
+        has_cover:    !!o?.files?.cover_url,
+        gelato_order: o?.files?.gelato_order_id || "(none)"
+      });
+
+    } catch (e){
+      hide(el.spinner);
+      setBanner("Ett fel uppstod.");
+      showErr(e?.message || "Okänt fel.");
+      console.error("success:init error:", e);
+    }
+  }
+
+  if (document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", init, { once:true });
+  } else {
+    init();
   }
 })();
 
-console.log("🧾 Customer:", customer);
-console.log("📦 Shipment:", shipment);
-console.groupEnd();
 
-          const res = await createGelato(order_id, shipment, customer);
-          const gelatoId = res?.gelato?.id || res?.gelato?.orderId || res?.gelato?.data?.id || null;
-          markGelatoSubmitted(order_id, gelatoId);
-
-          setBanner("Tryckorder skapad ✓");
-          if (res?.gelato?.orderType === "draft" || res?.gelato?.status === "draft") {
-            setSub("Test-order simulerad (GELATO_DRY_RUN=true). Inga verkliga kostnader uppstod.");
-          } else {
-            setSub("Ordern har skickats till tryckpartnern. Vi uppdaterar status löpande.");
-          }
-          hide(el.form);
-
-        } catch (e) {
-          el.f.btn.disabled = false;
-          setText(el.f.hint, "");
-          showErr(e?.message || "Kunde inte skapa tryckorder.");
-          setBanner("Ett fel uppstod.");
-        }
-      }, { once:true });
-    }
-
-    async function init() {
-      try {
-        show(el.spinner);
-        setBanner("Verifierar betalning…");
-
-        const sid = qs("session_id");
-        if (!sid) throw new Error("Saknar session_id i URL:en.");
-
-        // session → order_id (+ belopp)
-        let order_id=null, amount=null, currency=null, v=null;
-        try { v = await verifySession(sid); } catch {}
-        order_id = v?.order_id || await getOrderId(sid);
-        if (!order_id) throw new Error("Kunde inte koppla session till order.");
-        amount   = v?.amount_total ?? null;
-        currency = v?.currency ?? "SEK";
-
-        // vänta in 'paid'
-        const paidOrder = await ensurePaid(order_id);
-
-        // typ: printed/pdf
-        const kind = (new URLSearchParams(location.search).get("kind") || paidOrder?.kind || paidOrder?.draft?.kind || "pdf").toLowerCase();
-
-        // topp-rad
-        show(el.box);
-        setText(el.orderId, order_id);
-        setText(el.pillKind, kind === "printed" ? "Tryckt bok" : "Digital PDF");
-        setText(el.amount, amount != null ? (amount/100).toFixed(2) : "—");
-        setText(el.currency, (currency || "SEK").toUpperCase());
-
-        // se till att filer finns
-        const o = await ensureFiles(order_id);
-
-        // auto-öppna PDF en gång
-        if (o?.files?.interior_url) {
-          (function once() {
-            const k = `bp:open:${o.files.interior_url}`;
-            if (sessionStorage.getItem(k)) return;
-            sessionStorage.setItem(k, "1");
-            try { window.open(o.files.interior_url, "_blank", "noopener"); } catch {}
-          })();
-        }
-
-        hide(el.spinner);
-
-        if (kind !== "printed") {
-          setBanner("Klart! Din PDF är redo.");
-          setSub("Du kan ladda ner via länkarna nedan. Ett kvitto skickas via Stripe.");
-          hide(el.form);
-          return;
-        }
-
-        // Tryckt flöde
-        if (paidOrder?.email) el.f.email.value = paidOrder.email;
-        await fillShipMethods(el.f.country.value);
-
-        const gelatoAlready = !!o?.files?.gelato_order_id || sessionStorage.getItem(`bp:g:submitted:${order_id}`);
-        if (gelatoAlready) {
-          hide(el.form);
-          setBanner("Ordern är skickad till tryckpartnern ✔");
-          setSub("Vi uppdaterar status löpande.");
-        } else {
-          show(el.form);
-          setBanner("Betalning bekräftad! Förbered tryck…");
-          setSub("Fyll i leveransadress och välj frakt för att skicka boken till tryck.");
-          wireForm(order_id, paidOrder);
-        }
-
-        console.table({
-          order_id,
-          kind,
-          has_interior: !!o?.files?.interior_url,
-          has_cover:    !!o?.files?.cover_url,
-          gelato_order: o?.files?.gelato_order_id || "(none)"
-        });
-
-      } catch (e) {
-        hide(el.spinner);
-        setBanner("Ett fel uppstod.");
-        showErr(e?.message || "Okänt fel.");
-      }
-    }
-
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", init, { once:true });
-    } else {
-      init();
-    }
-  })();
   </script>
 </body>
 </html>
