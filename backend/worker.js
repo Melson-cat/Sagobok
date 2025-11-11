@@ -281,10 +281,7 @@ if (!Number.isFinite(interiorPages)) {
   throw new Error("Missing order.files.interior_pages (ensure handleBuildAndAttach saved it)");
 }
 
-// 2) Gelato räknar total = inlaga + 4 (ytter/inner fram+baksida)
-const pageCount = interiorPages;
-if (pageCount % 2 !== 0) throw new Error("Total pageCount must be even");
-
+const itemPageCount = interiorPages;
 
   // Fraktmetod
   let shipmentMethodUid = shipment?.shipmentMethodUid;
@@ -300,33 +297,36 @@ if (pageCount % 2 !== 0) throw new Error("Total pageCount must be even");
   const phone = /^\+[\d\s-]+$/.test(phoneRaw) ? phoneRaw : "";
 
   // Payload – VIKTIGT: pageCount ligger på item-nivå
-  const payload = {
-    orderType: env.GELATO_DRY_RUN ? "draft" : "order",
-    orderReferenceId: order.id,
-    customerReferenceId: customer?.id || "guest",
-    currency: env.GELATO_DEFAULT_CURRENCY || "SEK",
-    items: [{
-      itemReferenceId: `item-${order.id}`,
-      productUid,
-      quantity: 1,
-      files,
-      pageCount,   // ← ✔ korrekt placering
-    }],
-    ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
-    shippingAddress: {
-      companyName:  customer?.companyName || "",
-      firstName:    customer?.firstName   || "Kund",
-      lastName:     customer?.lastName    || "BokPiloten",
-      addressLine1: shipment?.addressLine1 || "Adress 1",
-      addressLine2: shipment?.addressLine2 || "",
-      state:        shipment?.state || "",
-      city:         shipment?.city  || "Örebro",
-      postCode:     shipment?.postCode || "70000",
-      country,
-      email:        customer?.email || "no-reply@example.com",
-      phone,
-    }
-  };
+ const payload = {
+  orderType: env.GELATO_DRY_RUN ? "draft" : "order",
+  orderReferenceId: order.id,
+  customerReferenceId: customer?.id || "guest",
+  currency: env.GELATO_DEFAULT_CURRENCY || "SEK",
+  items: [{
+    itemReferenceId: `item-${order.id}`,
+    productUid,
+    quantity: 1,
+    files: [
+      { type: "default", url: order.files.interior_url }, // inlaga (PDF)
+      { type: "cover",   url: order.files.cover_url },    // omslag (PDF)
+    ],
+    pageCount: itemPageCount, // ← EXAKT inlaga, inte +4
+  }],
+  ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
+  shippingAddress: {
+    companyName:  customer?.companyName || "",
+    firstName:    customer?.firstName   || "Kund",
+    lastName:     customer?.lastName    || "BokPiloten",
+    addressLine1: shipment?.addressLine1 || "Adress 1",
+    addressLine2: shipment?.addressLine2 || "",
+    state:        shipment?.state || "",
+    city:         shipment?.city  || "Örebro",
+    postCode:     shipment?.postCode || "70000",
+    country:      (shipment?.country || env.GELATO_DEFAULT_COUNTRY || "SE").toUpperCase(),
+    email:        customer?.email || "support@bokpiloten.se",
+    phone:        (/^\+[\d\s-]+$/.test(customer?.phone || "") ? customer.phone : ""),
+  }
+};
 
   // Skapa order
   const data = await gelatoFetch(`${GELATO_BASE.order}/orders`, env, {
