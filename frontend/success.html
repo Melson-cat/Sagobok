@@ -318,6 +318,43 @@
             phone:     el.f.phone.value.trim(),
           };
 
+
+          // --- Diagnostic log just before sending to Gelato ---
+console.group("🧩 GELATO ORDER DEBUG");
+console.table({
+  order_id,
+  kind,
+  has_interior: !!o?.files?.interior_url,
+  has_cover: !!o?.files?.cover_url,
+  interior_pages_reported: o?.files?.interior_pages,
+  total_pages_computed: (o?.files?.interior_pages || 0) + 1,
+  gelato_product_uid: "<DIN_PRODUCT_UID>", // byt till din riktiga UID
+});
+
+console.log("🔗 interior_url:", o?.files?.interior_url);
+console.log("🔗 cover_url:", o?.files?.cover_url);
+
+(async () => {
+  try {
+    const head1 = await fetch(o.files.interior_url, { method: "HEAD" });
+    const head2 = await fetch(o.files.cover_url, { method: "HEAD" });
+    console.table({
+      interior_status: head1.status,
+      interior_ct: head1.headers.get("content-type"),
+      interior_len: head1.headers.get("content-length"),
+      cover_status: head2.status,
+      cover_ct: head2.headers.get("content-type"),
+      cover_len: head2.headers.get("content-length"),
+    });
+  } catch (e) {
+    console.warn("⚠️ HEAD-check failed:", e.message);
+  }
+})();
+
+console.log("🧾 Customer:", customer);
+console.log("📦 Shipment:", shipment);
+console.groupEnd();
+
           const res = await createGelato(order_id, shipment, customer);
           const gelatoId = res?.gelato?.id || res?.gelato?.orderId || res?.gelato?.data?.id || null;
           markGelatoSubmitted(order_id, gelatoId);
