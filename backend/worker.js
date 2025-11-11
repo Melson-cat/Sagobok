@@ -247,108 +247,105 @@ async function gelatoGetPrices(env, productUid, { country, currency, pageCount }
   return gelatoFetch(url.toString(), env);
 }
 
-// v4: Create Order (books / multipage)
-// Signatur behålls som tidigare: (env, { order, shipment, customer, currency })
-async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency }) {
-  // --- 1) Sanity ---
-  if (!order?.files?.interior_url || !order?.files?.cover_url) {
-    throw new Error("Order missing files: need interior_url and cover_url");
+// ✅ Ny version: sätter item.pageCount = TOTALSidor (inlaga + 1 omslagssida)
+//    och validerar mot probe-listan om du vill (kan togglas av)
+async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency, verifyCounts = true }) {
+  if (!order?.files?.interior_url || !order?.files?.cover_url || !Number.isFinite(order?.files?.interior_pages)) {
+    throw new Error("Order missing files or interior_pages. Run build-and-attach first.");
   }
-  const interiorPages = Number(order?.files?.interior_pages);
-  if (!Number.isFinite(interiorPages) || interiorPages <= 0 || interiorPages % 2 !== 0) {
-    throw new Error(`Bad interior_pages: ${order?.files?.interior_pages}`);
-  }
-
-  // V4-schemat säger att pageCount = ALLA sidor i produkten, inkl. omslag.
-  // Om din inlaga är t.ex. 30 sidor, blir pageCount = 32 (30 inre + fram/bak).
-  const pageCount = interiorPages + 2;
 
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
-  // --- 2) Settings / defaults ---
-  const DRY = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
-  const CURR = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
+  const interiorPages = Number(order.files.interior_pages); // t.ex. 30 för din layout
+  if (!Number.isFinite(interiorPages) || interiorPages <= 0) throw new Error("Bad interior_pages");
 
-  // Customer defaults (för tester kan vi tvinga test-mail)
-  const forceTestEmail = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
-  const custFirst = (customer.firstName || shipment.firstName || "Test").toString().slice(0,25);
-  const custLast  = (customer.lastName  || shipment.lastName  || "Kund").toString().slice(0,25);
-  const custEmail = DRY ? forceTestEmail : (customer.email || shipment.email || forceTestEmail);
+  // 🔢 För wrap-cover levererar du 1 omslagssida (en enda ‘wrap’), så total = inlaga + 1
+  //    (Detta stämmer med ditt fel – Gelato räknade 31 när vi skickade 30 + wrap.)
+  const totalPages = interiorPages + 1;
 
-  // Krav i vissa länder på state — enkel auto för SE/EU struntar vi i state,
-  // men låter användarens state gå igenom om det skickas.
-  const country = String(shipment.country || "SE").toUpperCase();
-  const shippingAddress = {
-    firstName:    custFirst,
-    lastName:     custLast,
-    addressLine1: (shipment.addressLine1 || "Storgatan 1").toString().slice(0,35),
-    addressLine2: shipment.addressLine2 ? String(shipment.addressLine2).slice(0,35) : undefined,
-    city:         (shipment.city || "Örebro").toString().slice(0,30),
-    postCode:     (shipment.postCode || "70000").toString().slice(0,15),
-    state:        shipment.state ? String(shipment.state).slice(0,35) : undefined, // krävs i US/CA/AU
-    country,                                                               // "SE"
-    email:        custEmail,
-    phone:        (shipment.phone || customer.phone || "0700000000").toString().slice(0,25),
+  // (Valfritt) Kolla att totalen är tillåten för just det här productUid:et
+  if (verifyCounts) {
+    try {
+      const valid = await gelatoGetValidPageCounts(env, productUid, { from: 24, to: 60 });
+      if (valid.length && !valid.includes(totalPages)) {
+        // Om 31 inte finns (hos dig gör den det – toppen), välj närmaste större giltiga
+        const sorted = valid.slice().sort((a, b) => a - b);
+        const fallback = sorted.find(n => n >= totalPages) || sorted[sorted.length - 1];
+        throw new Error(`Total pageCount ${totalPages} not allowed for this product. Try ${fallback}.`);
+      }
+    } catch (e) {
+      // mjukt – vill du vara strikt, kasta vidare
+      // console.warn("probe failed or pageCount not allowed:", e?.message || e);
+    }
+  }
+
+  const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
+  const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
+  const CURR          = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
+
+  const cust = {
+    firstName: customer.firstName || "Test",
+    lastName:  customer.lastName  || "Kund",
+    email:     DRY_RUN ? FORCE_TEST_TO : (customer.email || FORCE_TEST_TO),
+    phone:     (shipment.phone && String(shipment.phone).trim()) || (DRY_RUN ? "0700000000" : "0700000000"),
   };
 
-  // Top-level v4 fält (inte customer-objekt):
-  const customerReferenceId =
-    order.customer_id ||
-    customer.customerReferenceId ||
-    customer.id ||
-    // fallback: enkel pseudonyckel baserat på e-postdomän
-    (custEmail ? `guest:${custEmail.split("@").pop()}` : "guest");
+  const country = (shipment.country || "SE").toUpperCase();
+  const shippingAddress = {
+    firstName:    cust.firstName,
+    lastName:     cust.lastName,
+    email:        cust.email,
+    phone:        cust.phone,
+    addressLine1: shipment.addressLine1 || "Storgatan 1",
+    city:         shipment.city        || "Örebro",
+    postCode:     shipment.postCode    || "70000",
+    country,
+    ...(shipment.addressLine2 ? { addressLine2: shipment.addressLine2 } : {}),
+    ...(shipment.state ? { state: shipment.state } : {}),
+  };
 
-  // Välj skickmetod om du har en; annars låt Gelato ta billigast
-  const shipmentMethodUid =
-    shipment.shipmentMethodUid ||
-    shipment.method ||
-    undefined;
+  const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
 
-  // --- 3) Bygg files & item ---
-  const files = [
-    { type: "default", url: order.files.cover_url },   // omslag/wrap PDF
-    { type: "inside",  url: order.files.interior_url } // inlaga PDF (multipage)
-  ];
-
+  // 🧩 VIKTIGT: Ange pageCount = TOTAL (inlaga + cover) så Gelato inte gissar
   const item = {
     itemReferenceId: `item-${order.id}`,
     productUid,
     quantity: 1,
-    pageCount,    // 👈 KRITISK för multipage-produkter
-    files
+    pageCount: totalPages,                 // ✅ ← NYTT och KRITISKT
+    files: [
+      { type: "content", url: order.files.interior_url, pages: interiorPages }, // inlagan (30)
+      { type: "cover",   url: order.files.cover_url }                           // wrap-cover (1 “sida”)
+    ],
   };
 
-  // --- 4) Payload enligt v4 ---
   const payload = {
-    orderType: DRY ? "draft" : "order",
+    draft: DRY_RUN,
     orderReferenceId: order.id,
-    customerReferenceId,
     currency: CURR,
+    customer: {
+      referenceId: "guest",
+      firstName: cust.firstName,
+      lastName:  cust.lastName,
+      email:     cust.email,
+    },
     items: [item],
-    shippingAddress,               // top-level i v4
-    ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
-    // returnAddress: { ... }      // valfritt om du vill override:a avsändaradress
-    // metadata: [{ key:"...", value:"..." }]
+    // 📦 OBS: v4 toppnivåfält — inte i shipments-array
+    shipmentMethodUid,                     // ok att lämna undefined → billigaste
+    shippingAddress,                       // måste ligga på toppnivå i v4
   };
 
-  // --- 5) Skicka ---
-  const url = `${GELATO_BASE.order}/orders`; // .../v4/orders
-  const res = await gelatoFetch(url, env, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  const g = await gelatoApiCreateOrder(env, payload);
+  const gelato_id = g?.id || g?.orderId || null;
 
-  // --- 6) Indexera & spara gelato id på ordern ---
-  const gelatoId = res?.id || res?.orderId || null;
-  if (gelatoId) {
-    await kvIndexGelatoOrder(env, gelatoId, order.id);
-    await kvAttachFiles(env, order.id, { gelato_order_id: gelatoId });
+  if (gelato_id) {
+    await kvIndexGelatoOrder(env, gelato_id, order.id);
+    await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id, gelato_total_pages: totalPages });
   }
 
-  return res;
+  return g;
 }
+
 
 
 async function handleOrderGet(req, env) {
