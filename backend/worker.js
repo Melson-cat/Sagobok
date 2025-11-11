@@ -346,6 +346,81 @@ async function gelatoCreateOrder(req, env) {
   }
 }
 
+// --- ROUTER ---
+// if (req.method === "POST" && url.pathname === "/api/gelato/probe") return handleGelatoProbe(req, env);
+
+async function handleGelatoProbe(req, env) {
+  try {
+    const b = await req.json().catch(() => ({}));
+    const productUid = b.productUid || env.GELATO_PRODUCT_UID;
+    const country    = b.country || "SE";
+    const currency   = b.currency || "SEK";
+    let pageCounts   = b.pageCounts;
+    if (!Array.isArray(pageCounts) || !pageCounts.length) {
+      pageCounts = [28, 30, 32, 34, 36, 37, 38, 40];
+    }
+    if (!productUid) return err("Missing productUid", 400);
+
+    const results = [];
+    for (const pc of pageCounts) {
+      const entry = { pageCount: pc };
+      // 1) cover-dimensions
+      try {
+        const u = new URL(`${GELATO_BASE.product}/products/${encodeURIComponent(productUid)}/cover-dimensions`);
+        u.searchParams.set("pageCount", String(pc));
+        const dims = await gelatoFetch(u.toString(), env);
+        entry.coverDimensions = dims || null;
+        entry.coverOk = true;
+      } catch (e) {
+        entry.coverOk = false;
+        entry.coverError = {
+          status: e?.status || null,
+          message: e?.data?.message || e?.message || "error",
+          raw: e?.data || null,
+        };
+      }
+
+      // 2) prices (brukar också validera pageCount)
+      try {
+        const u = new URL(`${GELATO_BASE.product}/products/${encodeURIComponent(productUid)}/prices`);
+        u.searchParams.set("pageCount", String(pc));
+        u.searchParams.set("country", country);
+        u.searchParams.set("currency", currency);
+        const prices = await gelatoFetch(u.toString(), env);
+        entry.prices = prices || null;
+        entry.pricesOk = true;
+      } catch (e) {
+        entry.pricesOk = false;
+        entry.pricesError = {
+          status: e?.status || null,
+          message: e?.data?.message || e?.message || "error",
+          raw: e?.data || null,
+        };
+      }
+
+      // 3) heuristik: plocka upp “requires exactly N page(s)”
+      const msg = (entry.coverError?.message || entry.pricesError?.message || "").toLowerCase();
+      const m = msg.match(/requires exactly\s+(\d+)\s+page/i);
+      if (m) entry.requiredExactly = parseInt(m[1], 10);
+
+      results.push(entry);
+    }
+
+    // Sammanfatta slutsats om möjligt
+    const accepted = results.filter(r => r.coverOk || r.pricesOk).map(r => r.pageCount);
+    const requires = [...new Set(results.map(r => r.requiredExactly).filter(Boolean))];
+
+    return ok({
+      productUid,
+      tested: pageCounts,
+      acceptedPageCounts: accepted,
+      requiresExactlyHints: requires,
+      results,
+    });
+  } catch (e) {
+    return err(e?.message || "probe failed", 500);
+  }
+}
 
 
 async function buildWrapCoverPdfFromDims(env, story, images, dims) {
