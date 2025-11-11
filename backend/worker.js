@@ -248,9 +248,12 @@ async function gelatoGetPrices(env, productUid, { country, currency, pageCount }
 }
 
 async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency }) {
-  if (!order?.files?.interior_url || !order?.files?.cover_url || !Number.isFinite(order?.files?.interior_pages)) {
-    throw new Error("Order missing files or interior_pages. Run build-and-attach first.");
-  }
+ // Tryckt bok (separata interior/cover) pausad i denna version.
+   // Skydda mot fel och ge tydlig signal till frontend.
+ const e = new Error("Printed flow temporarily disabled while we migrate to single-PDF pipeline.");
+  e.name = "NotImplemented";
+  e.status = 501;
+  throw e;
 
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
@@ -394,58 +397,6 @@ async function handlePdfCountByUrl(req) {
   return ok({ pages: doc.getPageCount() });
 }
 
-
-async function buildWrapCoverPdfFromDims(env, story, images, dims) {
-  const W = mmToPt(dims.wraparoundInsideSize.width);
-  const H = mmToPt(dims.wraparoundInsideSize.height);
-
-  const pdf = await PDFDocument.create();
-  const page = pdf.addPage([W, H]);
-
-  // Hjälpare: rita bild i en mm-box (cover-fit)
-  async function drawInto(box, srcRow) {
-    if (!srcRow || !box) return;
-    const bytes = await getImageBytes(env, srcRow);
-    const img = await embedImage(pdf, bytes);
-    if (!img) return;
-
-    const bx = mmToPt(box.left);
-    const by = mmToPt(box.top);
-    const bw = mmToPt(box.width);
-    const bh = mmToPt(box.height);
-
-    const scale = Math.max(bw / img.width, bh / img.height);
-    const w = img.width * scale, h = img.height * scale;
-    const x = bx + (bw - w) / 2;
-    const y = H - by - bh + (bh - h) / 2; // från topp-vänster (mm) till PDF-lib (nederkant-vänster)
-
-    page.drawImage(img, { x, y, width: w, height: h });
-  }
-
-  // Källor
-  const coverSrc = images?.find(x => x.kind === "cover") || images?.find(x => x.page === 1) || null;
-  // Back: ta en annan sida om möjligt så baksidan inte blir identisk
-  const backSrc  = images?.find(x => x.page === 2) || images?.find(x => x.page === (story?.book?.pages?.at(-1)?.page)) || coverSrc;
-
-  // Målytor
-  const front = dims.contentFrontSize;
-  const back  = dims.contentBackSize;
-  const spine = dims.spineSize;
-
-  await drawInto(front, coverSrc);
-  await drawInto(back,  backSrc);
-
-  // Enkel ryggrad (färg). Titel kan vi lägga till senare.
-  if (spine?.width && spine?.height) {
-    const sx = mmToPt(spine.left);
-    const sy = H - mmToPt(spine.top) - mmToPt(spine.height);
-    const sw = mmToPt(spine.width);
-    const sh = mmToPt(spine.height);
-    page.drawRectangle({ x: sx, y: sy, width: sw, height: sh, color: rgb(0.5, 0.36, 0.82) });
-  }
-
-  return await pdf.save();
-}
 
 /* --------------------- Stripe Webhook verifiering --------------------- */
 // Verifiera Stripe-signatur (v1) i Cloudflare Workers
@@ -613,72 +564,6 @@ function safeTitleFrom(story) {
     .replace(/^_+|_+$/g, "")              // trimma _
     || "bok";
 }
-
-function computeInteriorPagesFromStory(story) {
-  // Vår layout: 1 titelsida + 14 uppslag (bild+text = 28 sidor) + 1 slutsida = 30
-  // Om du i framtiden ändrar sidlogiken, uppdatera denna.
-  const sceneCount = Array.isArray(story?.book?.pages) ? story.book.pages.length : 14;
-  const spreads = Math.max(1, sceneCount); // vi förväntar 14
-  return 1 /*title*/ + spreads * 2 /*bild+text*/ + 1 /*slut*/;
-}
-
-
-// ---------- PDF split helpers ----------
-async function buildFinalInteriorPdf(env, story, images) {
-  // Bygg "full" PDF först med din befintliga motor (print-läge och bleed om du vill)
-  const fullBytes = await buildPdf({ story, images, mode: "print" }, env, null);
-  const src = await PDFDocument.load(fullBytes);
-  const out = await PDFDocument.create();
-
-  const total = src.getPageCount();
-  // Din nuvarande buildPdf-order:
-  // 0: front cover
-  // 1: title page
-  // 2..(2+28-1): 14× (bild vänster + text höger) => 28 sidor
-  // 30: "slut"-sida
-  // 31: back cover
-  // => interior = sidor 1..(total-2) (dvs ALLT utom första (omslag) och sista (baksida))
-  const first = 1;
-  const last = total - 2;
-  if (last <= first) throw new Error("PDF structure unexpected for interior split");
-
-  const pages = await out.copyPages(src, Array.from({ length: last - first + 1 }, (_, i) => i + first));
-  pages.forEach(p => out.addPage(p));
-  return await out.save();
-}
-
-async function buildFinalCoverPdf(env, story, images, interiorPages) {
-  // Härled interiorPages om saknas: 14 sidor -> 14*2 + 2 = 30
-  let ip = Number.isFinite(interiorPages)
-    ? interiorPages
-    : (Array.isArray(story?.book?.pages) && story.book.pages.length
-        ? story.book.pages.length * 2 + 2
-        : 30);
-
-  if (ip % 2 !== 0) throw new Error("Total page count must be even");
-
-  const productUid = env.GELATO_PRODUCT_UID;
-  if (productUid) {
-    try {
-      const dims = await gelatoGetCoverDimensions(env, productUid, ip);
-      if (dims?.wraparoundInsideSize && dims?.contentFrontSize && dims?.contentBackSize) {
-        return await buildWrapCoverPdfFromDims(env, story, images, dims);
-      }
-    } catch (e) {
-      // Logga mjukt och fall tillbaka
-      // console.warn("cover-dimensions failed:", e?.message || e);
-    }
-  }
-
-  // Fallback: enkel framsida från full-PDF (OBS: inte wrap, kan nekas av Gelato)
-  const fullBytes = await buildPdf({ story, images, mode: "print" }, env, null);
-  const src = await PDFDocument.load(fullBytes);
-  const out = await PDFDocument.create();
-  const [cover] = await out.copyPages(src, [0]);
-  out.addPage(cover);
-  return await out.save();
-}
-
 
 
 
@@ -1719,15 +1604,6 @@ async function gelatoApiCreateOrder(env, payload) {
 }
 
 
-// Just nu vet vi att 30 sidor är korrekt, så vi gör ingen padding.
-// Vi mäter sidor och returnerar {bytes, pages}.
-async function ensureInteriorMeetsProductRequirement(env, productUid, interiorBytes) {
-  const doc = await PDFDocument.load(interiorBytes);
-  const pages = doc.getPageCount();
-  // Hook för framtida produktkrav (t.ex. om Gelato svarar "requires exactly N"):
-  return { bytes: interiorBytes, pages };
-}
-
 // Bygger inlaga → preflightar/paddar till exakt sidor → bygger omslag med N → laddar upp → sparar på ordern.
 async function handleBuildAndAttach(req, env) {
   try {
@@ -1800,7 +1676,7 @@ async function handlePdfRequest(req, env) {
   tr(trace, "pdf:entry");
 
   const body = await req.json().catch(() => ({}));
-  const { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text } = body || {};
+ const { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text, order_id, store_to_kv } = body || {};
   if (!story || !Array.isArray(story?.book?.pages)) {
     return new Response(JSON.stringify({ error: "Missing story" }), {
       status: 400,
@@ -1826,6 +1702,40 @@ async function handlePdfRequest(req, env) {
       ? JSON.stringify({ error: e?.message || String(e), trace }, null, 2)
       : JSON.stringify({ error: "PDF failed" });
     return new Response(body, { status: 500, headers: { "content-type": "application/json", "x-request-id": reqId, ...CORS } });
+  }
+}
+
+async function handlePdfSingleUrl(req, env) {
+  try {
+    const body = await req.json().catch(() => ({}));
+    const { story, images = [], mode = "preview", order_id } = body || {};
+    if (!story || !Array.isArray(story?.book?.pages)) return err("Missing story", 400);
+
+    // 1) Bygg HELA boken i en PDF (cover + alla sidor + back cover)
+    const bytes = await buildPdf({ story, images, mode }, env, null);
+
+    // 2) Räkna sidor
+    const doc = await PDFDocument.load(bytes);
+    const pages = doc.getPageCount();
+
+    // 3) Ladda upp till R2
+    const ts = Date.now();
+    const safeTitle = safeTitleFrom(story);
+    const key = `${safeTitle}_${ts}_BOOK.pdf`;
+    const url = await r2PutPublic(env, key, bytes, "application/pdf");
+
+    // 4) Skriv i KV om vi har order_id
+    if (order_id) {
+      await kvAttachFiles(env, order_id, {
+        single_pdf_url: url,
+        single_pdf_key: key,
+        page_count: pages,
+      });
+    }
+
+    return ok({ url, key, pages });
+  } catch (e) {
+    return err(e?.message || "single-url failed", 500);
   }
 }
 
@@ -2346,15 +2256,7 @@ async function handleGelatoPrices(req, env) {
     return ok(prices);
   } catch (e) { return err(e?.message || "gelato prices failed", 500); }
 }
-async function handleGelatoCoverDimensions(req, env) {
-  try {
-    const productUid = env.GELATO_PRODUCT_UID;
-    const url = new URL(req.url);
-    const pageCount = Number(url.searchParams.get("pageCount"));
-    const dims = await gelatoGetCoverDimensions(env, productUid, pageCount);
-    return ok(dims);
-  } catch (e) { return err(e?.message || "gelato cover-dimensions failed", 500); }
-}
+
 async function handleGelatoCreate(req, env) {
   try {
     const body = await req.json().catch(()=> ({}));
@@ -2366,15 +2268,17 @@ async function handleGelatoCreate(req, env) {
     if (!ord?.files?.interior_url || !ord?.files?.cover_url || !Number.isFinite(ord?.files?.interior_pages)) {
       return err("Order is missing R2 files or interior_pages; run /api/pdf/build-and-attach first", 400);
     }
-
-    const g = await gelatoCreateOrder(env, {
-      order: ord,
-      shipment: body?.shipment || {},
-        currency: body?.currency || undefined,
-      customer: body?.customer || {}
-    });
-
-    return ok({ gelato: g, order: await kvGetOrder(env, order_id) });
+try {
+ const g = await gelatoCreateOrder(env, {
+  order: ord, shipment: body?.shipment || {}, currency: body?.currency || undefined, customer: body?.customer || {}
+ });
+ return ok({ gelato: g, order: await kvGetOrder(env, order_id) });
+ } catch (e) {
+ if (e?.status === 501 || e?.name === "NotImplemented") {
+   return ok({ error: e.message, where: "gelato.create", status: 501 }, { status: 501 });
+ }
+ throw e;
+}
 
   } catch (e) {
     if (e?.name === "GelatoError") {
@@ -2633,25 +2537,12 @@ export default {
       if (req.method === "POST" && pathname === "/api/pdf") {
         return await handlePdfRequest(req, env);
       }
-      if (req.method === "POST" && pathname === "/api/pdf/interior-url") {
-        return await handlePdfInteriorUrl(req, env);
-      }
-      if (req.method === "POST" && pathname === "/api/pdf/cover-url") {
-        return await handlePdfCoverUrl(req, env);
-      }
-      if (req.method === "POST" && pathname === "/api/pdf/build-and-attach") {
-        return await handleBuildAndAttach(req, env);
-      }
-
       // 8) Gelato
       if (req.method === "GET" && pathname === "/api/gelato/shipment-methods") {
         return await handleGelatoShipmentMethods(req, env);
       }
       if (req.method === "GET" && pathname === "/api/gelato/prices") {
         return await handleGelatoPrices(req, env);
-      }
-      if (req.method === "GET" && pathname === "/api/gelato/cover-dimensions") {
-        return await handleGelatoCoverDimensions(req, env);
       }
       if (req.method === "POST" && pathname === "/api/gelato/create") {
         return await handleGelatoCreate(req, env);
@@ -2678,6 +2569,9 @@ if (req.method === "POST" && pathname === "/api/pdf/count-by-url") {
   return await handlePdfCountByUrl(req, env);
 }
 
+if (req.method === "POST" && pathname === "/api/pdf/single-url") {
+  return await handlePdfSingleUrl(req, env);
+}
 
 
 
