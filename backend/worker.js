@@ -214,6 +214,22 @@ async function gelatoFetch(url, env, init = {}) {
   return data;
 }
 
+function mapGelatoStatus(data) {
+  // Fält Gelato brukar skicka tillbaka på GET /orders/{id}
+  const s =
+    data?.fulfillmentStatus ||
+    data?.status ||
+    data?.orderStatus ||
+    data?.order?.status ||
+    null;
+
+  // Hämta ev. senaste status från historik om fältet ovan saknas
+  const hist = Array.isArray(data?.statusHistory) ? data.statusHistory : [];
+  const lastHist = hist.length ? (hist[hist.length - 1]?.status || hist[hist.length - 1]) : null;
+
+  return String(s || lastHist || "unknown").toLowerCase();
+}
+
 
 /** Hämtar shipment methods (valfritt filtrera på land). */
 async function gelatoGetShipmentMethods(env, country) {
@@ -2300,15 +2316,17 @@ async function handleGelatoWebhook(req, env) {
   try {
     const evt = await req.json().catch(()=> ({}));
     const gelatoOrderId = evt?.orderId || evt?.id || evt?.data?.orderId;
-    const status = evt?.status || evt?.data?.status || evt?.eventType;
+    const status = mapGelatoStatus(evt) || (evt?.eventType ? String(evt.eventType).toLowerCase() : "unknown");
+
     let orderId = null;
     if (gelatoOrderId) orderId = await env.ORDERS.get(`GELATO_IDX:${gelatoOrderId}`);
     if (orderId) await kvAttachFiles(env, orderId, { gelato_status: status });
-    return ok({ received: true });
+
+    return ok({ received: true, status });
   } catch (e) { return err(e?.message || "webhook error", 500); }
 }
 
-// === NYTT === /api/gelato/order-status
+
 async function handleGelatoOrderStatus(req, env) {
   try {
     const url = new URL(req.url);
@@ -2327,11 +2345,13 @@ async function handleGelatoOrderStatus(req, env) {
     if (!gelatoId) return err("Missing gelato_id (and order had none)", 400);
 
     const data = await gelatoGetOrder(env, gelatoId);
-    const status = data?.status || data?.orderStatus || data?.order?.status || "unknown";
+    const status = mapGelatoStatus(data); // <— FIX
 
-    // Spara på vår order om vi har en
     if (ord?.id) {
-      await kvAttachFiles(env, ord.id, { gelato_status: status });
+      await kvAttachFiles(env, ord.id, {
+        gelato_status: status,
+        gelato_status_raw: data?.fulfillmentStatus || data?.status || null
+      });
     }
 
     return ok({ gelato_id: gelatoId, status, raw: data });
@@ -2339,6 +2359,7 @@ async function handleGelatoOrderStatus(req, env) {
     return err(e?.message || "order-status failed", 500);
   }
 }
+
 
 export default {
   async fetch(req, env) {

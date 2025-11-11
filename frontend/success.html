@@ -103,250 +103,268 @@
 (() => {
   const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
 
-  // --- utils ---
-  const q = (k, fb=null) => new URLSearchParams(location.search).get(k) ?? fb;
-  const $ = (id) => document.getElementById(id);
+  /* -------------------- DOM helpers -------------------- */
+  const qs   = (k, fb=null) => new URLSearchParams(location.search).get(k) ?? fb;
+  const $id  = (id) => document.getElementById(id);
+  const hide = (el) => el && (el.classList.add("hidden"));
+  const show = (el) => el && (el.classList.remove("hidden"));
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const setHidden = (el, hide) => el && (hide ? el.classList.add("hidden") : el.classList.remove("hidden"));
+  const setText = (el, v) => { if (el) el.textContent = v ?? ""; };
   const makeLink = (href, text) => { const a = document.createElement("a"); a.href = href; a.target="_blank"; a.rel="noopener"; a.className="btn"; a.textContent=text; return a; };
 
-  // --- els ---
-  const elStatus      = $("status");
-  const elSpinner     = $("spinner");
-  const elOrderBox    = $("orderBox");
-  const elPillKind    = $("pillKind");
-  const elOrderId     = $("orderId");
-  const elAmount      = $("amount");
-  const elCurrency    = $("currency");
-  const elStatusText  = $("statusText");
-  const elErr         = $("err");
-  const elLinks       = $("downloadLinks");
-  const formPrint     = $("printForm");
-
-  const f = {
-    firstName: $("firstName"),
-    lastName: $("lastName"),
-    email: $("email"),
-    phone: $("phone"),
-    address1: $("address1"),
-    address2: $("address2"),
-    postCode: $("postCode"),
-    city: $("city"),
-    country: $("country"),
-    shipmentMethod: $("shipmentMethod"),
-    btnSubmitPrint: $("btnSubmitPrint"),
-    printHint: $("printHint"),
+  /* -------------------- UI refs -------------------- */
+  const el = {
+    status:   $id("status"),
+    spinner:  $id("spinner"),
+    box:      $id("orderBox"),
+    pillKind: $id("pillKind"),
+    orderId:  $id("orderId"),
+    amount:   $id("amount"),
+    currency: $id("currency"),
+    statusText:$id("statusText"),
+    err:      $id("err"),
+    links:    $id("downloadLinks"),
+    form:     $id("printForm"),
+    f: {
+      firstName: $id("firstName"),
+      lastName:  $id("lastName"),
+      email:     $id("email"),
+      phone:     $id("phone"),
+      address1:  $id("address1"),
+      address2:  $id("address2"),
+      postCode:  $id("postCode"),
+      city:      $id("city"),
+      country:   $id("country"),
+      shipMeth:  $id("shipmentMethod"),
+      btn:       $id("btnSubmitPrint"),
+      hint:      $id("printHint"),
+    }
   };
 
+  /* -------------------- Net helpers -------------------- */
   async function fetchJSON(url, init) {
     const r = await fetch(url, init);
     const ct = r.headers.get("content-type") || "";
     const isJSON = ct.includes("application/json");
     const body = isJSON ? await r.json() : await r.text();
     if (!r.ok || (isJSON && body && body.error)) {
-      throw new Error((isJSON && body && body.error) || `HTTP ${r.status}${!isJSON ? ": " + body : ""}`);
+      const msg = (isJSON && body && body.error) || `HTTP ${r.status}`;
+      throw new Error(msg);
     }
     return isJSON ? body : { text: body };
   }
+  const verifySession   = (sid) => fetchJSON(`${BACKEND}/api/checkout/verify?session_id=${encodeURIComponent(sid)}`);
+  const getOrderId      = (sid) => fetchJSON(`${BACKEND}/api/checkout/order-id?session_id=${encodeURIComponent(sid)}`).then(j => j.order_id || null);
+  const getOrder        = (id)  => fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(id)}`);
+  const buildAndAttach  = (id)  => fetchJSON(`${BACKEND}/api/pdf/build-and-attach`, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ order_id:id }) });
+  const getShipMethods  = (country) => fetchJSON(`${BACKEND}/api/gelato/shipment-methods?country=${encodeURIComponent(country)}`);
+  const createGelato    = (order_id, shipment, customer) =>
+    fetchJSON(`${BACKEND}/api/gelato/create`, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ order_id, shipment, customer }) });
 
-  async function verifySession(session_id) {
-    return fetchJSON(`${BACKEND}/api/checkout/verify?session_id=${encodeURIComponent(session_id)}`);
+  /* -------------------- View state -------------------- */
+  function setBanner(msg) { setText(el.status, msg); }
+  function setSub(msg)    { setText(el.statusText, msg); }
+  function clearErr()     { if (el.err) { el.err.textContent = ""; hide(el.err); } }
+  function showErr(msg)   { if (el.err) { el.err.textContent = msg; show(el.err); } }
+
+  function renderFiles(files) {
+    if (!el.links) return;
+    el.links.innerHTML = "";
+    if (files?.interior_url) el.links.appendChild(makeLink(files.interior_url, "Ladda ner inlagan (PDF)"));
+    if (files?.cover_url)    el.links.appendChild(makeLink(files.cover_url, "Ladda ner omslaget (PDF)"));
   }
-  async function getOrderIdFromSession(session_id) {
-    const j = await fetchJSON(`${BACKEND}/api/checkout/order-id?session_id=${encodeURIComponent(session_id)}`);
-    return j.order_id || null;
-  }
-  async function getOrder(order_id) {
-    return fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(order_id)}`);
-  }
-  async function waitForPaid(order_id, timeoutMs=120000, pollMs=1500) {
+
+  async function ensurePaid(order_id, timeoutMs=120000, pollMs=1500) {
     const t0 = Date.now();
     while (Date.now() - t0 < timeoutMs) {
-      try {
-        const o = await getOrder(order_id);
-        if (o?.status === "paid" || o?.status === "ready") return o;
-      } catch {}
+      const o = await getOrder(order_id);
+      if (o?.status === "paid" || o?.status === "ready") return o;
       await sleep(pollMs);
     }
-    throw new Error("Betalningen är ännu inte bekräftad. Prova att uppdatera sidan strax.");
+    throw new Error("Betalningen är inte bekräftad ännu. Uppdatera sidan om en stund.");
   }
-  async function buildAndAttach(order_id) {
-    return fetchJSON(`${BACKEND}/api/pdf/build-and-attach`, {
-      method: "POST",
-      headers: { "content-type":"application/json" },
-      body: JSON.stringify({ order_id })
-    });
+
+  async function ensureFiles(order_id) {
+    let o = await getOrder(order_id);
+    const needInt = !o?.files?.interior_url;
+    const needCov = !o?.files?.cover_url;
+    if (needInt || needCov) {
+      setBanner("Skapar tryckfiler…");
+      await buildAndAttach(order_id);
+      await sleep(600);
+      o = await getOrder(order_id);
+    }
+    renderFiles(o.files || {});
+    return o;
   }
-  function renderLinks(files) {
-    if (!elLinks) return;
-    elLinks.innerHTML = "";
-    if (files?.interior_url) elLinks.appendChild(makeLink(files.interior_url, "Ladda ner inlagan (PDF)"));
-    if (files?.cover_url)    elLinks.appendChild(makeLink(files.cover_url, "Ladda ner omslaget (PDF)"));
+
+  function oncePerSession(key, fn) {
+    const k = `bp:once:${key}`;
+    if (sessionStorage.getItem(k)) return;
+    sessionStorage.setItem(k, "1");
+    try { fn(); } catch {}
   }
-  async function loadShipmentMethods(country) {
+
+  function gelatoSubmittedKey(order_id) { return `bp:g:submitted:${order_id}`; }
+  function markGelatoSubmitted(order_id, gelato_id) {
+    sessionStorage.setItem(gelatoSubmittedKey(order_id), gelato_id || "1");
+  }
+  function wasGelatoSubmitted(order_id) {
+    return !!sessionStorage.getItem(gelatoSubmittedKey(order_id));
+  }
+
+  async function fillShipMethods(country) {
     try {
-      const data = await fetchJSON(`${BACKEND}/api/gelato/shipment-methods?country=${encodeURIComponent(country)}`);
+      const data = await getShipMethods(country);
       const list = data?.shipmentMethods || [];
-      f.shipmentMethod.innerHTML = "";
+      el.f.shipMeth.innerHTML = "";
+      if (!list.length) {
+        el.f.shipMeth.innerHTML = `<option value="">Inga fraktmetoder</option>`;
+        return;
+      }
       for (const m of list) {
         const opt = document.createElement("option");
         opt.value = m.shipmentMethodUid;
-        opt.textContent = `${m.displayName || m.name || m.type} (${m.shipmentMethodUid})`;
-        f.shipmentMethod.appendChild(opt);
-      }
-      if (!list.length) {
-        const opt = document.createElement("option");
-        opt.value = "";
-        opt.textContent = "Inga fraktmetoder hittades";
-        f.shipmentMethod.appendChild(opt);
+        opt.textContent = `${m.displayName || m.name || m.type}`;
+        el.f.shipMeth.appendChild(opt);
       }
     } catch (e) {
-      f.shipmentMethod.innerHTML = `<option value="">Fel vid hämtning av fraktmetoder</option>`;
+      el.f.shipMeth.innerHTML = `<option value="">Kunde inte hämta fraktmetoder</option>`;
     }
   }
-  async function ensurePdfFiles(order_id) {
-    let o = await getOrder(order_id);
-    const hasInt = !!o?.files?.interior_url;
-    const hasCov = !!o?.files?.cover_url;
-    if (!hasInt || !hasCov) {
-      elStatus.textContent = "Skapar tryckfiler…";
-      await buildAndAttach(order_id);
-      await sleep(500);
-      o = await getOrder(order_id);
-    }
-    renderLinks(o.files || {});
-    return o;
+
+  function wireForm(order_id, paidOrder) {
+    el.f.country.addEventListener("change", () => fillShipMethods(el.f.country.value));
+    el.form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      clearErr();
+      if (wasGelatoSubmitted(order_id)) {
+        hide(el.form);
+        setBanner("Ordern är redan skickad till tryckpartnern ✔");
+        return;
+      }
+      try {
+        el.f.btn.disabled = true;
+        setBanner("Skickar till tryck…");
+        setText(el.f.hint, "Skickar ordern…");
+
+        const shipment = {
+          addressLine1: el.f.address1.value.trim(),
+          addressLine2: el.f.address2.value.trim(),
+          city:         el.f.city.value.trim(),
+          postCode:     el.f.postCode.value.trim(),
+          country:      el.f.country.value,
+          state:        "",
+          shipmentMethodUid: el.f.shipMeth.value || undefined,
+        };
+        const customer = {
+          firstName: el.f.firstName.value.trim(),
+          lastName:  el.f.lastName.value.trim(),
+          email:     (el.f.email.value.trim() || paidOrder?.email || ""),
+          phone:     el.f.phone.value.trim(),
+        };
+
+        const res = await createGelato(order_id, shipment, customer);
+        const gelatoId = res?.gelato?.id || res?.gelato?.orderId || res?.gelato?.data?.id || null;
+        markGelatoSubmitted(order_id, gelatoId);
+
+        setBanner("Tryckorder skapad ✓");
+        if (res?.gelato?.orderType === "draft" || res?.gelato?.status === "draft") {
+          setSub("Test-order simulerad (GELATO_DRY_RUN=true). Inga verkliga kostnader uppstod.");
+        } else {
+          setSub("Ordern har skickats till tryckpartnern. Vi uppdaterar status löpande.");
+        }
+        hide(el.form);
+
+      } catch (e) {
+        el.f.btn.disabled = false;
+        setText(el.f.hint, "");
+        showErr(e?.message || "Kunde inte skapa tryckorder.");
+        setBanner("Ett fel uppstod.");
+      }
+    }, { once:true });
   }
 
   async function init() {
     try {
-      const sid = q("session_id");
+      clearErr();
+      show(el.spinner);
+      setBanner("Verifierar betalning…");
+
+      const sid = qs("session_id");
       if (!sid) throw new Error("Saknar session_id i URL:en.");
 
-      setHidden(elErr, true);
-      setHidden(elSpinner, false);
-      elStatus.textContent = "Verifierar betalning…";
-
-      // session → paid/order-id
-      let order_id = null, amount = null, currency = null;
-      try {
-        const v = await verifySession(sid);
-        order_id = v.order_id || order_id;
-        amount   = v.amount_total ?? null;
-        currency = v.currency ?? null;
-      } catch {
-        order_id = await getOrderIdFromSession(sid);
-      }
+      // session → order_id (+ belopp)
+      let order_id=null, amount=null, currency=null, v=null;
+      try { v = await verifySession(sid); } catch {}
+      order_id = v?.order_id || await getOrderId(sid);
       if (!order_id) throw new Error("Kunde inte koppla session till order.");
+      amount   = v?.amount_total ?? null;
+      currency = v?.currency ?? "SEK";
 
-      // vänta på webhook → paid
-      const paidOrder = await waitForPaid(order_id);
+      // vänta in 'paid' (webhook)
+      const paidOrder = await ensurePaid(order_id);
 
-      // bestäm typ: URL vinner, annars från KV
-      const kindFromURL = (q("kind") || "").toLowerCase();
-      const kind = kindFromURL || paidOrder?.kind || paidOrder?.draft?.kind || "pdf";
+      // typ: printed/pdf (URL vinner, annars KV/draft/kind)
+      const kind = (qs("kind") || paidOrder?.kind || paidOrder?.draft?.kind || "pdf").toLowerCase();
 
-      // visa toppinfo
-      setHidden(elOrderBox, false);
-      elOrderId.textContent = order_id;
-      elPillKind.textContent = kind === "printed" ? "Tryckt bok" : "Digital PDF";
-      elAmount.textContent = amount != null ? (amount/100).toFixed(2) : "—";
-      elCurrency.textContent = currency ? String(currency).toUpperCase() : "";
+      // topp-rad
+      show(el.box);
+      setText(el.orderId, order_id);
+      setText(el.pillKind, kind === "printed" ? "Tryckt bok" : "Digital PDF");
+      setText(el.amount, amount != null ? (amount/100).toFixed(2) : "—");
+      setText(el.currency, (currency || "SEK").toUpperCase());
+
+      // se till att filer finns
+      const o = await ensureFiles(order_id);
+
+      // auto-öppna PDF en gång per session
+      if (o?.files?.interior_url) {
+        oncePerSession(`open:${o.files.interior_url}`, () => {
+          try { window.open(o.files.interior_url, "_blank", "noopener"); } catch {}
+        });
+      }
+
+      hide(el.spinner);
 
       if (kind !== "printed") {
-        // DIGITAL FLOW
-        elStatus.textContent = "Betalning bekräftad! Bygger dina filer…";
-        const o = await ensurePdfFiles(order_id);
-        setHidden(elSpinner, true);
-        elStatus.textContent = "Klart! Din PDF är redo.";
-        elStatusText.textContent = "Du kan ladda ner via länkarna nedan. Ett kvitto skickas via Stripe.";
-        if (o?.files?.interior_url) { try { window.open(o.files.interior_url, "_blank", "noopener"); } catch {} }
+        // Digitalt flöde
+        setBanner("Klart! Din PDF är redo.");
+        setSub("Du kan ladda ner via länkarna nedan. Ett kvitto skickas via Stripe.");
+        hide(el.form);
         return;
       }
 
-      // PRINTED FLOW
-      elStatus.textContent = "Betalning bekräftad! Förbereder tryck…";
-      const o2 = await ensurePdfFiles(order_id);
-      setHidden(elSpinner, true);
-      elStatusText.textContent = "Fyll i leveransadress och frakt för att skicka boken till tryck (testläge skapar en simulerad order).";
+      // Tryckt flöde
+      if (paidOrder?.email) el.f.email.value = paidOrder.email;
+      await fillShipMethods(el.f.country.value);
 
-      // förifyll email om vi har den
-      if (paidOrder?.email) f.email.value = paidOrder.email;
+      const gelatoAlready = !!o?.files?.gelato_order_id || wasGelatoSubmitted(order_id);
+      if (gelatoAlready) {
+        hide(el.form);
+        setBanner("Ordern är skickad till tryckpartnern ✔");
+        setSub("Vi uppdaterar status löpande.");
+      } else {
+        // visa & wire formuläret
+        show(el.form);
+        setBanner("Betalning bekräftad! Förbered tryck…");
+        setSub("Fyll i leveransadress och välj frakt för att skicka boken till tryck.");
+        wireForm(order_id, paidOrder);
+      }
 
-      // ladda fraktmetoder baserat på land
-      await loadShipmentMethods(f.country.value);
-
-      // visa formulär
-      setHidden(formPrint, false);
-
-      // submit → create (dry-run respekteras i backend)
-      formPrint.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        try {
-          f.btnSubmitPrint.disabled = true;
-          f.printHint.textContent = "Skickar ordern till tryck…";
-          elStatus.textContent = "Skickar till tryck…";
-
-          const shipment = {
-            addressLine1: f.address1.value.trim(),
-            addressLine2: f.address2.value.trim(),
-            city: f.city.value.trim(),
-            postCode: f.postCode.value.trim(),
-            country: f.country.value,
-            state: "",
-            shipmentMethodUid: f.shipmentMethod.value || undefined,
-          };
-          const customer = {
-            firstName: f.firstName.value.trim(),
-            lastName: f.lastName.value.trim(),
-            email: f.email.value.trim() || (paidOrder?.email || ""),
-            phone: f.phone.value.trim(),
-          };
-
-          const created = await fetchJSON(`${BACKEND}/api/gelato/create`, {
-            method: "POST",
-            headers: { "content-type":"application/json" },
-            body: JSON.stringify({ order_id: order_id, shipment, customer }),
-          });
-
-          elStatus.innerHTML = `Tryckorder skapad <span class="ok">✓</span>`;
-        const isDraft =
-  !!created?.simulated ||
-  (created?.gelato?.orderType === "draft") ||
-  (created?.gelato?.status === "draft");
-
-if (isDraft) {
-  elStatusText.textContent = "Test-order simulerad (GELATO_DRY_RUN=true). Inga verkliga kostnader uppstod.";
-} else {
-  elStatusText.textContent = "Ordern har skickats till tryckpartnern. Vi uppdaterar status löpande.";
-}
-
-          f.printHint.textContent = "Klart!";
-          setHidden(formPrint, true);
-
-          if (created?.gelato?.id || created?.gelato?.orderId) {
-            const gid = created.gelato.id || created.gelato.orderId;
-            const info = document.createElement("p");
-            info.className = "muted";
-            info.textContent = `Gelato-ID: ${gid}`;
-            document.body.appendChild(info);
-          }
-
-        } catch (err) {
-          f.btnSubmitPrint.disabled = false;
-          f.printHint.textContent = "";
-          elErr.textContent = err?.message || String(err);
-          setHidden(elErr, false);
-        }
+      // logg för felsökning
+      console.table({
+        order_id,
+        kind,
+        has_interior: !!o?.files?.interior_url,
+        has_cover:    !!o?.files?.cover_url,
+        gelato_order: o?.files?.gelato_order_id || "(none)"
       });
 
-      f.country.addEventListener("change", () => loadShipmentMethods(f.country.value));
-
     } catch (e) {
-      setHidden(elSpinner, true);
-      elStatus.textContent = "Ett fel uppstod.";
-      elErr.textContent = e?.message || String(e);
-      setHidden(elErr, false);
+      hide(el.spinner);
+      setBanner("Ett fel uppstod.");
+      showErr(e?.message || "Okänt fel.");
     }
   }
 
@@ -357,5 +375,6 @@ if (isDraft) {
   }
 })();
 </script>
+
 </body>
 </html>
