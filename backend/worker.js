@@ -2288,6 +2288,12 @@ async function gelatoGetProductSpec(env, productUid) {
   return gelatoFetch(url, env, { method: "GET" });
 }
 
+// === NYTT === Hämta order-info från Gelato (order v4)
+async function gelatoGetOrder(env, gelatoOrderId) {
+  if (!gelatoOrderId) throw new Error("Missing gelatoOrderId");
+  const url = `${GELATO_BASE.order}/orders/${encodeURIComponent(gelatoOrderId)}`;
+  return gelatoFetch(url, env, { method: "GET" });
+}
 
 
 async function handleGelatoWebhook(req, env) {
@@ -2302,6 +2308,37 @@ async function handleGelatoWebhook(req, env) {
   } catch (e) { return err(e?.message || "webhook error", 500); }
 }
 
+// === NYTT === /api/gelato/order-status
+async function handleGelatoOrderStatus(req, env) {
+  try {
+    const url = new URL(req.url);
+    const order_id   = url.searchParams.get("order_id");
+    const gelato_idQ = url.searchParams.get("gelato_id");
+
+    let ord = null;
+    let gelatoId = gelato_idQ || null;
+
+    if (order_id) {
+      ord = await kvGetOrder(env, order_id);
+      if (!ord) return err("Order not found", 404);
+      gelatoId = gelatoId || ord?.files?.gelato_order_id;
+    }
+
+    if (!gelatoId) return err("Missing gelato_id (and order had none)", 400);
+
+    const data = await gelatoGetOrder(env, gelatoId);
+    const status = data?.status || data?.orderStatus || data?.order?.status || "unknown";
+
+    // Spara på vår order om vi har en
+    if (ord?.id) {
+      await kvAttachFiles(env, ord.id, { gelato_status: status });
+    }
+
+    return ok({ gelato_id: gelatoId, status, raw: data });
+  } catch (e) {
+    return err(e?.message || "order-status failed", 500);
+  }
+}
 
 export default {
   async fetch(req, env) {
@@ -2347,6 +2384,7 @@ export default {
       if (req.method === "GET"  && url.pathname === "/api/gelato/cover-dimensions")  return handleGelatoCoverDimensions(req, env);
       if (req.method === "POST" && url.pathname === "/api/gelato/create")            return handleGelatoCreate(req, env);
       if (req.method === "POST" && url.pathname === "/api/gelato/webhook")           return handleGelatoWebhook(req, env);
+if (req.method === "GET"  && url.pathname === "/api/gelato/order-status")       return handleGelatoOrderStatus(req, env);
 
       // --- 404 ---
       return new Response("Not found", { status: 404, headers: CORS });
