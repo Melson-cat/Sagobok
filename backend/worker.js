@@ -247,8 +247,8 @@ async function gelatoGetPrices(env, productUid, { country, currency, pageCount }
   return gelatoFetch(url.toString(), env);
 }
 
-// ✅ Ny signatur: (env, { order, shipment, customer })
-async function gelatoCreateOrder(env, { order, shipment = {}, customer = {} }) {
+// ✅ Ny signatur behålls: (env, { order, shipment, customer, currency })
+async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency }) {
   if (!order?.files?.interior_url || !order?.files?.cover_url || !Number.isFinite(order?.files?.interior_pages)) {
     throw new Error("Order missing files or interior_pages. Run build-and-attach first.");
   }
@@ -256,39 +256,41 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {} }) {
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
-  const pages = Number(order.files.interior_pages); // EXAKTA inlaga-sidor (t.ex. 30)
+  const pages = Number(order.files.interior_pages);
   if (!Number.isFinite(pages) || pages <= 0) throw new Error("Bad interior_pages");
 
   const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
   const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
+  const CURR          = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
 
   const cust = {
     firstName: customer.firstName || "Test",
     lastName:  customer.lastName  || "Kund",
     email:     DRY_RUN ? FORCE_TEST_TO : (customer.email || FORCE_TEST_TO),
+    phone:     (shipment.phone && String(shipment.phone).trim()) || (DRY_RUN ? "0700000000" : "0700000000"),
   };
 
-  // ⚠️ Gelato vill ha kontaktfält inne i shipment.address
-  const address = {
-    firstName: cust.firstName,
-    lastName:  cust.lastName,
-    email:     cust.email,
-    phone:     shipment.phone || "", // valfritt
+  const country = (shipment.country || "SE").toUpperCase();
+  const shippingAddress = {
+    firstName:    cust.firstName,
+    lastName:     cust.lastName,
+    email:        cust.email,
+    phone:        cust.phone,
     addressLine1: shipment.addressLine1 || "Storgatan 1",
     city:         shipment.city        || "Örebro",
     postCode:     shipment.postCode    || "70000",
-    country:     (shipment.country || "SE").toUpperCase(),
+    country,                      // ex: "SE"
+    ...(shipment.state ? { state: shipment.state } : {}), // krävs ibland utanför SE
   };
 
   const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
 
-  // ✅ Rätt v4-structure: omslag och inlaga i SAMMA files[], och itemReferenceId
   const item = {
     itemReferenceId: `item-${order.id}`,
     productUid,
     quantity: 1,
     files: [
-      { type: "content", url: order.files.interior_url, pages }, // MÅSTE ha pages här
+      { type: "content", url: order.files.interior_url, pages },
       { type: "cover",   url: order.files.cover_url }
     ],
   };
@@ -296,6 +298,7 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {} }) {
   const payload = {
     draft: DRY_RUN,
     orderReferenceId: order.id,
+    currency: CURR,                    // ✅ ← KRITISK
     customer: {
       referenceId: "guest",
       firstName: cust.firstName,
@@ -303,7 +306,10 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {} }) {
       email:     cust.email,
     },
     items: [item],
-    shipments: [{ shipmentMethodUid, address }],
+    shipments: [{
+      shipmentMethodUid,               // ok om undefined → Gelato kan auto-välj
+      shippingAddress,                 // ✅ ← BYTT från address → shippingAddress
+    }],
   };
 
   const g = await gelatoApiCreateOrder(env, payload);
@@ -2290,6 +2296,7 @@ async function handleGelatoCreate(req, env) {
     const g = await gelatoCreateOrder(env, {
       order: ord,
       shipment: body?.shipment || {},
+        currency: body?.currency || undefined,
       customer: body?.customer || {}
     });
 
