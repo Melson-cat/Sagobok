@@ -247,7 +247,7 @@ async function gelatoGetPrices(env, productUid, { country, currency, pageCount }
   return gelatoFetch(url.toString(), env);
 }
 
-// ✅ Ny signatur behålls: (env, { order, shipment, customer, currency })
+// v4 create
 async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency }) {
   if (!order?.files?.interior_url || !order?.files?.cover_url || !Number.isFinite(order?.files?.interior_pages)) {
     throw new Error("Order missing files or interior_pages. Run build-and-attach first.");
@@ -267,23 +267,25 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
     firstName: customer.firstName || "Test",
     lastName:  customer.lastName  || "Kund",
     email:     DRY_RUN ? FORCE_TEST_TO : (customer.email || FORCE_TEST_TO),
-    phone:     (shipment.phone && String(shipment.phone).trim()) || (DRY_RUN ? "0700000000" : "0700000000"),
+    phone:     (shipment.phone && String(shipment.phone).trim()) || "0700000000",
   };
 
   const country = (shipment.country || "SE").toUpperCase();
   const shippingAddress = {
+    companyName: shipment.companyName || undefined,
     firstName:    cust.firstName,
     lastName:     cust.lastName,
-    email:        cust.email,
-    phone:        cust.phone,
     addressLine1: shipment.addressLine1 || "Storgatan 1",
+    addressLine2: shipment.addressLine2 || undefined,
     city:         shipment.city        || "Örebro",
     postCode:     shipment.postCode    || "70000",
-    country,                      // ex: "SE"
-    ...(shipment.state ? { state: shipment.state } : {}), // krävs ibland utanför SE
+    state:        shipment.state       || undefined, // krävs i t.ex. US/CA
+    country,
+    email:        cust.email,
+    phone:        cust.phone,
   };
 
-  const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
+  const shipmentMethodUid = shipment.shipmentMethodUid || "economy"; // eller lämna undefined om du vill auto-välja via quote
 
   const item = {
     itemReferenceId: `item-${order.id}`,
@@ -296,30 +298,27 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
   };
 
   const payload = {
-    draft: DRY_RUN,
+    orderType: "order",
     orderReferenceId: order.id,
-    currency: CURR,                    // ✅ ← KRITISK
-    customer: {
-      referenceId: "guest",
-      firstName: cust.firstName,
-      lastName:  cust.lastName,
-      email:     cust.email,
-    },
+    customerReferenceId: "guest",
+    currency: CURR,
     items: [item],
-    shipments: [{
-      shipmentMethodUid,               // ok om undefined → Gelato kan auto-välj
-      shippingAddress,                 // ✅ ← BYTT från address → shippingAddress
-    }],
+    shipmentMethodUid,     // ✅ v4 root
+    shippingAddress,       // ✅ v4 root
+    draft: DRY_RUN ? true : false
   };
 
-  const g = await gelatoApiCreateOrder(env, payload);
-  const gelato_id = g?.id || g?.orderId || null;
+  // POST v4/orders
+  const g = await gelatoFetch(`${GELATO_BASE.order}/orders`, env, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 
+  const gelato_id = g?.id || g?.orderId || null;
   if (gelato_id) {
     await kvIndexGelatoOrder(env, gelato_id, order.id);
     await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id });
   }
-
   return g;
 }
 
