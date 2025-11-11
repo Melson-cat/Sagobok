@@ -247,9 +247,7 @@ async function gelatoGetPrices(env, productUid, { country, currency, pageCount }
   return gelatoFetch(url.toString(), env);
 }
 
-// ✅ Ny version: sätter item.pageCount = TOTALSidor (inlaga + 1 omslagssida)
-//    och validerar mot probe-listan om du vill (kan togglas av)
-async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency, verifyCounts = true }) {
+async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency }) {
   if (!order?.files?.interior_url || !order?.files?.cover_url || !Number.isFinite(order?.files?.interior_pages)) {
     throw new Error("Order missing files or interior_pages. Run build-and-attach first.");
   }
@@ -257,32 +255,24 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
-  const interiorPages = Number(order.files.interior_pages); // t.ex. 30 för din layout
+  const interiorPages = Number(order.files.interior_pages);
   if (!Number.isFinite(interiorPages) || interiorPages <= 0) throw new Error("Bad interior_pages");
-
-  // 🔢 För wrap-cover levererar du 1 omslagssida (en enda ‘wrap’), så total = inlaga + 1
-  //    (Detta stämmer med ditt fel – Gelato räknade 31 när vi skickade 30 + wrap.)
-  const totalPages = interiorPages + 1;
-
-  // (Valfritt) Kolla att totalen är tillåten för just det här productUid:et
-  if (verifyCounts) {
-    try {
-      const valid = await gelatoGetValidPageCounts(env, productUid, { from: 24, to: 60 });
-      if (valid.length && !valid.includes(totalPages)) {
-        // Om 31 inte finns (hos dig gör den det – toppen), välj närmaste större giltiga
-        const sorted = valid.slice().sort((a, b) => a - b);
-        const fallback = sorted.find(n => n >= totalPages) || sorted[sorted.length - 1];
-        throw new Error(`Total pageCount ${totalPages} not allowed for this product. Try ${fallback}.`);
-      }
-    } catch (e) {
-      // mjukt – vill du vara strikt, kasta vidare
-      // console.warn("probe failed or pageCount not allowed:", e?.message || e);
-    }
-  }
 
   const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
   const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
   const CURR          = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
+
+  // (Valfri) preflight – prova att läsa validPageCounts och varna tidigt
+  try {
+    const info = await gelatoFetch(`${GELATO_BASE.product}/products/${encodeURIComponent(productUid)}`, env);
+    const valid = Array.isArray(info?.validPageCounts) ? info.validPageCounts.map(Number) : null;
+    if (valid && valid.length && !valid.includes(interiorPages)) {
+      throw new Error(`Interior has ${interiorPages} pages, but product allows: ${valid.slice(0,12).join(", ")}…`);
+    }
+  } catch (e) {
+    // Bara varna – blockera inte om product-API inte ger listan
+    console.warn("Gelato pageCount preflight:", e?.message || e);
+  }
 
   const cust = {
     firstName: customer.firstName || "Test",
@@ -298,56 +288,55 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
     email:        cust.email,
     phone:        cust.phone,
     addressLine1: shipment.addressLine1 || "Storgatan 1",
+    addressLine2: shipment.addressLine2 || undefined,
     city:         shipment.city        || "Örebro",
     postCode:     shipment.postCode    || "70000",
     country,
-    ...(shipment.addressLine2 ? { addressLine2: shipment.addressLine2 } : {}),
     ...(shipment.state ? { state: shipment.state } : {}),
   };
 
   const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
 
-  // 🧩 VIKTIGT: Ange pageCount = TOTAL (inlaga + cover) så Gelato inte gissar
- const item = {
-  itemReferenceId: `item-${order.id}`,
-  productUid,
-  quantity: 1,
-  pageCount: totalPages, // interior_pages + 1 (wrap-cover)
-  files: [
-    // ❗ Byt "content" → "inside" (v4-giltigt och tydligt för multipage)
-    { type: "inside",  url: order.files.interior_url },
-
-    // För wrap-cover: antingen "cover" (om stöds) eller "default".
-    // Många v4-produkter funkar fint med "default" för omslaget.
-    { type: "default", url: order.files.cover_url }
-  ],
-};
-
+  const item = {
+    itemReferenceId: `item-${order.id}`,
+    productUid,
+    quantity: 1,
+    pageCount: interiorPages,               // ← KRITISKT FÖR v4
+    files: [
+      { type: "content", url: order.files.interior_url }, // ← INTE "pages" här
+      { type: "cover",   url: order.files.cover_url }
+    ],
+  };
 
   const payload = {
-    draft: DRY_RUN,
+    orderType: DRY_RUN ? "draft" : "order",
     orderReferenceId: order.id,
+    customerReferenceId: "guest",
     currency: CURR,
-    customer: {
-      referenceId: "guest",
-      firstName: cust.firstName,
-      lastName:  cust.lastName,
-      email:     cust.email,
-    },
     items: [item],
-    // 📦 OBS: v4 toppnivåfält — inte i shipments-array
-    shipmentMethodUid,                     // ok att lämna undefined → billigaste
-    shippingAddress,                       // måste ligga på toppnivå i v4
+    shippingAddress,                         // v4 top-level
+    ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
+    metadata: [
+      { key: "bp_kind", value: String(order.kind || order?.draft?.kind || "printed") },
+      { key: "bp_interiors", value: String(interiorPages) }
+    ]
   };
+
+  // Debug som syns i dina Worker-loggar vid 400
+  console.log("GELATO CREATE PAYLOAD", {
+    productUid,
+    interiorPages,
+    pageCount: payload.items[0].pageCount,
+    files: payload.items[0].files
+  });
 
   const g = await gelatoApiCreateOrder(env, payload);
   const gelato_id = g?.id || g?.orderId || null;
 
   if (gelato_id) {
     await kvIndexGelatoOrder(env, gelato_id, order.id);
-    await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id, gelato_total_pages: totalPages });
+    await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id });
   }
-
   return g;
 }
 
@@ -395,6 +384,15 @@ async function handleGelatoStatus(req, env) {
   });
 }
 
+async function handlePdfCountByUrl(req) {
+  const { url } = await req.json().catch(()=> ({}));
+  if (!url) return err("Missing url", 400);
+  const r = await fetch(url, { cf:{ cacheTtl: 300, cacheEverything:true }});
+  if (!r.ok) return err(`Fetch ${r.status}`, 502);
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  const doc = await PDFDocument.load(bytes);
+  return ok({ pages: doc.getPageCount() });
+}
 
 
 async function buildWrapCoverPdfFromDims(env, story, images, dims) {
@@ -1773,6 +1771,11 @@ async function handleBuildAndAttach(req, env) {
       cover_url,    cover_key,
       interior_pages: finalInteriorPages,
     });
+console.log("BUILD&ATTACH", {
+  order_id,
+  interior_pages: finalInteriorPages,
+  interior_key, cover_key
+});
 
     return ok({
       order_id,
@@ -2670,6 +2673,9 @@ if (req.method === "GET" && url.pathname === "/api/gelato/status") {
 
 if (url.pathname === "/api/gelato/product-info" && req.method === "GET") {
   return handleGelatoProductInfo(req, env);
+}
+if (req.method === "POST" && pathname === "/api/pdf/count-by-url") {
+  return await handlePdfCountByUrl(req, env);
 }
 
 
