@@ -308,16 +308,21 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
   const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
 
   // 🧩 VIKTIGT: Ange pageCount = TOTAL (inlaga + cover) så Gelato inte gissar
-  const item = {
-    itemReferenceId: `item-${order.id}`,
-    productUid,
-    quantity: 1,
-    pageCount: totalPages,                 // ✅ ← NYTT och KRITISKT
-    files: [
-      { type: "content", url: order.files.interior_url, pages: interiorPages }, // inlagan (30)
-      { type: "cover",   url: order.files.cover_url }                           // wrap-cover (1 “sida”)
-    ],
-  };
+ const item = {
+  itemReferenceId: `item-${order.id}`,
+  productUid,
+  quantity: 1,
+  pageCount: totalPages, // interior_pages + 1 (wrap-cover)
+  files: [
+    // ❗ Byt "content" → "inside" (v4-giltigt och tydligt för multipage)
+    { type: "inside",  url: order.files.interior_url },
+
+    // För wrap-cover: antingen "cover" (om stöds) eller "default".
+    // Många v4-produkter funkar fint med "default" för omslaget.
+    { type: "default", url: order.files.cover_url }
+  ],
+};
+
 
   const payload = {
     draft: DRY_RUN,
