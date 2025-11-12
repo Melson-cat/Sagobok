@@ -244,9 +244,15 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
   const singleUrl = order?.files?.single_pdf_url;
-  const pageCount = Number(order?.files?.page_count);
-  if (!singleUrl) throw new Error("Order is missing files.single_pdf_url");
-  if (!Number.isFinite(pageCount) || pageCount <= 0) throw new Error("Order is missing/invalid files.page_count");
+const totalPages = Number(order?.files?.page_count);
+const interiorPages = Number.isFinite(order?.files?.interior_pages)
+  ? Number(order.files.interior_pages)
+  : Math.max(0, totalPages - 2); // fallback om interior saknas
+
+if (!singleUrl) throw new Error("Order is missing files.single_pdf_url");
+if (!Number.isFinite(totalPages) || totalPages <= 0) throw new Error("Order is missing/invalid files.page_count");
+if (!Number.isFinite(interiorPages) || interiorPages <= 0) throw new Error("Order is missing/invalid files.interior_pages");
+
 
   const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
   const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
@@ -288,11 +294,15 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
     ];
   }
 
+  if (interiorPages % 2 !== 0) {
+  throw new Error(`Interior pageCount must be even; got ${interiorPages}`);
+}
+
   const item = {
     itemReferenceId: `item-${order.id}`,
     productUid,
     quantity: 1,
-    pageCount,         // viktigt!
+     pageCount: interiorPages,      
     files,
   };
 
@@ -1437,6 +1447,11 @@ async function buildPdf({ story, images, mode = "preview", trim = "square210", b
     p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8,0.1,0.1) });
   }
 
+  /* -------- PRINT endpaper (blank sida 2) -------- */
+if (String(deliverable).toLowerCase() === "print") {
+ pdfDoc.addPage([pageW, pageH]); // helt blank
+ }
+
   /* -------- TITELSIDA (efter omslag) -------- */
 try {
   const titlePage = pdfDoc.addPage([pageW, pageH]);
@@ -1479,10 +1494,6 @@ try {
 } catch (e) {
   tr(trace, "titlepage:error", { error: String(e?.message || e) });
 }
-/* -------- PRINT endpaper (blank sida 2) -------- */
-if (String(deliverable).toLowerCase() === "print") {
- pdfDoc.addPage([pageW, pageH]); // helt blank
- }
 
   /* -------- 14 uppslag: bild vänster, text höger + vine -------- */
   const outer = mmToPt(GRID.outer_mm);
@@ -1668,11 +1679,12 @@ async function handlePdfSingleUrl(req, env) {
 
     // 4) Skriv i KV om vi har order_id
     if (order_id) {
-      await kvAttachFiles(env, order_id, {
-        single_pdf_url: url,
-        single_pdf_key: key,
-        page_count: pages,
-      });
+     await kvAttachFiles(env, order_id, {
+  single_pdf_url: url,
+  single_pdf_key: key,
+  page_count: pages,                      // totalt antal sidor i filen (t.ex. 34)
+  interior_pages: Math.max(0, pages - 2), // inlaga = total - (Cover + Page 0)
+});
     }
 
     return ok({ url, key, pages });
