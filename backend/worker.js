@@ -1342,7 +1342,7 @@ export async function buildPdf(
 
   const trimSpec = TRIM_TABLE[trim] || TRIM_TABLE.square210;
   const isPrint  = String(deliverable).toLowerCase() === "print";
-  const bleed    = (mode === "print")
+  const bleed   = isPrint ? 0 : 0;
     ? (Number.isFinite(bleed_mm) ? bleed_mm : (Number.isFinite(trimSpec.default_bleed_mm) ? trimSpec.default_bleed_mm : 3))
     : 0;
 
