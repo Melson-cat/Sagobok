@@ -2391,27 +2391,38 @@ async function ensureSingle(order_id, deliverable) {
 }
 
 async function handleGelatoDebugStatus(req, env) {
-  const { searchParams } = new URL(req.url);
-  const id = searchParams.get("id"); // gelato_order_id
-
-  if (!id) return err("Missing ?id=", 400);
-
-  const url = `https://order.gelatoapis.com/v4/orders/${id}`;
   try {
-    const res = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-KEY": env.GELATO_API_KEY
-      }
-    });
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get("id")?.trim();
 
-    const json = await res.json();
-    return ok(json);
+    if (!id) return err("Missing ?id=", 400);
+
+    // 1. Försök direkt mot Gelato med givet ID
+    const tryDirect = await gelatoFetch(`${GELATO_BASE.order}/orders/${id}`, env, {
+      method: "GET",
+      headers: gelatoHeaders(env),
+    }).catch(e => e?.data || { error: "Direct fetch failed", detail: String(e?.message || e) });
+
+    // 2. Om det misslyckas pga "NOT_FOUND" – slå i KV om du har mappning
+    const notFound = tryDirect?.code === "NOT_FOUND";
+    if (!notFound) return ok({ from: "gelato-id", data: tryDirect });
+
+    const internal = await env.ordersKV.get(`gelato:${id}`, "text");
+    if (!internal) return err(`Gelato order not found: '${id}'`, 404);
+
+    // 3. Fetch omvänt (du angav referenceId – vi fick gelato-id från KV)
+    const fallback = await gelatoFetch(`${GELATO_BASE.order}/orders/${internal}`, env, {
+      method: "GET",
+      headers: gelatoHeaders(env),
+    }).catch(e => e?.data || { error: "Fallback fetch failed", detail: String(e?.message || e) });
+
+    return ok({ from: "reference-id", gelato_id: internal, data: fallback });
+
   } catch (e) {
-    return err(e?.message || "Gelato debug failed", 500);
+    return err(e?.message || "debug-status failed", 500);
   }
 }
+
 
 async function handleGelatoOrderStatus(req, env) {
   try {
