@@ -244,41 +244,43 @@ async function gelatoGetPrices(env, productUid, { country, currency, pageCount }
 }
 
 /**
- * Skapar en Gelato-order från vår “single-PDF”-bok.
- * Orkestrerar validering, defaults, DRY-RUN, even-page-justering och fallback med cover.
- *
- * Kräver: gelatoApiCreateOrder, kvIndexGelatoOrder, kvAttachFiles
+ * Skapa Gelato-order från EN (1) single-PDF.
+ * - Skickar EN fil (type: "default")
+ * - pageCount = interiorPages (auto-beräknas; jämnas; auto-retry vid Gelatos sidkrav)
+ * - Sparar gelato_order_id i KV
  */
 async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency }) {
+  // --- krav/inputs ---
+  if (!order?.id) throw new Error("Order missing id");
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
-  // ---- order.files ----
-  const singleUrl   = order?.files?.single_pdf_url;
-  const totalPages  = Number(order?.files?.page_count);
+  const singleUrl  = order?.files?.single_pdf_url;
+  const totalPages = Number(order?.files?.page_count);
   let interiorPages = Number.isFinite(order?.files?.interior_pages)
     ? Number(order.files.interior_pages)
     : (Number.isFinite(totalPages) ? Math.max(0, totalPages - 2) : NaN);
 
-  if (!singleUrl) throw new Error("Missing files.single_pdf_url on order");
-  if (!Number.isFinite(totalPages) || totalPages <= 0) throw new Error("Invalid files.page_count");
-  if (!Number.isFinite(interiorPages) || interiorPages <= 0) throw new Error("Invalid interior_pages");
+  if (!singleUrl) throw new Error("Order is missing files.single_pdf_url");
+  if (!Number.isFinite(totalPages) || totalPages <= 0) throw new Error("Order files.page_count invalid");
+  if (!Number.isFinite(interiorPages) || interiorPages <= 0) throw new Error("Order interior_pages invalid");
 
-  // De flesta fotoböcker kräver jämnt antal inlagesidor
+  // Gelato kräver ofta jämnt antal inlagesidor
   if (interiorPages % 2 !== 0) interiorPages -= 1;
 
-  // ---- env / currency ----
-  const DRY_RUN = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
-  const CURR    = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
+  // --- env / runtime ---
+  const DRY_RUN   = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
+  const CURR      = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
+  const TEST_MAIL = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
 
-  // ---- customer & shipping (obligatoriskt för Gelato) ----
-  const fallbackEmail = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
+  // --- customer / shipping (obligatoriskt i orders v4) ---
   const cust = {
     firstName: customer.firstName || "Test",
     lastName:  customer.lastName  || "Kund",
-    email:     DRY_RUN ? fallbackEmail : (customer.email || fallbackEmail),
+    email:     DRY_RUN ? TEST_MAIL : (customer.email || TEST_MAIL),
     phone:     (shipment.phone && String(shipment.phone).trim()) || "0700000000",
   };
+
   const country = (shipment.country || "SE").toUpperCase();
   const shippingAddress = {
     firstName:    cust.firstName,
@@ -293,48 +295,93 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
     ...(shipment.state ? { state: shipment.state } : {}),
   };
 
-  // ---- EN (1) fil, endast content ----
-  const files = [{ type: "default", url: singleUrl }];
-const shipmentMethodUid =
- shipment.shipmentMethodUid ||
- env.GELATO_SHIPMENT_UID ||    // t.ex. "economy" / "express" / den du valt
-"economy";
-  // ---- ev. produktattribut (valfritt, men stöds) ----
+  // --- attributes (valfritt via ENV) ---
   let attributes = {};
-  try { attributes = env.GELATO_ITEM_ATTRIBUTES ? JSON.parse(env.GELATO_ITEM_ATTRIBUTES) : {}; } catch {}
+  try {
+    attributes = env.GELATO_ITEM_ATTRIBUTES ? JSON.parse(env.GELATO_ITEM_ATTRIBUTES) : {};
+  } catch { attributes = {}; }
 
-  const item = {
-    itemReferenceId: `item-${order.id}`,
-    productUid,
-    quantity: 1,
-    pageCount: interiorPages,
-    files,
-    ...(Object.keys(attributes).length ? { attributes } : {}),
-  };
-
-  const payload = {
-    orderType: DRY_RUN ? "draft" : "order",
-    orderReferenceId: String(order.id),         // **måste finnas**
-    customerReferenceId: "guest",
-    currency: CURR,                             // **måste finnas**
-    items: [item],    
-    shipmentMethodUid,                          // **måste finnas + minst 1**
-    shippingAddress,                            // **måste finnas**
-    metadata: [
-      { key: "bp_kind",           value: String(order.kind || order?.draft?.kind || "printed") },
-      { key: "bp_total_pages",    value: String(totalPages) },
-      { key: "bp_interior_pages", value: String(interiorPages) },
-      { key: "bp_single_pdf",     value: String(singleUrl || "") },
-    ],
-  };
-
-  const g = await gelatoApiCreateOrder(env, payload);
-  const gelato_id = g?.id || g?.orderId || null;
-  if (gelato_id) {
-    await kvIndexGelatoOrder(env, gelato_id, order.id);
-    await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id });
+  // --- bygg item + payload (EN fil!) ---
+  function makeItem(pc) {
+    return {
+      itemReferenceId: `item-${order.id}`,
+      productUid,
+      quantity: 1,
+      pageCount: pc,                           // Inlaga
+      files: [{ type: "default", url: singleUrl }], // EN (1) FIL
+      ...(Object.keys(attributes).length ? { attributes } : {}),
+    };
   }
-  return g;
+
+  function makePayload(pc) {
+    const shipmentMethodUid = shipment.shipmentMethodUid || env.GELATO_SHIPMENT_UID; // valfritt
+    return {
+      orderType: DRY_RUN ? "draft" : "order",
+      orderReferenceId: String(order.id),
+      customerReferenceId: "guest",
+      currency: CURR,
+      items: [makeItem(pc)],
+      shippingAddress,
+      ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
+      metadata: [
+        { key: "bp_kind",           value: String(order.kind || order?.draft?.kind || "printed") },
+        { key: "bp_total_pages",    value: String(totalPages) },
+        { key: "bp_interior_pages", value: String(pc) },
+        { key: "bp_single_pdf",     value: String(singleUrl || "") },
+      ],
+    };
+  }
+
+  // --- hjälpare: tolka Gelatos sidfel ---
+  function parsePageMismatch(errObj) {
+    const msg = String(errObj?.data?.message || errObj?.message || "");
+    const det = JSON.stringify(errObj?.data?.details || errObj?.data || "");
+    const text = `${msg} ${det}`;
+    // ex: "requires exactly 35 page(s) ... contain 34"
+    const m = text.match(/requires exactly\s+(\d+)\s+page\(s\).+contain\s+(\d+)/i);
+    if (!m) return null;
+    const requiredTotal = Number(m[1]);
+    const fileTotal     = Number(m[2]);
+    if (!Number.isFinite(requiredTotal) || !Number.isFinite(fileTotal)) return null;
+    return { requiredTotal, fileTotal };
+  }
+
+  // --- 1) Försök med vår beräknade inlaga ---
+  let pc = interiorPages;
+  try {
+    const res = await gelatoApiCreateOrder(env, makePayload(pc));
+    const gelato_id = res?.id || res?.orderId || null;
+    if (gelato_id) {
+      await kvIndexGelatoOrder(env, gelato_id, order.id);
+      await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id });
+    }
+    return res;
+  } catch (e1) {
+    // --- 2) Om Gelato kräver annan relation (t.ex. total = inlaga + 3) → autojustera + retriera en gång
+    const mm = parsePageMismatch(e1);
+    if (mm) {
+      // Heuristik: många HC-fotoböcker kör total = inlaga + 3
+      // Sätt inlaga = fileTotal - 3 och jämna nedåt till jämnt.
+      let adjusted = Math.max(2, mm.fileTotal - 3);
+      if (adjusted % 2 !== 0) adjusted -= 1;
+
+      // Bara retriera om det faktiskt ändrar vårt pc
+      if (adjusted !== pc) {
+        try {
+          const res2 = await gelatoApiCreateOrder(env, makePayload(adjusted));
+          const gelato_id2 = res2?.id || res2?.orderId || null;
+          if (gelato_id2) {
+            await kvIndexGelatoOrder(env, gelato_id2, order.id);
+            await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id2 });
+          }
+          return res2;
+        } catch (e2) {
+          throw e2;
+        }
+      }
+    }
+    throw e1;
+  }
 }
 
 
