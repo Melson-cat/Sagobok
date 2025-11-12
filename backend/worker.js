@@ -2418,6 +2418,49 @@ async function ensureSingle(order_id, deliverable) {
   return j.url;
 }
 
+async function handlePdfInspect(req, env) {
+  try {
+    const { url, order_id } = await req.json().catch(()=> ({}));
+
+    let pdfUrl = url;
+    if (!pdfUrl && order_id) {
+      const ord = await kvGetOrder(env, order_id);
+      pdfUrl = ord?.files?.single_pdf_url;
+    }
+    if (!pdfUrl) return err("Missing url or order_id", 400);
+
+    const r = await fetch(pdfUrl, { cf: { cacheTtl: 300, cacheEverything: true } });
+    if (!r.ok) return err(`Fetch ${r.status}`, 502);
+    const bytes = new Uint8Array(await r.arrayBuffer());
+
+    const doc = await PDFDocument.load(bytes);
+    const pages = doc.getPageCount();
+    const sizes = [];
+    const uniq = new Set();
+
+    for (let i = 0; i < pages; i++) {
+      const p = doc.getPage(i);
+      const s = p.getSize(); // points
+      const wpt = Math.round(s.width  * 1000) / 1000;
+      const hpt = Math.round(s.height * 1000) / 1000;
+      const wmm = Math.round(wpt * 25.4 / 72 * 100) / 100;
+      const hmm = Math.round(hpt * 25.4 / 72 * 100) / 100;
+      sizes.push({ page: i+1, w_pt: wpt, h_pt: hpt, w_mm: wmm, h_mm: hmm });
+      uniq.add(`${wpt}x${hpt}`);
+    }
+
+    return ok({
+      pages,
+      uniqueSizes: Array.from(uniq),
+      sizesSample: sizes.slice(0, 6), // första 6 sidor
+      hint: "Alla interiörsidor måste vara EXAKT samma storlek och matcha produktens spec."
+    });
+  } catch (e) {
+    return err(e?.message || "inspect failed", 500);
+  }
+}
+
+
 
 async function handleGelatoOrderStatus(req, env) {
   try {
@@ -2588,6 +2631,9 @@ if (req.method === "POST" && pathname === "/api/pdf/single-url") {
   return await handlePdfSingleUrl(req, env);
 }
 
+if (req.method === "POST" && pathname === "/api/pdf/inspect") {
+  return await handlePdfInspect(req, env);
+}
 
 
       // 9) 404
