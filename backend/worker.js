@@ -2392,6 +2392,57 @@ async function ensureSingle(order_id, deliverable) {
   return j.url;
 }
 
+// src/api/gelato/debug-validate.ts
+
+export const onRequestPost: PagesFunction<Env> = async (context) => {
+  const { request, env } = context;
+
+  let payload: {
+    fileUrl: string;
+    productUid: string;
+  };
+
+  try {
+    payload = await request.json();
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400 });
+  }
+
+  const { fileUrl, productUid } = payload;
+
+  if (!fileUrl || !productUid) {
+    return new Response(
+      JSON.stringify({ error: "Missing fileUrl or productUid" }),
+      { status: 400 }
+    );
+  }
+
+  const gelatoRes = await fetch("https://order.gelatoapis.com/v4/print-file-validation", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-KEY": env.GELATO_API_KEY,
+    },
+    body: JSON.stringify({
+      productUid,
+      files: [
+        {
+          type: "content",
+          url: fileUrl,
+        },
+      ],
+    }),
+  });
+
+  const data = await gelatoRes.json();
+
+  return new Response(JSON.stringify({ status: gelatoRes.status, data }, null, 2), {
+    headers: { "Content-Type": "application/json" },
+    status: gelatoRes.status,
+  });
+};
+
+
 async function handleGelatoDebugStatus(req, env) {
   try {
     const { searchParams } = new URL(req.url);
@@ -2579,6 +2630,11 @@ if (req.method === "POST" && pathname === "/api/pdf/single-url") {
 if (req.method === "GET" && pathname === "/api/gelato/debug-status") {
   return await handleGelatoDebugStatus(req, env);
 }
+
+if (req.method === "POST" && pathname === "/api/gelato/debug-validate") {
+  return await onRequestPost({ request: req, env, waitUntil: ctx.waitUntil });
+}
+
 
 
 
