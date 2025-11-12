@@ -2433,24 +2433,42 @@ async function handleGelatoOrderStatus(req, env) {
       if (!ord) return err("Order not found", 404);
       gelatoId = gelatoId || ord?.files?.gelato_order_id;
     }
-
     if (!gelatoId) return err("Missing gelato_id (and order had none)", 400);
 
     const data = await gelatoGetOrder(env, gelatoId);
-    const status = mapGelatoStatus(data); // <— FIX
+    const status = mapGelatoStatus(data);
+
+    // Plocka ut item + filstatus + ev. valideringsfel
+    const item0 = Array.isArray(data?.items) && data.items.length ? data.items[0] : null;
+    const itemDetails = item0 ? {
+      productUid: item0.productUid,
+      pageCount: item0.pageCount,
+      files: item0.files || [],
+      processingStatus: item0.processingStatus || item0.status || null,
+      fileStatus: item0.fileStatus || null,
+      fileValidation: item0.fileValidation || null,
+    } : null;
 
     if (ord?.id) {
       await kvAttachFiles(env, ord.id, {
         gelato_status: status,
-        gelato_status_raw: data?.fulfillmentStatus || data?.status || null
+        gelato_status_raw: data?.fulfillmentStatus || data?.status || null,
+        gelato_item_status: itemDetails?.processingStatus || null
       });
     }
 
-    return ok({ gelato_id: gelatoId, status, raw: data });
+    return ok({
+      gelato_id: gelatoId,
+      status,
+      item: itemDetails,
+      statusHistory: data?.statusHistory || [],
+      raw: data
+    });
   } catch (e) {
     return err(e?.message || "order-status failed", 500);
   }
 }
+
 export default {
   async fetch(req, env, ctx) {
     // 1) Alltid svara på preflight
