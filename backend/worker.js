@@ -93,7 +93,11 @@ const PT_PER_INCH = 72;
 const PT_PER_MM = PT_PER_INCH / MM_PER_INCH;
 const mmToPt = (mm) => mm * PT_PER_MM;
 
-const TRIMS = { square210: { w_mm: 210, h_mm: 210, default_bleed_mm: 3 } };
+const TRIMS = {
+  square200: { w_mm: 200, h_mm: 200, default_bleed_mm: 3 },
+  square210: { w_mm: 210, h_mm: 210, default_bleed_mm: 3 },
+};
+
 const GRID = { outer_mm: 10, gap_mm: 8, pad_mm: 12, text_min_mm: 30, text_max_mm: 58 };
 const TEXT_SCALE = 1.18;
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
@@ -1673,11 +1677,12 @@ async function handlePdfRequest(req, env) {
 async function handlePdfSingleUrl(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
-    const { story, images = [], mode = "preview", order_id, deliverable = "digital" } = body || {};
+   const { story, images = [], mode = "preview", order_id, deliverable = "digital", trim } = body || {};
     if (!story || !Array.isArray(story?.book?.pages)) return err("Missing story", 400);
 
     // 1) Bygg HELA boken i en PDF (cover + alla sidor + back cover)
-    const bytes = await buildPdf({ story, images, mode, deliverable }, env, null);
+    const bytes = await buildPdf({ story, images, mode, deliverable, trim: trim || "square200" }, env, null);
+
 
     // 2) Räkna sidor
     const doc = await PDFDocument.load(bytes);
