@@ -1330,34 +1330,37 @@ export async function buildPdf(
   tr(trace, "pdf:start");
 
   // ---------- Defensiva fallbacks ----------
-  const TEXT_SCALE = Number.isFinite(globalThis?.TEXT_SCALE) ? globalThis.TEXT_SCALE : 1.0;
-  const OUTER_MM   = (Number.isFinite(globalThis?.GRID?.outer_mm) && globalThis.GRID.outer_mm >= 0) ? globalThis.GRID.outer_mm : 10;
+const TEXT_SCALE_F =
+  (typeof TEXT_SCALE === "number" && Number.isFinite(TEXT_SCALE)) ? TEXT_SCALE : 1.18; // lokal kopia
+const OUTER_MM =
+  (GRID && Number.isFinite(GRID.outer_mm) && GRID.outer_mm >= 0) ? GRID.outer_mm : 10;
 
-  // Om TRIMS saknas globalt, använd en säker standard (210x210mm, 3mm bleed)
-  const DEFAULT_TRIMS = {
-    square210: { w_mm: 210, h_mm: 210, default_bleed_mm: 3 },
-    square200: { w_mm: 200, h_mm: 200, default_bleed_mm: 3 }
-  };
-  const TRIM_TABLE = globalThis?.TRIMS || DEFAULT_TRIMS;
+// Om TRIMS saknas globalt, använd en säker standard (210x210mm, 3mm bleed)
+const DEFAULT_TRIMS = {
+  square210: { w_mm: 210, h_mm: 210, default_bleed_mm: 3 },
+  square200: { w_mm: 200, h_mm: 200, default_bleed_mm: 3 },
+};
+const TRIM_TABLE = (typeof TRIMS === "object" && TRIMS) ? TRIMS : DEFAULT_TRIMS;
 
-  const trimSpec = TRIM_TABLE[trim] || TRIM_TABLE.square210;
-  const isPrint  = String(deliverable).toLowerCase() === "print";
-  const bleed   = isPrint ? 0 : 0;
-    (Number.isFinite(bleed_mm) ? bleed_mm : (Number.isFinite(trimSpec.default_bleed_mm) ? trimSpec.default_bleed_mm : 3))
-    : 0;
+const trimSpec = TRIM_TABLE[trim] || TRIM_TABLE.square210;
+const isPrint  = String(deliverable).toLowerCase() === "print";
 
-  // mm → pt helper måste finnas globalt; fallback (72pt/inch, 25.4mm/inch)
-  const mmToPtSafe = (typeof mmToPt === "function")
-    ? mmToPt
-    : (mm) => (mm * 72) / 25.4;
+// Single-PDF till Gelato ska inte ha bleed. Vill du återgå till “riktig print-bleed”, se alternativet längre ner.
+const bleed = 0;
 
-  const trimWpt = mmToPtSafe(trimSpec.w_mm);
-  const trimHpt = mmToPtSafe(trimSpec.h_mm);
-  const pageW   = trimWpt + mmToPtSafe(bleed * 2);
-  const pageH   = trimHpt + mmToPtSafe(bleed * 2);
-  const contentX = mmToPtSafe(bleed);
-  const contentY = mmToPtSafe(bleed);
-  const outer    = mmToPtSafe(OUTER_MM);
+// mm → pt helper måste finnas globalt; fallback (72pt/inch, 25.4mm/inch)
+const mmToPtSafe = (typeof mmToPt === "function")
+  ? mmToPt
+  : (mm) => (mm * 72) / 25.4;
+
+const trimWpt  = mmToPtSafe(trimSpec.w_mm);
+const trimHpt  = mmToPtSafe(trimSpec.h_mm);
+const pageW    = trimWpt + mmToPtSafe(bleed * 2);
+const pageH    = trimHpt + mmToPtSafe(bleed * 2);
+const contentX = mmToPtSafe(bleed);
+const contentY = mmToPtSafe(bleed);
+const outer    = mmToPtSafe(OUTER_MM);
+
 
   // ---------- PDF & typsnitt ----------
   const pdfDoc = await PDFDocument.create();
