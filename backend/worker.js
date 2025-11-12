@@ -2440,38 +2440,66 @@ async function onRequestPost(context) {
 
 async function handleGelatoDebugValidate(req, env) {
   let payload;
+
   try {
     payload = await req.json();
   } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400 });
+    return new Response(JSON.stringify({ error: "Invalid JSON" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
   }
 
   const { fileUrl, productUid } = payload;
+
   if (!fileUrl || !productUid) {
-    return new Response(JSON.stringify({ error: "Missing fileUrl or productUid" }), { status: 400 });
+    return new Response(JSON.stringify({ error: "Missing fileUrl or productUid" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
   }
 
-  const gelatoRes = await fetch("https://order.gelatoapis.com/v4/print-file-validation", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-KEY": env.GELATO_API_KEY,
-    },
-    body: JSON.stringify({
-      productUid,
-      files: [{ type: "content", url: fileUrl }],
-    }),
+  // DEBUG LOG
+  console.log("Validating file with Gelato", {
+    fileUrl,
+    productUid,
+    usingKey: !!env.GELATO_API_KEY,
+    endpoint: "https://order.gelatoapis.com/v4/print-file-validation"
   });
 
+  let gelatoRes;
+  try {
+    gelatoRes = await fetch("https://order.gelatoapis.com/v4/print-file-validation", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-KEY": env.GELATO_API_KEY
+      },
+      body: JSON.stringify({
+        productUid,
+        files: [
+          {
+            type: "content",
+            url: fileUrl
+          }
+        ]
+      })
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ error: "Fetch to Gelato failed", detail: error.message }), {
+      status: 502,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
+  }
+
   const data = await gelatoRes.json();
+
   return new Response(JSON.stringify({ status: gelatoRes.status, data }), {
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*", // 🔥 Gör att du kan anropa från frontend
-    },
     status: gelatoRes.status,
+    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
   });
 }
+
 
 
 
@@ -2666,6 +2694,7 @@ if (req.method === "GET" && pathname === "/api/gelato/debug-status") {
 if (req.method === "POST" && pathname === "/api/gelato/debug-validate") {
   return await handleGelatoDebugValidate(req, env);
 }
+
 
 
 
