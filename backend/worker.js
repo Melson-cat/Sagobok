@@ -2392,16 +2392,10 @@ async function ensureSingle(order_id, deliverable) {
   return j.url;
 }
 
-// src/api/gelato/debug-validate.ts
-
-export async function onRequestPost(context) 
- {
+export async function onRequestPost(context) {
   const { request, env } = context;
 
-  let payload: {
-    fileUrl: string;
-    productUid: string;
-  };
+  let payload;
 
   try {
     payload = await request.json();
@@ -2441,7 +2435,8 @@ export async function onRequestPost(context)
     headers: { "Content-Type": "application/json" },
     status: gelatoRes.status,
   });
-};
+}
+
 
 
 async function handleGelatoDebugStatus(req, env) {
