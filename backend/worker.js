@@ -2390,6 +2390,28 @@ async function ensureSingle(order_id, deliverable) {
   return j.url;
 }
 
+async function handleGelatoDebugStatus(req, env) {
+  const { searchParams } = new URL(req.url);
+  const id = searchParams.get("id"); // gelato_order_id
+
+  if (!id) return err("Missing ?id=", 400);
+
+  const url = `https://order.gelatoapis.com/v4/orders/${id}`;
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-KEY": env.GELATO_API_KEY
+      }
+    });
+
+    const json = await res.json();
+    return ok(json);
+  } catch (e) {
+    return err(e?.message || "Gelato debug failed", 500);
+  }
+}
 
 async function handleGelatoOrderStatus(req, env) {
   try {
@@ -2540,6 +2562,9 @@ if (req.method === "POST" && pathname === "/api/pdf/count-by-url") {
 
 if (req.method === "POST" && pathname === "/api/pdf/single-url") {
   return await handlePdfSingleUrl(req, env);
+}
+if (req.method === "GET" && pathname === "/api/gelato/debug-status") {
+  return await handleGelatoDebugStatus(req, env);
 }
 
 
