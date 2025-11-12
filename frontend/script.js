@@ -921,6 +921,36 @@ async function fetchOrderIdFromSessionId(sessionId) {
   } catch { return null; }
 }
 
+// --- Safe Stripe-return handler (no-op på vanliga sidor) ---
+function handleStripeReturnIfAny() {
+  try {
+    const url = new URL(location.href);
+    const path = url.pathname.toLowerCase();
+
+    // Om detta inte är success-sidan: gör inget.
+    if (!/success/.test(path)) return;
+
+    // Hämta session_id om det finns i URL, annars försök läsa från storage.
+    const sid =
+      url.searchParams.get("session_id") ||
+      sessionStorage.getItem("bp:last_session_id") ||
+      localStorage.getItem("bp:last_session_id") ||
+      null;
+
+    if (!sid) return;
+
+    // Persist sid så success-skriptet kan använda det (idempotent).
+    try {
+      sessionStorage.setItem("bp:last_session_id", sid);
+      localStorage.setItem("bp:last_session_id", sid);
+    } catch {}
+
+    // Viktigt: den här funktionen gör INTE mer – själva success-flödet hanteras
+    // av success-sidans script. Vi vill bara undvika ReferenceError och säkra sid.
+  } catch {
+    // Swallow – absolut inget får kasta här.
+  }
+}
 
 
 /* --------------------------- Events & Init --------------------------- */
