@@ -240,20 +240,33 @@ async function gelatoGetPrices(env, productUid, { country, currency, pageCount }
 }
 
 async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency }) {
+  // --- krav på produkt ---
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
-  const singleUrl = order?.files?.single_pdf_url;
-const totalPages = Number(order?.files?.page_count);
-const interiorPages = Number.isFinite(order?.files?.interior_pages)
-  ? Number(order.files.interior_pages)
-  : Math.max(0, totalPages - 2); // fallback om interior saknas
+  // --- källfil (single-PDF) ---
+  const singleUrl   = order?.files?.single_pdf_url;
+  const totalPages  = Number(order?.files?.page_count);
+  // primärt: använd sparat interior_pages; annars fallback = total - 2
+  let interiorPages = Number.isFinite(order?.files?.interior_pages)
+    ? Number(order.files.interior_pages)
+    : (Number.isFinite(totalPages) ? Math.max(0, totalPages - 2) : NaN);
 
-if (!singleUrl) throw new Error("Order is missing files.single_pdf_url");
-if (!Number.isFinite(totalPages) || totalPages <= 0) throw new Error("Order is missing/invalid files.page_count");
-if (!Number.isFinite(interiorPages) || interiorPages <= 0) throw new Error("Order is missing/invalid files.interior_pages");
+  if (!singleUrl) throw new Error("Order is missing files.single_pdf_url");
+  if (!Number.isFinite(totalPages) || totalPages <= 0) {
+    throw new Error("Order is missing/invalid files.page_count");
+  }
+  if (!Number.isFinite(interiorPages) || interiorPages <= 0) {
+    throw new Error("Order is missing/invalid files.interior_pages (and fallback from page_count failed)");
+  }
 
+  // Gelato kräver jämnt antal inlagesidor för de flesta fotoböcker.
+  if (interiorPages % 2 !== 0) {
+    // Auto-justera nedåt till närmaste jämna (säkrare än att kasta fel i produktion)
+    interiorPages = interiorPages - 1;
+  }
 
+  // --- kund & adress ---
   const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
   const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
   const CURR          = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
@@ -281,11 +294,10 @@ if (!Number.isFinite(interiorPages) || interiorPages <= 0) throw new Error("Orde
 
   const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
 
-  // === Single-PDF mode ===
-  // Plan 1: ren single-fil
+  // --- single-PDF files ---
   let files = [{ type: "content", url: singleUrl }];
 
-  // Flagga för fallback till dual-field (samma källa), om Gelato kräver det
+  // Om Gelato klagar på att "cover" krävs, kan vi toggla denna env:
   const REQUIRE_COVER_TOO = String(env.GELATO_REQUIRE_COVER_TOO || "").toLowerCase() === "true";
   if (REQUIRE_COVER_TOO) {
     files = [
@@ -294,18 +306,16 @@ if (!Number.isFinite(interiorPages) || interiorPages <= 0) throw new Error("Orde
     ];
   }
 
-  if (interiorPages % 2 !== 0) {
-  throw new Error(`Interior pageCount must be even; got ${interiorPages}`);
-}
-
+  // --- order-item ---
   const item = {
     itemReferenceId: `item-${order.id}`,
     productUid,
     quantity: 1,
-     pageCount: interiorPages,      
+    pageCount: interiorPages,       // 👈 VIKTIGT: Gelato vill ha inlagesidor här
     files,
   };
 
+  // --- payload ---
   const payload = {
     orderType: DRY_RUN ? "draft" : "order",
     orderReferenceId: order.id,
@@ -315,11 +325,15 @@ if (!Number.isFinite(interiorPages) || interiorPages <= 0) throw new Error("Orde
     shippingAddress,
     ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
     metadata: [
-      { key: "bp_kind", value: String(order.kind || order?.draft?.kind || "printed") },
-      { key: "bp_pages", value: String(pageCount) }
-    ]
+      { key: "bp_kind",                  value: String(order.kind || order?.draft?.kind || "printed") },
+      { key: "bp_total_pages",           value: String(totalPages) },     // t.ex. 34
+      { key: "bp_interior_pages",        value: String(interiorPages) },  // t.ex. 32
+      { key: "bp_single_pdf",            value: String(order?.files?.single_pdf_url || "") },
+      { key: "bp_interior_even_adjust",  value: String((totalPages - 2) % 2 !== 0) } // true om vi justerade
+    ],
   };
 
+  // --- skapa order + fallback om cover krävs ---
   try {
     const g = await gelatoApiCreateOrder(env, payload);
     const gelato_id = g?.id || g?.orderId || null;
@@ -329,17 +343,15 @@ if (!Number.isFinite(interiorPages) || interiorPages <= 0) throw new Error("Orde
     }
     return g;
   } catch (e) {
-    // Automatisk fallback: om valideringsfel antyder att "cover" krävs
     const validation = e?.data?.validationErrors || e?.data?.fields || [];
     const needsCover = JSON.stringify(validation).toLowerCase().includes("cover");
     if (!REQUIRE_COVER_TOO && needsCover) {
-      // prova igen med dual-field från samma singleUrl
-      const retryPayload = structuredClone(payload);
-      retryPayload.items[0].files = [
+      const retry = structuredClone(payload);
+      retry.items[0].files = [
         { type: "content", url: singleUrl },
         { type: "cover",   url: singleUrl },
       ];
-      const g2 = await gelatoApiCreateOrder(env, retryPayload);
+      const g2 = await gelatoApiCreateOrder(env, retry);
       const gelato_id2 = g2?.id || g2?.orderId || null;
       if (gelato_id2) {
         await kvIndexGelatoOrder(env, gelato_id2, order.id);
@@ -1671,23 +1683,27 @@ async function handlePdfSingleUrl(req, env) {
     const doc = await PDFDocument.load(bytes);
     const pages = doc.getPageCount();
 
-    // 3) Ladda upp till R2
-    const ts = Date.now();
-    const safeTitle = safeTitleFrom(story);
-    const key = `${safeTitle}_${ts}_BOOK.pdf`;
-    const url = await r2PutPublic(env, key, bytes, "application/pdf");
+// 3) Ladda upp till R2
+const ts = Date.now();
+const safeTitle = safeTitleFrom(story);
+const key = `${safeTitle}_${ts}_BOOK.pdf`;
+const url = await r2PutPublic(env, key, bytes, "application/pdf");
 
-    // 4) Skriv i KV om vi har order_id
-    if (order_id) {
-     await kvAttachFiles(env, order_id, {
-  single_pdf_url: url,
-  single_pdf_key: key,
-  page_count: pages,                      // totalt antal sidor i filen (t.ex. 34)
-  interior_pages: Math.max(0, pages - 2), // inlaga = total - (Cover + Page 0)
-});
-    }
+// 4) Beräkna inlagesidor (Gelato räknar inte cover + "Page 0")
+const interior_pages = Math.max(0, pages - 2);
 
-    return ok({ url, key, pages });
+// 5) Skriv i KV om vi har order_id
+if (order_id) {
+  await kvAttachFiles(env, order_id, {
+    single_pdf_url: url,
+    single_pdf_key: key,
+    page_count: pages,        // total (t.ex. 34)
+    interior_pages,           // inlaga (t.ex. 32)
+  });
+}
+
+return ok({ url, key, pages, interior_pages });
+
   } catch (e) {
     return err(e?.message || "single-url failed", 500);
   }
