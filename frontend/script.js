@@ -523,7 +523,6 @@ async function onBuyPdf() {
     images: buildImagesPayload(),
     trim: "square210",
     mode: "final"
-      deliverable: "digital" 
   };
 
   try { localStorage.setItem(CHECKOUT_DRAFT_KEY, JSON.stringify(draft)); } catch {}
