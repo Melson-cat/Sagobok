@@ -2394,34 +2394,34 @@ async function handleGelatoDebugStatus(req, env) {
   try {
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id")?.trim();
-
     if (!id) return err("Missing ?id=", 400);
 
-    // 1. Försök direkt mot Gelato med givet ID
-    const tryDirect = await gelatoFetch(`${GELATO_BASE.order}/orders/${id}`, env, {
-      method: "GET",
-      headers: gelatoHeaders(env),
+    const headers = gelatoHeaders(env);
+
+    // Försök först direkt som om det vore ett Gelato-id
+    let direct = await gelatoFetch(`${GELATO_BASE.order}/orders/${id}`, env, {
+      method: "GET", headers
     }).catch(e => e?.data || { error: "Direct fetch failed", detail: String(e?.message || e) });
 
-    // 2. Om det misslyckas pga "NOT_FOUND" – slå i KV om du har mappning
-    const notFound = tryDirect?.code === "NOT_FOUND";
-    if (!notFound) return ok({ from: "gelato-id", data: tryDirect });
+    if (direct?.code !== "NOT_FOUND") return ok({ source: "gelato-id", data: direct });
 
-    const internal = await env.ordersKV.get(`gelato:${id}`, "text");
-    if (!internal) return err(`Gelato order not found: '${id}'`, 404);
+    // Om vi inte hittar den – slå i KV (men bara om ordersKV finns!)
+    if (!env.ordersKV) return err("env.ordersKV is undefined – check wrangler.toml", 500);
 
-    // 3. Fetch omvänt (du angav referenceId – vi fick gelato-id från KV)
-    const fallback = await gelatoFetch(`${GELATO_BASE.order}/orders/${internal}`, env, {
-      method: "GET",
-      headers: gelatoHeaders(env),
+    const gelatoId = await env.ordersKV.get(`gelato:${id}`, "text");
+    if (!gelatoId) return err(`No Gelato ID mapped from order_id='${id}'`, 404);
+
+    const fallback = await gelatoFetch(`${GELATO_BASE.order}/orders/${gelatoId}`, env, {
+      method: "GET", headers
     }).catch(e => e?.data || { error: "Fallback fetch failed", detail: String(e?.message || e) });
 
-    return ok({ from: "reference-id", gelato_id: internal, data: fallback });
+    return ok({ source: "reference-id", gelato_id: gelatoId, data: fallback });
 
   } catch (e) {
     return err(e?.message || "debug-status failed", 500);
   }
 }
+
 
 
 async function handleGelatoOrderStatus(req, env) {
