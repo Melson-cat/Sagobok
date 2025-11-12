@@ -2392,7 +2392,7 @@ async function ensureSingle(order_id, deliverable) {
   return j.url;
 }
 
-export async function onRequestPost(context) {
+async function onRequestPost(context) {
   const { request, env } = context;
 
   let payload;
@@ -2416,6 +2416,7 @@ export async function onRequestPost(context) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
       "X-API-KEY": env.GELATO_API_KEY,
     },
     body: JSON.stringify({
