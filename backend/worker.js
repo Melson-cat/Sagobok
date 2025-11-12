@@ -2264,17 +2264,55 @@ async function gelatoGetOrder(env, gelatoOrderId) {
 
 async function handleGelatoWebhook(req, env) {
   try {
-    const evt = await req.json().catch(()=> ({}));
-    const gelatoOrderId = evt?.orderId || evt?.id || evt?.data?.orderId;
-    const status = mapGelatoStatus(evt) || (evt?.eventType ? String(evt.eventType).toLowerCase() : "unknown");
+    const evt = await req.json().catch(() => ({}));
+
+    // 📥 Logga all inkommande data
+    console.log("🔁 Gelato Webhook Payload:", JSON.stringify(evt, null, 2));
+
+    const gelatoOrderId =
+      evt?.orderId || evt?.id || evt?.data?.orderId || null;
+
+    const status =
+      mapGelatoStatus(evt) ||
+      (evt?.eventType ? String(evt.eventType).toLowerCase() : "unknown");
 
     let orderId = null;
-    if (gelatoOrderId) orderId = await env.ORDERS.get(`GELATO_IDX:${gelatoOrderId}`);
-    if (orderId) await kvAttachFiles(env, orderId, { gelato_status: status });
+    if (gelatoOrderId) {
+      orderId = await env.ORDERS.get(`GELATO_IDX:${gelatoOrderId}`);
+      if (orderId) {
+        await kvAttachFiles(env, orderId, {
+          gelato_status: status,
+          gelato_status_raw: evt?.fulfillmentStatus || evt?.status || null,
+        });
+      }
+    }
 
-    return ok({ received: true, status });
-  } catch (e) { return err(e?.message || "webhook error", 500); }
+    return new Response(
+      JSON.stringify(
+        {
+          received: true,
+          gelatoOrderId,
+          status,
+          mappedOrderId: orderId || null,
+          rawEventType: evt?.eventType || null,
+          fulfillmentStatus: evt?.fulfillmentStatus || evt?.status || null,
+        },
+        null,
+        2
+      ),
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+        status: 200,
+      }
+    );
+  } catch (e) {
+    return err(e?.message || "webhook error", 500);
+  }
 }
+
 
 const GELATO_BASE_V3 = { product: "https://product.gelatoapis.com/v3" };
 
@@ -2370,168 +2408,6 @@ async function handleGelatoProductInfo(req, env) {
   } catch (e) {
     const status = e?.status || 500;
     return corsJson({ ok:false, error:String(e?.message||e), details:e?.data||null }, status);
-  }
-}
-
-async function ensureSingle(order_id, deliverable) {
-  // deliverable: "digital" för PDF-köp, "print" för tryckt
-  const r = await fetch(`${API}/api/pdf/single-url`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      story: state.story,                // din sparade story
-      images: state.images,              // dina uppladdade/genererade imgs
-      mode: deliverable === "print" ? "print" : "preview",
-      deliverable,                       // 👈 NYTT (se backend patch nedan)
-      order_id                           // skriver single_pdf_url + page_count i KV
-    })
-  });
-  const j = await r.json();
-  if (!r.ok || j.error) throw new Error(j.error || "single-url failed");
-  // j.url = EN laga upp-fil som alla view-knappar ska visa
-  return j.url;
-}
-
-async function onRequestPost(context) {
-  const { request, env } = context;
-
-  let payload;
-
-  try {
-    payload = await request.json();
-  } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400 });
-  }
-
-  const { fileUrl, productUid } = payload;
-
-  if (!fileUrl || !productUid) {
-    return new Response(
-      JSON.stringify({ error: "Missing fileUrl or productUid" }),
-      { status: 400 }
-    );
-  }
-
-  const gelatoRes = await fetch("https://order.gelatoapis.com/v4/print-file-validation", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-      "X-API-KEY": env.GELATO_API_KEY,
-    },
-    body: JSON.stringify({
-      productUid,
-      files: [
-        {
-          type: "content",
-          url: fileUrl,
-        },
-      ],
-    }),
-  });
-
-  const data = await gelatoRes.json();
-
-  return new Response(JSON.stringify({ status: gelatoRes.status, data }, null, 2), {
-    headers: { "Content-Type": "application/json" },
-    status: gelatoRes.status,
-  });
-}
-
-async function handleGelatoDebugValidate(req, env) {
-  let payload;
-
-  try {
-    payload = await req.json();
-  } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-    });
-  }
-
-  const { fileUrl, productUid } = payload;
-
-  if (!fileUrl || !productUid) {
-    return new Response(JSON.stringify({ error: "Missing fileUrl or productUid" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-    });
-  }
-
-  // DEBUG LOG
-  console.log("Validating file with Gelato", {
-    fileUrl,
-    productUid,
-    usingKey: !!env.GELATO_API_KEY,
-    endpoint: "https://order.gelatoapis.com/v4/print-file-validation"
-  });
-
-  let gelatoRes;
-  try {
-    gelatoRes = await fetch("https://order.gelatoapis.com/v4/print-file-validation", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-KEY": env.GELATO_API_KEY
-      },
-      body: JSON.stringify({
-        productUid,
-        files: [
-          {
-            type: "content",
-            url: fileUrl
-          }
-        ]
-      })
-    });
-  } catch (error) {
-    return new Response(JSON.stringify({ error: "Fetch to Gelato failed", detail: error.message }), {
-      status: 502,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-    });
-  }
-
-  const data = await gelatoRes.json();
-
-  return new Response(JSON.stringify({ status: gelatoRes.status, data }), {
-    status: gelatoRes.status,
-    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-  });
-}
-
-
-
-
-async function handleGelatoDebugStatus(req, env) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const id = searchParams.get("id")?.trim();
-    if (!id) return err("Missing ?id=", 400);
-
-    const headers = gelatoHeaders(env);
-
-    // Försök först direkt som om det vore ett Gelato-id
-    let direct = await gelatoFetch(`${GELATO_BASE.order}/orders/${id}`, env, {
-      method: "GET", headers
-    }).catch(e => e?.data || { error: "Direct fetch failed", detail: String(e?.message || e) });
-
-    if (direct?.code !== "NOT_FOUND") return ok({ source: "gelato-id", data: direct });
-
-    // Om vi inte hittar den – slå i KV (men bara om ordersKV finns!)
-    if (!env.ORDERS) return err("env.ORDERS is undefined – check wrangler.toml", 500);
-
-    const gelatoId = await env.ORDERS.get(`gelato:${id}`, "text");
-    if (!gelatoId) return err(`No Gelato ID mapped from order_id='${id}'`, 404);
-
-    const fallback = await gelatoFetch(`${GELATO_BASE.order}/orders/${gelatoId}`, env, {
-      method: "GET", headers
-    }).catch(e => e?.data || { error: "Fallback fetch failed", detail: String(e?.message || e) });
-
-    return ok({ source: "reference-id", gelato_id: gelatoId, data: fallback });
-
-  } catch (e) {
-    return err(e?.message || "debug-status failed", 500);
   }
 }
 
