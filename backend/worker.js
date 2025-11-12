@@ -2406,7 +2406,7 @@ async function handleGelatoDebugStatus(req, env) {
     if (direct?.code !== "NOT_FOUND") return ok({ source: "gelato-id", data: direct });
 
     // Om vi inte hittar den – slå i KV (men bara om ordersKV finns!)
-    if (!env.orders) return err("env.ORDERS is undefined – check wrangler.toml", 500);
+    if (!env.ORDERS) return err("env.ORDERS is undefined – check wrangler.toml", 500);
 
     const gelatoId = await env.ORDERS.get(`gelato:${id}`, "text");
     if (!gelatoId) return err(`No Gelato ID mapped from order_id='${id}'`, 404);
