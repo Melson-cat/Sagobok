@@ -93,11 +93,7 @@ const PT_PER_INCH = 72;
 const PT_PER_MM = PT_PER_INCH / MM_PER_INCH;
 const mmToPt = (mm) => mm * PT_PER_MM;
 
-const TRIMS = {
-  square200: { w_mm: 200, h_mm: 200, default_bleed_mm: 3 },
-  square210: { w_mm: 210, h_mm: 210, default_bleed_mm: 3 },
-};
-
+const TRIMS = { square200: { w_mm: 200, h_mm: 200, default_bleed_mm: 3 } };
 const GRID = { outer_mm: 10, gap_mm: 8, pad_mm: 12, text_min_mm: 30, text_max_mm: 58 };
 const TEXT_SCALE = 1.18;
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
@@ -243,41 +239,23 @@ async function gelatoGetPrices(env, productUid, { country, currency, pageCount }
   return gelatoFetch(url.toString(), env);
 }
 
-/**
- * Skapa Gelato-order från EN (1) single-PDF.
- * - Skickar EN fil (type: "default")
- * - pageCount = interiorPages (auto-beräknas; jämnas; auto-retry vid Gelatos sidkrav)
- * - Sparar gelato_order_id i KV
- */
 async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency }) {
-  // --- krav/inputs ---
-  if (!order?.id) throw new Error("Order missing id");
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
-  const singleUrl  = order?.files?.single_pdf_url;
-  const totalPages = Number(order?.files?.page_count);
-  let interiorPages = Number.isFinite(order?.files?.interior_pages)
-    ? Number(order.files.interior_pages)
-    : (Number.isFinite(totalPages) ? Math.max(0, totalPages - 2) : NaN);
-
+  const singleUrl = order?.files?.single_pdf_url;
+  const pageCount = Number(order?.files?.page_count);
   if (!singleUrl) throw new Error("Order is missing files.single_pdf_url");
-  if (!Number.isFinite(totalPages) || totalPages <= 0) throw new Error("Order files.page_count invalid");
-  if (!Number.isFinite(interiorPages) || interiorPages <= 0) throw new Error("Order interior_pages invalid");
+  if (!Number.isFinite(pageCount) || pageCount <= 0) throw new Error("Order is missing/invalid files.page_count");
 
-  // Gelato kräver ofta jämnt antal inlagesidor
-  if (interiorPages % 2 !== 0) interiorPages -= 1;
+  const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
+  const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
+  const CURR          = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
 
-  // --- env / runtime ---
-  const DRY_RUN   = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
-  const CURR      = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
-  const TEST_MAIL = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
-
-  // --- customer / shipping (obligatoriskt i orders v4) ---
   const cust = {
     firstName: customer.firstName || "Test",
     lastName:  customer.lastName  || "Kund",
-    email:     DRY_RUN ? TEST_MAIL : (customer.email || TEST_MAIL),
+    email:     DRY_RUN ? FORCE_TEST_TO : (customer.email || FORCE_TEST_TO),
     phone:     (shipment.phone && String(shipment.phone).trim()) || "0700000000",
   };
 
@@ -289,101 +267,79 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
     phone:        cust.phone,
     addressLine1: shipment.addressLine1 || "Storgatan 1",
     addressLine2: shipment.addressLine2 || undefined,
-    city:         shipment.city || "Örebro",
-    postCode:     shipment.postCode || "70000",
+    city:         shipment.city        || "Örebro",
+    postCode:     shipment.postCode    || "70000",
     country,
     ...(shipment.state ? { state: shipment.state } : {}),
   };
 
-  // --- attributes (valfritt via ENV) ---
-  let attributes = {};
+  const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
+
+  // === Single-PDF mode ===
+  // Plan 1: ren single-fil
+  let files = [{ type: "content", url: singleUrl }];
+
+  // Flagga för fallback till dual-field (samma källa), om Gelato kräver det
+  const REQUIRE_COVER_TOO = String(env.GELATO_REQUIRE_COVER_TOO || "").toLowerCase() === "true";
+  if (REQUIRE_COVER_TOO) {
+    files = [
+      { type: "content", url: singleUrl },
+      { type: "cover",   url: singleUrl },
+    ];
+  }
+
+  const item = {
+    itemReferenceId: `item-${order.id}`,
+    productUid,
+    quantity: 1,
+    pageCount,         // viktigt!
+    files,
+  };
+
+  const payload = {
+    orderType: DRY_RUN ? "draft" : "order",
+    orderReferenceId: order.id,
+    customerReferenceId: "guest",
+    currency: CURR,
+    items: [item],
+    shippingAddress,
+    ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
+    metadata: [
+      { key: "bp_kind", value: String(order.kind || order?.draft?.kind || "printed") },
+      { key: "bp_pages", value: String(pageCount) }
+    ]
+  };
+
   try {
-    attributes = env.GELATO_ITEM_ATTRIBUTES ? JSON.parse(env.GELATO_ITEM_ATTRIBUTES) : {};
-  } catch { attributes = {}; }
-
-  // --- bygg item + payload (EN fil!) ---
-  function makeItem(pc) {
-    return {
-      itemReferenceId: `item-${order.id}`,
-      productUid,
-      quantity: 1,
-      pageCount: pc,                           // Inlaga
-      files: [{ type: "default", url: singleUrl }], // EN (1) FIL
-      ...(Object.keys(attributes).length ? { attributes } : {}),
-    };
-  }
-
-  function makePayload(pc) {
-    const shipmentMethodUid = shipment.shipmentMethodUid || env.GELATO_SHIPMENT_UID; // valfritt
-    return {
-      orderType: DRY_RUN ? "draft" : "order",
-      orderReferenceId: String(order.id),
-      customerReferenceId: "guest",
-      currency: CURR,
-      items: [makeItem(pc)],
-      shippingAddress,
-      ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
-      metadata: [
-        { key: "bp_kind",           value: String(order.kind || order?.draft?.kind || "printed") },
-        { key: "bp_total_pages",    value: String(totalPages) },
-        { key: "bp_interior_pages", value: String(pc) },
-        { key: "bp_single_pdf",     value: String(singleUrl || "") },
-      ],
-    };
-  }
-
-  // --- hjälpare: tolka Gelatos sidfel ---
-  function parsePageMismatch(errObj) {
-    const msg = String(errObj?.data?.message || errObj?.message || "");
-    const det = JSON.stringify(errObj?.data?.details || errObj?.data || "");
-    const text = `${msg} ${det}`;
-    // ex: "requires exactly 35 page(s) ... contain 34"
-    const m = text.match(/requires exactly\s+(\d+)\s+page\(s\).+contain\s+(\d+)/i);
-    if (!m) return null;
-    const requiredTotal = Number(m[1]);
-    const fileTotal     = Number(m[2]);
-    if (!Number.isFinite(requiredTotal) || !Number.isFinite(fileTotal)) return null;
-    return { requiredTotal, fileTotal };
-  }
-
-  // --- 1) Försök med vår beräknade inlaga ---
-  let pc = interiorPages;
-  try {
-    const res = await gelatoApiCreateOrder(env, makePayload(pc));
-    const gelato_id = res?.id || res?.orderId || null;
+    const g = await gelatoApiCreateOrder(env, payload);
+    const gelato_id = g?.id || g?.orderId || null;
     if (gelato_id) {
       await kvIndexGelatoOrder(env, gelato_id, order.id);
       await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id });
     }
-    return res;
-  } catch (e1) {
-    // --- 2) Om Gelato kräver annan relation (t.ex. total = inlaga + 3) → autojustera + retriera en gång
-    const mm = parsePageMismatch(e1);
-    if (mm) {
-      // Heuristik: många HC-fotoböcker kör total = inlaga + 3
-      // Sätt inlaga = fileTotal - 3 och jämna nedåt till jämnt.
-      let adjusted = Math.max(2, mm.fileTotal - 3);
-      if (adjusted % 2 !== 0) adjusted -= 1;
-
-      // Bara retriera om det faktiskt ändrar vårt pc
-      if (adjusted !== pc) {
-        try {
-          const res2 = await gelatoApiCreateOrder(env, makePayload(adjusted));
-          const gelato_id2 = res2?.id || res2?.orderId || null;
-          if (gelato_id2) {
-            await kvIndexGelatoOrder(env, gelato_id2, order.id);
-            await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id2 });
-          }
-          return res2;
-        } catch (e2) {
-          throw e2;
-        }
+    return g;
+  } catch (e) {
+    // Automatisk fallback: om valideringsfel antyder att "cover" krävs
+    const validation = e?.data?.validationErrors || e?.data?.fields || [];
+    const needsCover = JSON.stringify(validation).toLowerCase().includes("cover");
+    if (!REQUIRE_COVER_TOO && needsCover) {
+      // prova igen med dual-field från samma singleUrl
+      const retryPayload = structuredClone(payload);
+      retryPayload.items[0].files = [
+        { type: "content", url: singleUrl },
+        { type: "cover",   url: singleUrl },
+      ];
+      const g2 = await gelatoApiCreateOrder(env, retryPayload);
+      const gelato_id2 = g2?.id || g2?.orderId || null;
+      if (gelato_id2) {
+        await kvIndexGelatoOrder(env, gelato_id2, order.id);
+        await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id2 });
       }
+      return g2;
     }
-    throw e1;
+    throw e;
   }
 }
-
 
 
 
@@ -1340,87 +1296,53 @@ async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
   return await pdfDoc.embedFont(standardName);
 }
 /* ---------------------------- Build PDF ------------------------------ */
-export async function buildPdf(
-  { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text, deliverable = "digital" },
-  env,
-  trace
-) {
+async function buildPdf({ story, images, mode = "preview", trim = "square200", bleed_mm, watermark_text, deliverable = "digital" }, env, trace) {
   tr(trace, "pdf:start");
+  const trimSpec = TRIMS[trim] || TRIMS.square200;
+  const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
 
-  // ---------- Defensiva fallbacks ----------
-const TEXT_SCALE_F =
-  (typeof TEXT_SCALE === "number" && Number.isFinite(TEXT_SCALE)) ? TEXT_SCALE : 1.18; // lokal kopia
-const OUTER_MM =
-  (GRID && Number.isFinite(GRID.outer_mm) && GRID.outer_mm >= 0) ? GRID.outer_mm : 10;
+  const trimWpt = mmToPt(trimSpec.w_mm);
+  const trimHpt = mmToPt(trimSpec.h_mm);
+  const pageW = trimWpt + mmToPt(bleed * 2);
+  const pageH = trimHpt + mmToPt(bleed * 2);
+  const contentX = mmToPt(bleed);
+  const contentY = mmToPt(bleed);
 
-// Om TRIMS saknas globalt, använd en säker standard (210x210mm, 3mm bleed)
-const DEFAULT_TRIMS = {
-  square210: { w_mm: 210, h_mm: 210, default_bleed_mm: 3 },
-  square200: { w_mm: 200, h_mm: 200, default_bleed_mm: 3 },
-};
-const TRIM_TABLE = (typeof TRIMS === "object" && TRIMS) ? TRIMS : DEFAULT_TRIMS;
-
-const trimSpec = TRIM_TABLE[trim] || TRIM_TABLE.square210;
-const isPrint  = String(deliverable).toLowerCase() === "print";
-
-// Single-PDF till Gelato ska inte ha bleed. Vill du återgå till “riktig print-bleed”, se alternativet längre ner.
-const bleed = 0;
-
-// mm → pt helper måste finnas globalt; fallback (72pt/inch, 25.4mm/inch)
-const mmToPtSafe = (typeof mmToPt === "function")
-  ? mmToPt
-  : (mm) => (mm * 72) / 25.4;
-
-const trimWpt  = mmToPtSafe(trimSpec.w_mm);
-const trimHpt  = mmToPtSafe(trimSpec.h_mm);
-const pageW    = trimWpt + mmToPtSafe(bleed * 2);
-const pageH    = trimHpt + mmToPtSafe(bleed * 2);
-const contentX = mmToPtSafe(bleed);
-const contentY = mmToPtSafe(bleed);
-const outer    = mmToPtSafe(OUTER_MM);
-
-
-  // ---------- PDF & typsnitt ----------
   const pdfDoc = await PDFDocument.create();
-  if (typeof fontkit !== "undefined" && pdfDoc?.registerFontkit) {
-    pdfDoc.registerFontkit(fontkit);
-  }
+  pdfDoc.registerFontkit(fontkit);
   tr(trace, "pdf:doc-created");
 
   const helv      = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const helvBold  = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const helvIt    = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
 
-  const base = (env?.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(/\/+$/, "");
-  const nunito     = await getFontOrFallback(trace, pdfDoc, "nunito",     [`${base}/Nunito-Regular.ttf`],   StandardFonts.TimesRoman);
-  const nunitoSemi = await getFontOrFallback(trace, pdfDoc, "nunitoSemi", [`${base}/Nunito-Semibold.ttf`],  StandardFonts.Helvetica);
+  const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(/\/+$/, "");
+  const NUN_R  = [`${base}/Nunito-Regular.ttf`];
+  const NUN_SB = [`${base}/Nunito-Semibold.ttf`];
+  const nunito     = await getFontOrFallback(trace, pdfDoc, "nunito", NUN_R,  StandardFonts.TimesRoman);
+  const nunitoSemi = await getFontOrFallback(trace, pdfDoc, "nunitoSemi", NUN_SB, StandardFonts.Helvetica);
   tr(trace, "pdf:fonts-ready");
 
-  // ---------- Textspec baserat på ålder ----------
-  const readingAge = story?.book?.reading_age ?? 6;
-  const fontSpec   = (typeof fontSpecForReadingAge === "function")
-    ? fontSpecForReadingAge(readingAge)
-    : { size: 18, leading: 1.25 }; // fallback
-  const baseTextSize = fontSpec.size;
-  const baseLeading  = fontSpec.leading;
+  const readingAge = story?.book?.reading_age || 6;
+  const { size: baseTextSize, leading: baseLeading } = fontSpecForReadingAge(readingAge);
 
-  // ---------- Metadata ur story ----------
   const title = String(story?.book?.title ?? "Min bok");
-  const subtitle = String(
-    story?.book?.tagline ??
-    (story?.book?.bible?.main_character?.name ? `Med ${story.book.bible.main_character.name}` : "") ??
-    ""
-  );
-  const blurb = String(
-    story?.book?.back_blurb ??
-    (story?.book?.lesson ? `Lärdom: ${story.book.lesson}.` : "En berättelse skapad med BokPiloten.") ??
-    ""
-  );
+  const subtitle =
+    String(
+      story?.book?.tagline ??
+      (story?.book?.bible?.main_character?.name ? `Med ${story.book.bible.main_character.name}` : "") ??
+      ""
+    );
+  const blurb =
+    String(
+      story?.book?.back_blurb ??
+      (story?.book?.lesson ? `Lärdom: ${story.book.lesson}.` : "En berättelse skapad med BokPiloten.") ??
+      ""
+    );
+  const pagesStory = [...(story?.book?.pages || [])];
 
-  const pagesStory = Array.isArray(story?.book?.pages) ? [...story.book.pages] : [];
-
-  // ---------- Bildindexering ----------
-  let coverSrc = (images || []).find(x => x?.kind === "cover" || x?.page === 0) || null;
+  // Indexera inkomna bilder
+  let coverSrc = images?.find((x) => x?.kind === "cover" || x?.page === 0) || null;
   const imgByPage = new Map();
   (images || []).forEach((row) => {
     if (Number.isFinite(row?.page) && row.page > 0 && (row.image_id || row.url || row.image_url || row.data_url)) {
@@ -1428,53 +1350,36 @@ const outer    = mmToPtSafe(OUTER_MM);
     }
   });
 
-  // ---------- Sidfabrik som sätter alla boxar konsekvent ----------
-  function addFixedPage() {
-    const p = pdfDoc.addPage([pageW, pageH]);
-    try {
-      p.setMediaBox(0, 0, pageW, pageH);
-      p.setCropBox(0, 0, pageW, pageH);
-      p.setTrimBox(0, 0, pageW, pageH);
-      p.setBleedBox(0, 0, pageW, pageH);
-    } catch (_) { /* PDF-lib äldre versioner saknar ibland *Box-setters */ }
-    return p;
-  }
-
-  // ---------- Mappa story till exakt 14 scen-sidor ----------
+  // Normalisera 14 scener
   function mapTo14ScenePages() {
     const want = 14;
     if (pagesStory.length === want) return pagesStory;
-    if (pagesStory.length > want)  return pagesStory.slice(0, want);
+    if (pagesStory.length > want) return pagesStory.slice(0, want);
     const out = [...pagesStory];
-    while (out.length < want) {
+    while (out.length < want)
       out.push(pagesStory[pagesStory.length - 1] || { page: out.length + 1, text: "", scene: "" });
-    }
     return out;
   }
   const scenePages = mapTo14ScenePages();
   tr(trace, "pdf:scene-pages", { count: scenePages.length });
 
-  // ---------- Omslag ----------
+  /* -------- FRONT COVER -------- */
   try {
-    const coverPage = addFixedPage();
-
+    const coverPage = pdfDoc.addPage([pageW, pageH]);
     if (!coverSrc) coverSrc = imgByPage.get(1) || null;
+
     if (coverSrc) {
       const bytes = await getImageBytes(env, coverSrc);
       const coverImg = await embedImage(pdfDoc, bytes);
-      if (coverImg) {
-        // Fyll hela sidan (inkl bleed) — 0,0 → pageW,pageH
-        drawImageCover(coverPage, coverImg, 0, 0, pageW, pageH);
-      }
+      if (coverImg) drawImageCover(coverPage, coverImg, 0, 0, pageW, pageH);
     } else {
-      coverPage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.94, 0.96, 1) });
+      coverPage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.94,0.96,1) });
     }
 
-    // Titelblock på omslag
-    const safeInset = mmToPtSafe(OUTER_MM + 2);
+    const safeInset = mmToPt(GRID.outer_mm + 2);
     const tw  = trimWpt - safeInset * 2;
     const cx  = contentX + trimWpt / 2;
-    const topCenterY0 = contentY + trimHpt - mmToPtSafe(OUTER_MM + 16);
+    const topCenterY0 = contentY + trimHpt - mmToPt(GRID.outer_mm + 16);
 
     const measure = (txt, font, baseSize, leading, minSize, maxW, maxH) => {
       const s = String(txt ?? "");
@@ -1495,11 +1400,11 @@ const outer    = mmToPtSafe(OUTER_MM);
       return { size: 12, lineH: 12 * 1.1, lines: [], blockH: 0 };
     };
 
-    const titleM = measure(title, nunitoSemi, Math.min(trimWpt, trimHpt) * 0.16, 1.08, 22, tw, mmToPtSafe(32));
+    const titleM = measure(title, nunitoSemi, Math.min(trimWpt, trimHpt) * 0.16, 1.08, 22, tw, mmToPt(32));
     const subtitleSize = Math.max(14, (titleM.size * 0.48) | 0);
-    const subM = subtitle ? measure(subtitle, nunito, subtitleSize, 1.12, 12, tw, mmToPtSafe(18)) : { blockH: 0 };
+    const subM = subtitle ? measure(subtitle, nunito, subtitleSize, 1.12, 12, tw, mmToPt(18)) : { blockH: 0 };
 
-    const padY = mmToPtSafe(4), padX = mmToPtSafe(6), gap = mmToPtSafe(4);
+    const padY = mmToPt(4), padX = mmToPt(6), gap = mmToPt(4);
     const badgeH = titleM.blockH + (subtitle ? (gap + subM.blockH) : 0) + padY * 2;
     const badgeY = topCenterY0 - badgeH / 2;
 
@@ -1508,7 +1413,6 @@ const outer    = mmToPtSafe(OUTER_MM);
       color: rgb(1,1,1), opacity: 0.25,
     });
 
-    // Title
     {
       let y = badgeY + badgeH - padY - titleM.lineH / 2;
       for (const ln of titleM.lines) {
@@ -1518,7 +1422,6 @@ const outer    = mmToPtSafe(OUTER_MM);
       }
     }
 
-    // Subtitle
     if (subtitle) {
       const subCenterY = badgeY + padY + subM.blockH / 2;
       let y = subCenterY + subM.blockH / 2 - subM.lineH;
@@ -1530,52 +1433,65 @@ const outer    = mmToPtSafe(OUTER_MM);
     }
   } catch (e) {
     tr(trace, "cover:error", { error: String(e?.message || e) });
-    const p = addFixedPage();
-    p.drawText("Omslag kunde inte renderas.", { x: mmToPtSafe(15), y: mmToPtSafe(15), size: 12, font: nunito, color: rgb(0.8,0.1,0.1) });
+    const p = pdfDoc.addPage([pageW, pageH]);
+    p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8,0.1,0.1) });
   }
 
-  // ---------- PRINT: tom endpaper (sida 2)
-  if (isPrint) addFixedPage();
+  /* -------- TITELSIDA (efter omslag) -------- */
+try {
+  const titlePage = pdfDoc.addPage([pageW, pageH]);
+  titlePage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.98, 0.99, 1) });
+  const cx = contentX + trimWpt / 2;
+  const cy = contentY + trimHpt / 2 + mmToPt(4);
 
-  // ---------- Titelsida (alltid efter omslag / ev. tom sida)
-  try {
-    const titlePage = addFixedPage();
-    titlePage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.98, 0.99, 1) });
+  const mainTitle = String(story?.book?.title || "Min Sagobok");
+  const subLine = String(story?.book?.bible?.main_character?.name ? `av ${story.book.bible.main_character.name}` : "Skapad med BokPiloten");
 
-    const cx = contentX + trimWpt / 2;
-    const cy = contentY + trimHpt / 2 + mmToPtSafe(4);
+  const mainSize = Math.min(trimWpt, trimHpt) * 0.08;
+  const subSize  = mainSize * 0.45;
 
-    const mainTitle = String(story?.book?.title || "Min Sagobok");
-    const subLine   = String(story?.book?.bible?.main_character?.name ? `av ${story.book.bible.main_character.name}` : "Skapad med BokPiloten");
+  // Titel
+  const titleW = nunitoSemi.widthOfTextAtSize(mainTitle, mainSize);
+  titlePage.drawText(mainTitle, {
+    x: cx - titleW / 2,
+    y: cy + mainSize * 0.4,
+    size: mainSize,
+    font: nunitoSemi,
+    color: rgb(0.15, 0.15, 0.25)
+  });
 
-    const mainSize = Math.min(trimWpt, trimHpt) * 0.08;
-    const subSize  = mainSize * 0.45;
+  // Underrad
+  const subW = nunito.widthOfTextAtSize(subLine, subSize);
+  const subY = cy - subSize * 1.4;
+  titlePage.drawText(subLine, {
+    x: cx - subW / 2,
+    y: subY,
+    size: subSize,
+    font: nunito,
+    color: rgb(0.35, 0.35, 0.45)
+  });
 
-    const titleW = nunitoSemi.widthOfTextAtSize(mainTitle, mainSize);
-    titlePage.drawText(mainTitle, { x: cx - titleW / 2, y: cy + mainSize * 0.4, size: mainSize, font: nunitoSemi, color: rgb(0.15, 0.15, 0.25) });
+  // 💜 HJÄRTA (matchar slut-sidan)
+  const gap       = mmToPt(6);
+  const heartSize = mmToPt(14);
+  const heartY    = subY - heartSize - gap;
+  drawHeart(titlePage, cx, heartY, heartSize, rgb(0.50, 0.36, 0.82));
+} catch (e) {
+  tr(trace, "titlepage:error", { error: String(e?.message || e) });
+}
+/* -------- PRINT endpaper (blank sida 2) -------- */
+if (String(deliverable).toLowerCase() === "print") {
+ pdfDoc.addPage([pageW, pageH]); // helt blank
+ }
 
-    const subW = nunito.widthOfTextAtSize(subLine, subSize);
-    const subY = cy - subSize * 1.4;
-    titlePage.drawText(subLine, { x: cx - subW / 2, y: subY, size: subSize, font: nunito, color: rgb(0.35, 0.35, 0.45) });
-
-    const gap       = mmToPtSafe(6);
-    const heartSize = mmToPtSafe(14);
-    const heartY    = subY - heartSize - gap;
-    drawHeart(titlePage, cx, heartY, heartSize, rgb(0.50, 0.36, 0.82));
-  } catch (e) {
-    tr(trace, "titlepage:error", { error: String(e?.message || e) });
-  }
-
-  // ---------- 14 uppslag: vänster = bild, höger = text (+ dekor + sidnr) ----------
-  // Rätt sidnr för högersidor: digital startar på 4, print på 5
-  const firstRight = isPrint ? 5 : 4;
-
+  /* -------- 14 uppslag: bild vänster, text höger + vine -------- */
+  const outer = mmToPt(GRID.outer_mm);
   for (let i = 0; i < 14; i++) {
     const scene = scenePages[i] || {};
     const mainText = String(scene.text || "").trim();
 
-    // Vänster (bild)
-    const left = addFixedPage();
+    // Vänster: bild
+    const left = pdfDoc.addPage([pageW, pageH]);
     left.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(1, 1, 1) });
     try {
       const src = imgByPage.get(scene.page);
@@ -1584,51 +1500,36 @@ const outer    = mmToPtSafe(OUTER_MM);
         const bytes = await getImageBytes(env, src);
         imgObj = await embedImage(pdfDoc, bytes);
       }
-      if (imgObj) {
-        drawImageCover(left, imgObj, 0, 0, pageW, pageH);
-      } else {
-        left.drawText("Bild saknas", { x: contentX + mmToPtSafe(4), y: contentY + mmToPtSafe(6), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
-      }
+      if (imgObj) drawImageCover(left, imgObj, 0, 0, pageW, pageH);
+      else left.drawText("Bild saknas", { x: contentX + mmToPt(4), y: contentY + mmToPt(6), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
     } catch (e) {
       tr(trace, "page:image:error", { page: scene?.page, error: String(e?.message || e) });
-      left.drawText("Bildfel", { x: contentX + mmToPtSafe(4), y: contentY + mmToPtSafe(6), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
+      left.drawText("Bildfel", { x: contentX + mmToPt(4), y: contentY + mmToPt(6), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
     }
 
-    // Höger (text)
-    const right = addFixedPage();
+    // Höger: text
+    const right = pdfDoc.addPage([pageW, pageH]);
     right.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
 
-    const cx = contentX + trimWpt / 2;
-    const cy = contentY + trimHpt / 2 + mmToPtSafe(6);
-
+    const cx = contentX + trimWpt / 2, cy = contentY + trimHpt / 2 + mmToPt(6);
     drawWrappedCenterColor(
-      right,
-      mainText,
-      cx,
-      cy,
-      trimWpt * 0.76,
-      trimHpt * 0.46,
-      nunito,
-      Math.round(baseTextSize * TEXT_SCALE),
-      baseLeading,
-      12,
-      rgb(0.08, 0.08, 0.1),
-      "center"
+      right, mainText, cx, cy, trimWpt * 0.76, trimHpt * 0.46, nunito,
+      Math.round(baseTextSize * TEXT_SCALE), baseLeading, 12, rgb(0.08, 0.08, 0.1), "center"
     );
 
-    // Sidnummer (högersida)
-    const pageNum = firstRight + i * 2; // 4,6,8,... (digital) eller 5,7,9,... (print)
+    // Sidnummer
+    const pageNum = 2 + i * 2 + 1;
     const pn = String(pageNum);
     const pnW = nunito.widthOfTextAtSize(pn, 10);
-    right.drawText(pn, { x: contentX + trimWpt - outer - pnW, y: contentY + mmToPtSafe(6), size: 10, font: nunito, color: rgb(0.35, 0.35, 0.45) });
+    right.drawText(pn, { x: contentX + trimWpt - outer - pnW, y: contentY + mmToPt(6), size: 10, font: nunito, color: rgb(0.35, 0.35, 0.45) });
 
-    // Dekor (vinrankan), säker mot bleed
+    // Vine dekor
     drawVineSafe(right, cx, contentY + trimHpt * 0.34, trimWpt * 0.80, rgb(0.25,0.32,0.55), 2.4);
   }
 
-  // ---------- Slutsida ----------
+  /* -------- SLUT -------- */
   {
-    const page = addFixedPage();
+    const page = pdfDoc.addPage([pageW, pageH]);
     page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
 
     const cx = contentX + trimWpt / 2;
@@ -1638,84 +1539,58 @@ const outer    = mmToPtSafe(OUTER_MM);
       page,
       "Snipp snapp snut – så var sagan slut!",
       cx, topY,
-      trimWpt * 0.76, mmToPtSafe(30),
+      trimWpt * 0.76, mmToPt(30),
       nunito, 22, 1.22, 14, rgb(0.1,0.1,0.12), "center"
     );
 
-    drawHeart(page, cx, contentY + trimHpt * 0.38, mmToPtSafe(14), rgb(0.50, 0.36, 0.82));
+    drawHeart(page, cx, contentY + trimHpt * 0.38, mmToPt(14), rgb(0.50, 0.36, 0.82));
   }
 
-  // ---------- PRINT: sista sidan tom endpaper ----------
-  if (isPrint) addFixedPage();
-
-  // ---------- Baksida ----------
+  /* -------- PRINT endpaper (sista sidan blank) -------- */
+if (String(deliverable).toLowerCase() === "print") {
+  pdfDoc.addPage([pageW, pageH]); // helt blank
+ }
+  /* -------- BACK COVER -------- */
   try {
-    const page = addFixedPage();
+    const page = pdfDoc.addPage([pageW, pageH]);
     const bg = rgb(0.58, 0.54, 0.86);
     page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: bg });
-
     const centerX = contentX + trimWpt / 2;
     const centerY = contentY + trimHpt / 2;
-
-    drawWrappedCenterColor(
-      page,
-      blurb,
-      centerX,
-      centerY,
-      trimWpt * 0.72,
-      trimHpt * 0.36,
-      nunito,
-      14,
-      1.42,
-      12,
-      rgb(1,1,1),
-      "center"
-    );
+    drawWrappedCenterColor(page, blurb, centerX, centerY, trimWpt * 0.72, trimHpt * 0.36, nunito, 14, 1.42, 12, rgb(1,1,1), "center");
   } catch (e) {
     tr(trace, "back:error", { error: String(e?.message || e) });
-    const page = addFixedPage();
-    page.drawText("Baksidan kunde inte renderas.", { x: mmToPtSafe(15), y: mmToPtSafe(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
+    const page = pdfDoc.addPage([pageW, pageH]);
+    page.drawText("Baksidan kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
   }
 
-  // ---------- Spara ----------
   const bytes = await pdfDoc.save();
   tr(trace, "pdf:done", { bytes: bytes.length });
   return bytes;
 }
 
-
-// ============================================================================
-// handleUploadRequest — robust uppladdning till Cloudflare Images (multiple items)
-// Body: { items: [ {kind:"cover"|..., page?:number, data_url:"data:image/..."} ] }
-// Return: { uploads: [ {page|kind, image_id, url} | {error} ] }
-// ============================================================================
-export async function handleUploadRequest(req, env) {
+/* ------------------------- Upload handler ---------------------------- */
+async function handleUploadRequest(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
-    const items = Array.isArray(body?.items) ? body.items : (body?.data_url ? [body] : []);
+    const items = Array.isArray(body?.items) ? body.items : body?.data_url ? [body] : [];
     if (!items.length) return err("Body must include items[] or {page|kind,data_url}", 400);
 
     const uploads = [];
-
     for (const it of items) {
       const hasIdentity = Number.isFinite(it?.page) || it?.kind === "cover";
       if (!hasIdentity) { uploads.push({ page: it?.page ?? null, error: "missing page/kind" }); continue; }
-
-      const durl = it?.data_url;
-      if (typeof durl !== "string" || !durl.startsWith("data:image/")) {
+      if (typeof it?.data_url !== "string" || !it.data_url.startsWith("data:image/")) {
         uploads.push({ page: it.page ?? it.kind, error: "invalid data_url" }); continue;
       }
-
       try {
         const idHint = it.kind === "cover" ? "cover" : `page-${it.page}`;
-        // Du har redan en helper: uploadOneToCFImages(env, { data_url, id })
-        const u = await uploadOneToCFImages(env, { data_url: durl, id: idHint });
+        const u = await uploadOneToCFImages(env, { data_url: it.data_url, id: idHint });
         uploads.push({ page: it.page ?? 0, kind: it.kind, image_id: u.image_id, url: u.url });
       } catch (e) {
         uploads.push({ page: it.page ?? it.kind, error: String(e?.message || e) });
       }
     }
-
     return ok({ uploads });
   } catch (e) {
     return err(e?.message || "Upload failed", 500);
@@ -1724,22 +1599,12 @@ export async function handleUploadRequest(req, env) {
 
 async function gelatoApiCreateOrder(env, payload) {
   const url = `${GELATO_BASE.order}/orders`;
-  const res = await fetch(url, {
+  return gelatoFetch(url, env, {
     method: "POST",
-    headers: gelatoHeaders(env),
+    headers: { ...gelatoHeaders(env) },
     body: JSON.stringify(payload),
   });
-  const text = await res.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch { /* leave text */ }
-  if (!res.ok) {
-    const err = new Error(`Gelato ${res.status}: ${data?.message || res.statusText}`);
-    err.data = data || text;
-    throw err;
-  }
-  return data;
 }
-
 
 
 /* --------------------------- /api/pdf -------------------------------- */
@@ -1753,7 +1618,7 @@ async function handlePdfRequest(req, env) {
   tr(trace, "pdf:entry");
 
   const body = await req.json().catch(() => ({}));
- const { story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text, order_id, store_to_kv } = body || {};
+ const { story, images, mode = "preview", trim = "square200", bleed_mm, watermark_text, order_id, store_to_kv } = body || {};
   if (!story || !Array.isArray(story?.book?.pages)) {
     return new Response(JSON.stringify({ error: "Missing story" }), {
       status: 400,
@@ -1763,7 +1628,6 @@ async function handlePdfRequest(req, env) {
 
   try {
     const bytes = await buildPdf({ story, images: images || [], mode, trim, bleed_mm, watermark_text }, env, trace);
-    
     const filename =
       (String(story?.book?.title || "BokPiloten").replace(/[^\wåäöÅÄÖ\-]+/g, "_")) +
       (mode === "print" ? "_PRINT.pdf" : "_PREVIEW.pdf");
@@ -1785,82 +1649,37 @@ async function handlePdfRequest(req, env) {
 
 async function handlePdfSingleUrl(req, env) {
   try {
-    // ---- 0) Payload ----
     const body = await req.json().catch(() => ({}));
-    let {
-      story,
-      images = [],
-      mode = "preview",
-      deliverable = "digital",
-      order_id,
-      trim
-    } = body || {};
+    const { story, images = [], mode = "preview", order_id, deliverable = "digital" } = body || {};
+    if (!story || !Array.isArray(story?.book?.pages)) return err("Missing story", 400);
 
-    if (!story || !Array.isArray(story?.book?.pages)) {
-      return err("Missing story", 400);
-    }
+    // 1) Bygg HELA boken i en PDF (cover + alla sidor + back cover)
+    const bytes = await buildPdf({ story, images, mode, deliverable }, env, null);
 
-    // ---- 1) Guard för tryck: forcera exakt 200×200 mm, ingen bleed ----
-    if (mode === "print" || deliverable === "print") {
-      trim = "square200";              // 200 × 200 mm interiör (matchar Gelato 8x8” HC)
-      body.includeBleed = false;       // om din builder stödjer flaggan
-    }
-
-    // Safety default om trim inte satt ovan
-    trim = trim || "square200";
-
-    // ---- 2) Bygg HELA boken (cover + titelsida + 14 uppslag + slut + back cover) ----
-    const bytes = await buildPdf(
-      { story, images, mode, deliverable, trim },
-      env,
-      null
-    );
-
-    // ---- 3) Räkna sidor ----
+    // 2) Räkna sidor
     const doc = await PDFDocument.load(bytes);
     const pages = doc.getPageCount();
 
-    // ---- 4) Ladda upp till R2 ----
+    // 3) Ladda upp till R2
     const ts = Date.now();
     const safeTitle = safeTitleFrom(story);
     const key = `${safeTitle}_${ts}_BOOK.pdf`;
     const url = await r2PutPublic(env, key, bytes, "application/pdf");
 
-    // ---- 5) Beräkna inlagesidor (Gelato räknar inte omslag + titelsida) ----
-    // Vår layout: total = interior + 2 (front cover + titelsida)  => interior = max(0, pages - 2)
-    const interior_pages = Math.max(0, pages - 2);
-
-    // ---- 6) Skriv tillbaka till KV om vi har order_id ----
+    // 4) Skriv i KV om vi har order_id
     if (order_id) {
       await kvAttachFiles(env, order_id, {
         single_pdf_url: url,
         single_pdf_key: key,
-        page_count: pages,        // t.ex. 34
-        interior_pages           // t.ex. 32
+        page_count: pages,
       });
     }
 
-    // ---- 7) (Valfritt) snabb dimension-hint i svaret för felsökning ----
-    // Läser första sidan och antar att buildern håller allt lika (vilket den ska göra)
-    const first = doc.getPage(0).getSize();
-    const w_pt = Number(first.width?.toFixed(3));
-    const h_pt = Number(first.height?.toFixed(3));
-
-    return ok({
-      url,
-      key,
-      pages,
-      interior_pages,
-      mode,
-      deliverable,
-      trim,
-      page_size_pt: { w: w_pt, h: h_pt } // ex: ~583.937 x 583.937 ≈ 206×206mm
-    });
+    return ok({ url, key, pages });
   } catch (e) {
     return err(e?.message || "single-url failed", 500);
   }
 }
-
 
 /* --------------------------- /api/diag ------------------------------- */
 async function handleDiagRequest(_req, env) {
@@ -2388,30 +2207,42 @@ async function handleGelatoPrices(req, env) {
 }
 
 async function handleGelatoCreate(req, env) {
-  let bodyText = "";
-  try { bodyText = await req.text(); } catch {}
-  let data = {};
-  try { data = bodyText ? JSON.parse(bodyText) : {}; } catch { data = {}; }
-
-  const { order_id, currency, customer = {}, shipment = {} } = data;
-
-  if (!order_id) return err("Missing order_id", 400);
-
-  const order = await kvGetOrder(env, order_id);
-  if (!order) return err("Order not found", 404);
-
   try {
-    const result = await gelatoCreateOrder(env, { order, shipment, customer, currency });
-    return ok({ ok: true, gelato: result });
-  } catch (e) {
-    return err({
-      error: "Gelato create failed",
-      message: e?.message || String(e),
-      details: e?.data || null,
-    }, 400);
-  }
+    const body = await req.json().catch(()=> ({}));
+    const order_id = body?.order_id;
+    if (!order_id) return err("Missing order_id", 400);
+
+    const ord = await kvGetOrder(env, order_id);
+    if (!ord) return err("Order not found", 404);
+   if (!ord?.files?.single_pdf_url || !Number.isFinite(ord?.files?.page_count)) {
+  return err("Order is missing single_pdf_url or page_count; run /api/pdf/single-url first", 400);
 }
 
+try {
+ const g = await gelatoCreateOrder(env, {
+  order: ord, shipment: body?.shipment || {}, currency: body?.currency || undefined, customer: body?.customer || {}
+ });
+ return ok({ gelato: g, order: await kvGetOrder(env, order_id) });
+ } catch (e) {
+ if (e?.status === 501 || e?.name === "NotImplemented") {
+   return ok({ error: e.message, where: "gelato.create", status: 501 }, { status: 501 });
+ }
+ throw e;
+}
+
+  } catch (e) {
+    if (e?.name === "GelatoError") {
+      return ok({
+        error: e.message,
+        where: "gelato.create",
+        status: e.status,
+        url: e.url,
+        details: e.data || e.raw || null
+      }, { status: 400 });
+    }
+    return err(e?.message || "gelato create failed", 500, { where: "gelato.create" });
+  }
+}
 
 
 // --- product spec helper (needed by createOrder) ---
@@ -2540,48 +2371,24 @@ async function handleGelatoProductInfo(req, env) {
   }
 }
 
-async function handlePdfInspect(req, env) {
-  try {
-    const { url, order_id } = await req.json().catch(()=> ({}));
-
-    let pdfUrl = url;
-    if (!pdfUrl && order_id) {
-      const ord = await kvGetOrder(env, order_id);
-      pdfUrl = ord?.files?.single_pdf_url;
-    }
-    if (!pdfUrl) return err("Missing url or order_id", 400);
-
-    const r = await fetch(pdfUrl, { cf: { cacheTtl: 300, cacheEverything: true } });
-    if (!r.ok) return err(`Fetch ${r.status}`, 502);
-    const bytes = new Uint8Array(await r.arrayBuffer());
-
-    const doc = await PDFDocument.load(bytes);
-    const pages = doc.getPageCount();
-    const sizes = [];
-    const uniq = new Set();
-
-    for (let i = 0; i < pages; i++) {
-      const p = doc.getPage(i);
-      const s = p.getSize(); // points
-      const wpt = Math.round(s.width  * 1000) / 1000;
-      const hpt = Math.round(s.height * 1000) / 1000;
-      const wmm = Math.round(wpt * 25.4 / 72 * 100) / 100;
-      const hmm = Math.round(hpt * 25.4 / 72 * 100) / 100;
-      sizes.push({ page: i+1, w_pt: wpt, h_pt: hpt, w_mm: wmm, h_mm: hmm });
-      uniq.add(`${wpt}x${hpt}`);
-    }
-
-    return ok({
-      pages,
-      uniqueSizes: Array.from(uniq),
-      sizesSample: sizes.slice(0, 6), // första 6 sidor
-      hint: "Alla interiörsidor måste vara EXAKT samma storlek och matcha produktens spec."
-    });
-  } catch (e) {
-    return err(e?.message || "inspect failed", 500);
-  }
+async function ensureSingle(order_id, deliverable) {
+  // deliverable: "digital" för PDF-köp, "print" för tryckt
+  const r = await fetch(`${API}/api/pdf/single-url`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      story: state.story,                // din sparade story
+      images: state.images,              // dina uppladdade/genererade imgs
+      mode: deliverable === "print" ? "print" : "preview",
+      deliverable,                       // 👈 NYTT (se backend patch nedan)
+      order_id                           // skriver single_pdf_url + page_count i KV
+    })
+  });
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || "single-url failed");
+  // j.url = EN laga upp-fil som alla view-knappar ska visa
+  return j.url;
 }
-
 
 
 async function handleGelatoOrderStatus(req, env) {
@@ -2598,42 +2405,24 @@ async function handleGelatoOrderStatus(req, env) {
       if (!ord) return err("Order not found", 404);
       gelatoId = gelatoId || ord?.files?.gelato_order_id;
     }
+
     if (!gelatoId) return err("Missing gelato_id (and order had none)", 400);
 
     const data = await gelatoGetOrder(env, gelatoId);
-    const status = mapGelatoStatus(data);
-
-    // Plocka ut item + filstatus + ev. valideringsfel
-    const item0 = Array.isArray(data?.items) && data.items.length ? data.items[0] : null;
-    const itemDetails = item0 ? {
-      productUid: item0.productUid,
-      pageCount: item0.pageCount,
-      files: item0.files || [],
-      processingStatus: item0.processingStatus || item0.status || null,
-      fileStatus: item0.fileStatus || null,
-      fileValidation: item0.fileValidation || null,
-    } : null;
+    const status = mapGelatoStatus(data); // <— FIX
 
     if (ord?.id) {
       await kvAttachFiles(env, ord.id, {
         gelato_status: status,
-        gelato_status_raw: data?.fulfillmentStatus || data?.status || null,
-        gelato_item_status: itemDetails?.processingStatus || null
+        gelato_status_raw: data?.fulfillmentStatus || data?.status || null
       });
     }
 
-    return ok({
-      gelato_id: gelatoId,
-      status,
-      item: itemDetails,
-      statusHistory: data?.statusHistory || [],
-      raw: data
-    });
+    return ok({ gelato_id: gelatoId, status, raw: data });
   } catch (e) {
     return err(e?.message || "order-status failed", 500);
   }
 }
-
 export default {
   async fetch(req, env, ctx) {
     // 1) Alltid svara på preflight
@@ -2734,7 +2523,13 @@ export default {
       if (req.method === "GET" && pathname === "/api/gelato/order-status") {
         return await handleGelatoOrderStatus(req, env);
       }
- 
+      // --- ROUTES ---
+if (req.method === "GET" && url.pathname === "/api/order/get") {
+  return handleOrderGet(req, env);
+}
+if (req.method === "GET" && url.pathname === "/api/gelato/status") {
+  return handleGelatoStatus(req, env);
+}
 
 if (url.pathname === "/api/gelato/product-info" && req.method === "GET") {
   return handleGelatoProductInfo(req, env);
@@ -2747,9 +2542,6 @@ if (req.method === "POST" && pathname === "/api/pdf/single-url") {
   return await handlePdfSingleUrl(req, env);
 }
 
-if (req.method === "POST" && pathname === "/api/pdf/inspect") {
-  return await handlePdfInspect(req, env);
-}
 
 
       // 9) 404
