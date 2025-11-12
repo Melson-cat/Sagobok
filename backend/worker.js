@@ -311,6 +311,8 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
   };
 
   try {
+    console.log("📦 Payload to Gelato:", JSON.stringify(payload, null, 2));
+
     const g = await gelatoApiCreateOrder(env, payload);
     const gelato_id = g?.id || g?.orderId || null;
     if (gelato_id) {
