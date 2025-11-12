@@ -3,10 +3,21 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
   <title>Tack för ditt köp! – BokPiloten</title>
   <link rel="icon" href="images/pilot-logo.png">
   <link rel="stylesheet" href="./style.css">
   <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;600;700&display=swap" rel="stylesheet" />
+  <style>
+    /* Små, lokala förbättringar utan att röra din globala CSS */
+    .hidden { display: none !important; }
+    .links a + a { margin-left: .5rem; }
+    .retry-row { margin-top: 12px; display: flex; gap: 8px; align-items: center; }
+    .status-inline { display: inline-flex; align-items: center; gap: 8px; }
+    .pill { text-transform: capitalize; }
+    .field input:invalid { outline: 2px solid #e66; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  </style>
 </head>
 <body data-theme="kids">
   <!-- Global Header -->
@@ -37,8 +48,15 @@
   <main class="container">
     <section class="panel" aria-labelledby="thanksTitle">
       <h1 id="thanksTitle" style="margin:0 0 8px">Tack för ditt köp! 🎉</h1>
-      <p id="status" class="muted">Verifierar betalning…</p>
+
+      <p id="status" class="muted status-inline" aria-live="polite">Verifierar betalning…</p>
       <div class="spinner-lg" id="spinner" aria-hidden="true"></div>
+
+      <div class="retry-row hidden" id="retryRow">
+        <button id="btnRetry" class="btn btn-secondary" type="button">Försök igen</button>
+        <button id="btnBack" class="btn" type="button" onclick="location.href='/index.html'">Till startsidan</button>
+        <span id="retryHint" class="muted"></span>
+      </div>
 
       <div class="box hidden" id="orderBox" style="margin-top:12px">
         <div class="stack">
@@ -48,9 +66,12 @@
         </div>
       </div>
 
-      <p id="statusText" class="muted"></p>
+      <p id="statusText" class="muted" aria-live="polite"></p>
       <div class="links" id="downloadLinks"></div>
-      <p id="err" class="hidden muted"></p>
+
+      <div id="errWrap" class="hidden" role="alert" aria-live="assertive" style="margin-top:8px">
+        <p id="err" class="muted"></p>
+      </div>
 
       <!-- PRINT FORM -->
       <form id="printForm" class="form-card hidden" novalidate>
@@ -59,50 +80,50 @@
 
         <div class="form-row">
           <div class="field">
-            <label>Förnamn</label>
-            <input id="firstName" required />
+            <label for="firstName">Förnamn</label>
+            <input id="firstName" required autocomplete="given-name" />
           </div>
           <div class="field">
-            <label>Efternamn</label>
-            <input id="lastName" required />
+            <label for="lastName">Efternamn</label>
+            <input id="lastName" required autocomplete="family-name" />
           </div>
         </div>
 
         <div class="form-row">
           <div class="field">
-            <label>E-post</label>
-            <input id="email" type="email" placeholder="namn@exempel.se" />
+            <label for="email">E-post</label>
+            <input id="email" type="email" placeholder="namn@exempel.se" autocomplete="email" />
           </div>
           <div class="field">
-            <label>Telefon</label>
-            <input id="phone" type="tel" placeholder="0701234567" />
+            <label for="phone">Telefon</label>
+            <input id="phone" type="tel" placeholder="0701234567" autocomplete="tel" />
           </div>
         </div>
 
         <div class="field">
-          <label>Adressrad 1</label>
-          <input id="address1" required />
+          <label for="address1">Adressrad 1</label>
+          <input id="address1" required autocomplete="address-line1" />
         </div>
         <div class="field">
-          <label>Adressrad 2 (valfritt)</label>
-          <input id="address2" />
+          <label for="address2">Adressrad 2 (valfritt)</label>
+          <input id="address2" autocomplete="address-line2" />
         </div>
 
         <div class="form-row">
           <div class="field">
-            <label>Postnummer</label>
-            <input id="postCode" required />
+            <label for="postCode">Postnummer</label>
+            <input id="postCode" required inputmode="numeric" pattern="[0-9 ]{3,10}" autocomplete="postal-code" />
           </div>
           <div class="field">
-            <label>Ort</label>
-            <input id="city" required />
+            <label for="city">Ort</label>
+            <input id="city" required autocomplete="address-level2" />
           </div>
         </div>
 
         <div class="form-row">
           <div class="field">
-            <label>Land</label>
-            <select id="country">
+            <label for="country">Land</label>
+            <select id="country" autocomplete="country">
               <option value="SE" selected>Sverige (SE)</option>
               <option value="NO">Norge (NO)</option>
               <option value="FI">Finland (FI)</option>
@@ -112,14 +133,14 @@
             </select>
           </div>
           <div class="field">
-            <label>Fraktmetod</label>
-            <select id="shipmentMethod"></select>
+            <label for="shipmentMethod">Fraktmetod</label>
+            <select id="shipmentMethod" aria-live="polite"></select>
           </div>
         </div>
 
         <div class="actions">
           <button class="btn btn-primary" id="btnSubmitPrint" type="submit">Skicka till tryck</button>
-          <span class="muted" id="printHint"></span>
+          <span class="muted" id="printHint" aria-live="polite"></span>
         </div>
       </form>
     </section>
@@ -152,12 +173,10 @@
   })();
   </script>
 
-  <!-- Success-logik (samma som vi arbetat fram, lätt städad) -->
-  <script>
-
+  <!-- Success-logik -->
+ <script>
 (() => {
   const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
-  const PUBLIC_BASE = "https://sagobok.pages.dev"; // byt vid behov
 
   /* -------------------------- DOM helpers -------------------------- */
   const $id  = (id) => document.getElementById(id);
@@ -170,12 +189,16 @@
   const el = {
     status:   $id("status"),
     spinner:  $id("spinner"),
+    retryRow: $id("retryRow"),
+    btnRetry: $id("btnRetry"),
+    retryHint:$id("retryHint"),
     box:      $id("orderBox"),
     pillKind: $id("pillKind"),
     orderId:  $id("orderId"),
     amount:   $id("amount"),
     currency: $id("currency"),
     statusText:$id("statusText"),
+    errWrap:  $id("errWrap"),
     err:      $id("err"),
     links:    $id("downloadLinks"),
     form:     $id("printForm"),
@@ -217,11 +240,11 @@
       fetchJSON(`${BACKEND}/api/checkout/order-id?session_id=${encodeURIComponent(sid)}`),
     getOrder: (id) =>
       fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(id)}`),
-    buildAndAttach: (id) =>
-      fetchJSON(`${BACKEND}/api/pdf/build-and-attach`, {
+    ensureSingleUrl: ({ story, images, mode, order_id, deliverable }) =>
+      fetchJSON(`${BACKEND}/api/pdf/single-url`, {
         method:"POST",
         headers:{ "content-type":"application/json" },
-        body: JSON.stringify({ order_id:id })
+        body: JSON.stringify({ story, images, mode, order_id, deliverable })
       }),
     getShipMethods: (country) =>
       fetchJSON(`${BACKEND}/api/gelato/shipment-methods?country=${encodeURIComponent(country)}`),
@@ -236,9 +259,9 @@
   /* -------------------------- UI helpers --------------------------- */
   function setBanner(msg){ setText(el.status, msg); }
   function setSub(msg){ setText(el.statusText, msg); }
-  function clearErr(){ if (el.err){ el.err.textContent=""; hide(el.err); } }
+  function clearErr(){ if (el.err){ el.err.textContent=""; hide(el.errWrap); } }
   function showErr(msg){
-    if (el.err){ el.err.textContent = String(msg || "Ett fel uppstod."); show(el.err); }
+    if (el.err){ el.err.textContent = String(msg || "Ett fel uppstod."); show(el.errWrap); }
   }
   function link(href, text){
     const a = document.createElement("a");
@@ -247,9 +270,19 @@
     a.textContent = text;
     return a;
   }
+
   function renderFiles(files){
     if (!el.links) return;
     el.links.innerHTML = "";
+
+    // ✅ En-fil förstahandsval
+    if (files?.single_pdf_url) {
+      el.links.appendChild(link(files.single_pdf_url, "Ladda ner boken (PDF)"));
+      return;
+    }
+
+    // ⬇️ Fallback för äldre ordrar
+    if (files?.print_url)    el.links.appendChild(link(files.print_url, "Ladda ner boken (PDF)"));
     if (files?.interior_url) el.links.appendChild(link(files.interior_url, "Ladda ner inlagan (PDF)"));
     if (files?.cover_url)    el.links.appendChild(link(files.cover_url, "Ladda ner omslaget (PDF)"));
   }
@@ -260,7 +293,6 @@
       sessionStorage.setItem("bp:last_session_id", sid);
       localStorage.setItem("bp:last_session_id", sid);
     }catch{}
-    // säkerställ att session_id finns i URL:en för framtida klick/refresh
     const url = new URL(location.href);
     if (url.searchParams.get("session_id") !== sid){
       url.searchParams.set("session_id", sid);
@@ -281,33 +313,62 @@
     try { return !!sessionStorage.getItem(gelatoSubmittedKey(order_id)); }catch{ return false; }
   }
 
-  /* ------------------------ Core flows ----------------------------- */
-  async function ensurePaid(order_id, timeoutMs=120000, pollMs=1500){
+  /* ------------------------ Core helpers --------------------------- */
+  async function pollWithBackoff(fn, {
+    timeoutMs = 120000,
+    baseDelay = 800,
+    maxDelay = 4000,
+    factor = 1.5,
+    isDone = (val) => !!val
+  } = {}) {
     const t0 = Date.now();
-    while (Date.now() - t0 < timeoutMs){
-      const o = await api.getOrder(order_id);
-      if (o?.status === "paid" || o?.status === "ready") return o;
-      await sleep(pollMs);
+    let delay = baseDelay;
+    while (Date.now() - t0 < timeoutMs) {
+      const v = await fn().catch(() => null);
+      if (isDone(v)) return v;
+      await sleep(delay);
+      delay = Math.min(maxDelay, Math.floor(delay * factor));
     }
-    throw new Error("Betalningen är inte bekräftad ännu. Uppdatera sidan om en stund.");
+    throw new Error("Timeout – försöket tog för lång tid. Försök igen.");
   }
 
-  async function ensureFiles(order_id){
+  async function ensurePaid(order_id){
+    return pollWithBackoff(
+      () => api.getOrder(order_id),
+      { isDone: (o) => o && (o.status === "paid" || o.status === "ready") }
+    );
+  }
+
+  // 🔑 Skapa & spara EN PDF om den inte redan finns
+  async function ensureSingle(order_id, deliverable){
+    // Hämta ev. existerande
     let o = await api.getOrder(order_id);
-    const needInt = !o?.files?.interior_url;
-    const needCov = !o?.files?.cover_url;
-    if (needInt || needCov){
-      setBanner("Skapar tryckfiler…");
-      await api.buildAndAttach(order_id);
+    if (o?.files?.single_pdf_url) return o; // redan klart
+
+    // Vi har inte story/images i success-sidan; backend bygger från inskickad order-kontekst.
+    // Därför kallar vi single-url utan story/images här – backend använder order.files/images i KV.
+    // Om din backend kräver story/images: skicka dem via success (lägg dem i sessionStorage tidigare i flödet).
+    try {
+      setBanner("Skapar din bok (PDF) …");
+      await api.ensureSingleUrl({
+        story: o?.draft?.story || o?.story || undefined, // best effort om finns
+        images: o?.draft?.images || o?.images || undefined,
+        mode: (deliverable === "print") ? "print" : "preview",
+        order_id,
+        deliverable
+      });
       await sleep(800);
       o = await api.getOrder(order_id);
+    } catch (e){
+      // Om backend kräver story/images och de saknas: visa tydligt fel
+      throw new Error(e?.message || "Misslyckades skapa enfilspdf.");
     }
-    renderFiles(o.files || {});
     return o;
   }
 
   async function fillShipMethods(country){
     try{
+      el.f.shipMeth.innerHTML = `<option disabled>Hämtar fraktmetoder…</option>`;
       const data = await api.getShipMethods(country);
       const list = data?.shipmentMethods || [];
       el.f.shipMeth.innerHTML = "";
@@ -326,18 +387,24 @@
     }
   }
 
+  function normalizePostcode(country, value){
+    const v = (value || "").trim();
+    if (country === "SE") {
+      const digits = v.replace(/\D+/g,"");
+      if (digits.length === 5) return digits.slice(0,3) + " " + digits.slice(3);
+    }
+    return v;
+  }
+
   function wireForm(order_id, paidOrder){
     el.f.country.addEventListener("change", () => fillShipMethods(el.f.country.value));
 
-    // skydda mot dubbel-submit
     let submitting = false;
-
     el.form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       if (submitting) return;
       clearErr();
 
-      // om redan skickad: dölj form och visa banner
       if (wasGelatoSubmitted(order_id)){
         hide(el.form);
         setBanner("Ordern är redan skickad till tryckpartnern ✔");
@@ -345,6 +412,11 @@
       }
 
       try{
+        if (!el.form.checkValidity()) {
+          el.form.reportValidity();
+          return;
+        }
+
         submitting = true;
         el.f.btn.disabled = true;
         setBanner("Skickar till tryck…");
@@ -354,7 +426,7 @@
           addressLine1: el.f.address1.value.trim(),
           addressLine2: el.f.address2.value.trim(),
           city:         el.f.city.value.trim(),
-          postCode:     el.f.postCode.value.trim(),
+          postCode:     normalizePostcode(el.f.country.value, el.f.postCode.value),
           country:      el.f.country.value,
           state:        "",
           shipmentMethodUid: el.f.shipMeth.value || undefined,
@@ -366,7 +438,6 @@
           phone:     el.f.phone.value.trim(),
         };
 
-        // mini-validering så vi inte skickar tom adress
         if (!shipment.addressLine1 || !shipment.city || !shipment.postCode || !shipment.country){
           throw new Error("Fyll i adress, postnummer, ort och land.");
         }
@@ -401,15 +472,16 @@
     try{
       clearErr();
       show(el.spinner);
+      hide(el.retryRow);
       setBanner("Verifierar betalning…");
 
       // 1) Hämta + persist session_id
       let sid = loadSessionId();
       if (!sid){
-        // om stripe redan gav rätt URL, kommer sid finnas; annars mjuk fallback
         showErr("Saknar session_id i URL:en.");
-        setSub("Om du nyss betalade, vänta 1–2 sekunder och uppdatera – eller gå tillbaka till kassan.");
+        setSub("Om du nyss betalade, uppdatera sidan – eller gå tillbaka till kassan.");
         hide(el.spinner);
+        show(el.retryRow);
         return;
       }
       persistSessionId(sid);
@@ -420,7 +492,12 @@
 
       let v = null;
       try { v = await api.verifySession(sid); } catch {}
-      order_id = order_id || v?.order_id || (await api.mapOrderId(sid)).order_id;
+      try {
+        if (!order_id) {
+          const mapped = await api.mapOrderId(sid);
+          order_id = mapped?.order_id || null;
+        }
+      } catch {}
       if (!order_id) throw new Error("Kunde inte koppla session till order.");
 
       amount   = v?.amount_total ?? null;
@@ -432,32 +509,38 @@
       // 4) Typ (printed/pdf). URL vinner → annars KV/draft/kind → default pdf
       const kind = (qs("kind") || paidOrder?.kind || paidOrder?.draft?.kind || "pdf").toLowerCase();
 
-      // 5) Topprad
+      // 5) deliverable mapping
+      const deliverable = (kind === "printed") ? "print" : "digital";
+      const mode = (deliverable === "print") ? "print" : "preview";
+
+      // 6) Topprad
       show(el.box);
       setText(el.orderId, order_id);
       setText(el.pillKind, kind === "printed" ? "Tryckt bok" : "Digital PDF");
       setText(el.amount, amount != null ? (amount/100).toFixed(2) : "—");
       setText(el.currency, currency);
 
-      // 6) Säkerställ filer
-      const o = await ensureFiles(order_id);
-
-      // 7) Auto-öppna inlaga en gång per session (trevlig UX)
-      if (o?.files?.interior_url){
-        const key = `bp:open:${o.files.interior_url}`;
-        if (!sessionStorage.getItem(key)){
-          try { window.open(o.files.interior_url, "_blank", "noopener"); } catch {}
-          sessionStorage.setItem(key, "1");
-        }
+      // 7) Säkerställ EN fil (skapas vid behov) och rendera länkar
+      let o = await api.getOrder(order_id);
+      if (!o?.files?.single_pdf_url) {
+        o = await ensureSingle(order_id, deliverable);
       }
-
+      renderFiles(o.files || {});
       hide(el.spinner);
 
-      // 8) Branch enligt produkt
+      // 8) Produkt-branch
       if (kind !== "printed"){
         setBanner("Klart! Din PDF är redo.");
-        setSub("Du kan ladda ner via länkarna nedan. Ett kvitto skickas via Stripe.");
+        setSub("Du kan ladda ner via länken nedan. Kvitto skickas via Stripe.");
         hide(el.form);
+        // Auto-öppna en gång per session
+        if (o?.files?.single_pdf_url){
+          const key = `bp:open:${o.files.single_pdf_url}`;
+          if (!sessionStorage.getItem(key)){
+            try { window.open(o.files.single_pdf_url, "_blank", "noopener"); } catch {}
+            sessionStorage.setItem(key, "1");
+          }
+        }
         return;
       }
 
@@ -477,15 +560,15 @@
         wireForm(order_id, paidOrder);
       }
 
-      // Dev-diagnostik
+      // Dev-diagnostik (frivilligt)
       console.table({
         order_id,
         session_id: sid,
         kind,
+        deliverable,
         amount,
         currency,
-        has_interior: !!o?.files?.interior_url,
-        has_cover:    !!o?.files?.cover_url,
+        single_pdf_url: o?.files?.single_pdf_url || "(none)",
         gelato_order: o?.files?.gelato_order_id || "(none)"
       });
 
@@ -493,18 +576,24 @@
       hide(el.spinner);
       setBanner("Ett fel uppstod.");
       showErr(e?.message || "Okänt fel.");
+      show(el.retryRow);
+      el.retryHint.textContent = "Om felet kvarstår: gå till startsidan och försök igen från kassan.";
       console.error("success:init error:", e);
     }
   }
 
+  // Retry-knapp
   if (document.readyState === "loading"){
-    document.addEventListener("DOMContentLoaded", init, { once:true });
+    document.addEventListener("DOMContentLoaded", () => {
+      el.btnRetry?.addEventListener("click", init);
+      init();
+    }, { once:true });
   } else {
+    el.btnRetry?.addEventListener("click", init);
     init();
   }
 })();
+</script>
 
-
-  </script>
 </body>
 </html>

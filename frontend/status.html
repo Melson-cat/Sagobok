@@ -137,25 +137,39 @@
     const getOrder     = (id)  => fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(id)}`);
     const getOrderId   = (sid) => fetchJSON(`${BACKEND}/api/checkout/order-id?session_id=${encodeURIComponent(sid)}`).then(j => j.order_id || null);
 
-    function renderFiles(files) {
-      el.links.innerHTML = "";
-      if (files?.interior_url) {
-        const a = document.createElement("a");
-        a.className = "btn";
-        a.href = files.interior_url;
-        a.target = "_blank"; a.rel="noopener";
-        a.textContent = "Ladda ner inlagan (PDF)";
-        el.links.appendChild(a);
-      }
-      if (files?.cover_url) {
-        const a = document.createElement("a");
-        a.className = "btn";
-        a.href = files.cover_url;
-        a.target = "_blank"; a.rel="noopener";
-        a.textContent = "Ladda ner omslaget (PDF)";
-        el.links.appendChild(a);
-      }
+  // ...
+  function renderFiles(files) {
+    el.links.innerHTML = "";
+
+    if (files?.print_url) {
+      const a = document.createElement("a");
+      a.className = "btn";
+      a.href = files.print_url;
+      a.target = "_blank"; a.rel = "noopener";
+      a.textContent = "Ladda ner boken (PDF)";
+      el.links.appendChild(a);
+      return;
     }
+
+    if (files?.interior_url) {
+      const a = document.createElement("a");
+      a.className = "btn";
+      a.href = files.interior_url;
+      a.target = "_blank"; a.rel="noopener";
+      a.textContent = "Ladda ner inlagan (PDF)";
+      el.links.appendChild(a);
+    }
+    if (files?.cover_url) {
+      const a = document.createElement("a");
+      a.className = "btn";
+      a.href = files.cover_url;
+      a.target = "_blank"; a.rel="noopener";
+      a.textContent = "Ladda ner omslaget (PDF)";
+      el.links.appendChild(a);
+    }
+  }
+  
+
 
     function setBar(msg) { setText(el.bar, msg); }
     function showErr(msg) { setText(el.err, msg); show(el.err); }

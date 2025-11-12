@@ -523,6 +523,7 @@ async function onBuyPdf() {
     images: buildImagesPayload(),
     trim: "square210",
     mode: "final"
+      deliverable: "digital" 
   };
 
   try { localStorage.setItem(CHECKOUT_DRAFT_KEY, JSON.stringify(draft)); } catch {}
@@ -919,108 +920,6 @@ async function fetchOrderIdFromSessionId(sessionId) {
     const j = await r.json().catch(() => ({}));
     return j?.order_id || null;
   } catch { return null; }
-}
-
-
-async function handleStripeReturnIfAny() {
-  const u = new URL(location.href);
-  const sid = u.searchParams.get("session_id");
-
-  const looksLikeSuccessPage = /success/i.test(location.pathname) || !!sid;
-  if (!looksLikeSuccessPage) return;
-
-  try {
-    setStatus("🔎 Verifierar betalning…", 96);
-
-    // 1) Verifiera betalning via backend (Stripe)
-    let paid = false;
-    if (sid) {
-      const v = await fetch(`${API}/api/checkout/verify?session_id=${encodeURIComponent(sid)}`, { cache: "no-store" });
-      if (v.ok) {
-        const j = await v.json();
-        paid = !!j?.paid;
-
-        // hämta & spara order_id så vi kan polla/visa kvitto även vid refresh
-        if (j?.order_id) saveOrderId(j.order_id);
-        else {
-          const oidGuess = await fetchOrderIdFromSessionId(sid);
-          if (oidGuess) saveOrderId(oidGuess);
-        }
-      }
-    }
-
-    if (paid) {
-      setStatus("✅ Betalning bekräftad!", 100);
-
-      // (valfritt) auto-final PDF från sparat draft
-      const draftRaw = localStorage.getItem(CHECKOUT_DRAFT_KEY);
-      if (draftRaw) {
-        try {
-          const draft = JSON.parse(draftRaw);
-          const res = await fetch(`${API}/api/pdf`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              story: draft.story,
-              images: draft.images,
-              trim: draft.trim || "square210",
-              mode: "final"
-            })
-          });
-          if (res.ok) {
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            window.open(url, "_blank");
-          }
-        } catch (e) {
-          console.warn("Auto-final PDF misslyckades:", e);
-        }
-      }
-      return; // klart
-    }
-
-    // 2) Fallback: polla KV (webhooken uppdaterar order->paid)
-    const oid = loadOrderId();
-    if (oid) {
-      const st = await pollOrderPaid(oid);
-      if (st?.status === "paid") {
-        setStatus("✅ Betalning bekräftad!", 100);
-
-        // (valfritt) auto-final PDF från sparat draft
-        const draftRaw = localStorage.getItem(CHECKOUT_DRAFT_KEY);
-        if (draftRaw) {
-          try {
-            const draft = JSON.parse(draftRaw);
-            const res = await fetch(`${API}/api/pdf`, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                story: draft.story,
-                images: draft.images,
-                trim: draft.trim || "square210",
-                mode: "final"
-              })
-            });
-            if (res.ok) {
-              const blob = await res.blob();
-              const url = URL.createObjectURL(blob);
-              window.open(url, "_blank");
-            }
-          } catch (e) {
-            console.warn("Auto-final PDF misslyckades:", e);
-          }
-        }
-        return; // klart
-      }
-    }
-
-    // 3) Varken verify eller KV sa paid
-    setStatus("ℹ️ Betalning ej verifierad ännu.", 100);
-
-  } catch (e) {
-    console.warn(e);
-    setStatus("⚠️ Kunde inte verifiera betalning just nu.", 100);
-  }
 }
 
 

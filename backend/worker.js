@@ -105,14 +105,6 @@ function fontSpecForReadingAge(ra = 6) {
   return { size: 16, leading: 1.34 };
 }
 
-async function gelatoGetCoverDimensions(env, productUid, pageCount) {
-  if (!productUid) throw new Error("Missing productUid");
-  if (!Number.isFinite(pageCount)) throw new Error("Missing/invalid pageCount");
-  const u = new URL(`${GELATO_BASE.product}/products/${encodeURIComponent(productUid)}/cover-dimensions`);
-  u.searchParams.set("pageCount", String(pageCount));
-  return gelatoFetch(u.toString(), env); // använder redan X-API-KEY headers
-}
-
 /* ------------------------- HTTP helpers ------------------------------ */
 async function fetchJSON(url, opts) {
   const r = await fetch(url, opts);
@@ -248,40 +240,23 @@ async function gelatoGetPrices(env, productUid, { country, currency, pageCount }
 }
 
 async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency }) {
- // Tryckt bok (separata interior/cover) pausad i denna version.
-   // Skydda mot fel och ge tydlig signal till frontend.
- const e = new Error("Printed flow temporarily disabled while we migrate to single-PDF pipeline.");
-  e.name = "NotImplemented";
-  e.status = 501;
-  throw e;
-
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
-  const interiorPages = Number(order.files.interior_pages);
-  if (!Number.isFinite(interiorPages) || interiorPages <= 0) throw new Error("Bad interior_pages");
+  const singleUrl = order?.files?.single_pdf_url;
+  const pageCount = Number(order?.files?.page_count);
+  if (!singleUrl) throw new Error("Order is missing files.single_pdf_url");
+  if (!Number.isFinite(pageCount) || pageCount <= 0) throw new Error("Order is missing/invalid files.page_count");
 
   const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
   const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
   const CURR          = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
 
-  // (Valfri) preflight – prova att läsa validPageCounts och varna tidigt
-  try {
-    const info = await gelatoFetch(`${GELATO_BASE.product}/products/${encodeURIComponent(productUid)}`, env);
-    const valid = Array.isArray(info?.validPageCounts) ? info.validPageCounts.map(Number) : null;
-    if (valid && valid.length && !valid.includes(interiorPages)) {
-      throw new Error(`Interior has ${interiorPages} pages, but product allows: ${valid.slice(0,12).join(", ")}…`);
-    }
-  } catch (e) {
-    // Bara varna – blockera inte om product-API inte ger listan
-    console.warn("Gelato pageCount preflight:", e?.message || e);
-  }
-
   const cust = {
     firstName: customer.firstName || "Test",
     lastName:  customer.lastName  || "Kund",
     email:     DRY_RUN ? FORCE_TEST_TO : (customer.email || FORCE_TEST_TO),
-    phone:     (shipment.phone && String(shipment.phone).trim()) || (DRY_RUN ? "0700000000" : "0700000000"),
+    phone:     (shipment.phone && String(shipment.phone).trim()) || "0700000000",
   };
 
   const country = (shipment.country || "SE").toUpperCase();
@@ -300,15 +275,25 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
 
   const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
 
+  // === Single-PDF mode ===
+  // Plan 1: ren single-fil
+  let files = [{ type: "content", url: singleUrl }];
+
+  // Flagga för fallback till dual-field (samma källa), om Gelato kräver det
+  const REQUIRE_COVER_TOO = String(env.GELATO_REQUIRE_COVER_TOO || "").toLowerCase() === "true";
+  if (REQUIRE_COVER_TOO) {
+    files = [
+      { type: "content", url: singleUrl },
+      { type: "cover",   url: singleUrl },
+    ];
+  }
+
   const item = {
     itemReferenceId: `item-${order.id}`,
     productUid,
     quantity: 1,
-    pageCount: interiorPages,               // ← KRITISKT FÖR v4
-    files: [
-      { type: "content", url: order.files.interior_url }, // ← INTE "pages" här
-      { type: "cover",   url: order.files.cover_url }
-    ],
+    pageCount,         // viktigt!
+    files,
   };
 
   const payload = {
@@ -317,31 +302,45 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
     customerReferenceId: "guest",
     currency: CURR,
     items: [item],
-    shippingAddress,                         // v4 top-level
+    shippingAddress,
     ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
     metadata: [
       { key: "bp_kind", value: String(order.kind || order?.draft?.kind || "printed") },
-      { key: "bp_interiors", value: String(interiorPages) }
+      { key: "bp_pages", value: String(pageCount) }
     ]
   };
 
-  // Debug som syns i dina Worker-loggar vid 400
-  console.log("GELATO CREATE PAYLOAD", {
-    productUid,
-    interiorPages,
-    pageCount: payload.items[0].pageCount,
-    files: payload.items[0].files
-  });
-
-  const g = await gelatoApiCreateOrder(env, payload);
-  const gelato_id = g?.id || g?.orderId || null;
-
-  if (gelato_id) {
-    await kvIndexGelatoOrder(env, gelato_id, order.id);
-    await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id });
+  try {
+    const g = await gelatoApiCreateOrder(env, payload);
+    const gelato_id = g?.id || g?.orderId || null;
+    if (gelato_id) {
+      await kvIndexGelatoOrder(env, gelato_id, order.id);
+      await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id });
+    }
+    return g;
+  } catch (e) {
+    // Automatisk fallback: om valideringsfel antyder att "cover" krävs
+    const validation = e?.data?.validationErrors || e?.data?.fields || [];
+    const needsCover = JSON.stringify(validation).toLowerCase().includes("cover");
+    if (!REQUIRE_COVER_TOO && needsCover) {
+      // prova igen med dual-field från samma singleUrl
+      const retryPayload = structuredClone(payload);
+      retryPayload.items[0].files = [
+        { type: "content", url: singleUrl },
+        { type: "cover",   url: singleUrl },
+      ];
+      const g2 = await gelatoApiCreateOrder(env, retryPayload);
+      const gelato_id2 = g2?.id || g2?.orderId || null;
+      if (gelato_id2) {
+        await kvIndexGelatoOrder(env, gelato_id2, order.id);
+        await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id2 });
+      }
+      return g2;
+    }
+    throw e;
   }
-  return g;
 }
+
 
 
 
@@ -506,10 +505,7 @@ async function handleStripeWebhook(req, env) {
           await kvPutOrder(env, { id: orderId, created_at: Date.now(), updated_at: Date.now(), ...patch });
         }
 
-        // ❌ INTE: bygga PDF eller skapa Gelato här
-        // Success-sidan ansvarar nu för:
-        // 1) /api/pdf/build-and-attach (om filer saknas)
-        // 2) /api/gelato/create (med användarens fraktval)
+      
         break;
       }
 
@@ -1300,7 +1296,7 @@ async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
   return await pdfDoc.embedFont(standardName);
 }
 /* ---------------------------- Build PDF ------------------------------ */
-async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text }, env, trace) {
+async function buildPdf({ story, images, mode = "preview", trim = "square210", bleed_mm, watermark_text, deliverable = "digital" }, env, trace) {
   tr(trace, "pdf:start");
   const trimSpec = TRIMS[trim] || TRIMS.square210;
   const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
@@ -1483,7 +1479,10 @@ try {
 } catch (e) {
   tr(trace, "titlepage:error", { error: String(e?.message || e) });
 }
-
+/* -------- PRINT endpaper (blank sida 2) -------- */
+if (String(deliverable).toLowerCase() === "print") {
+ pdfDoc.addPage([pageW, pageH]); // helt blank
+ }
 
   /* -------- 14 uppslag: bild vänster, text höger + vine -------- */
   const outer = mmToPt(GRID.outer_mm);
@@ -1547,6 +1546,10 @@ try {
     drawHeart(page, cx, contentY + trimHpt * 0.38, mmToPt(14), rgb(0.50, 0.36, 0.82));
   }
 
+  /* -------- PRINT endpaper (sista sidan blank) -------- */
+if (String(deliverable).toLowerCase() === "print") {
+  pdfDoc.addPage([pageW, pageH]); // helt blank
+ }
   /* -------- BACK COVER -------- */
   try {
     const page = pdfDoc.addPage([pageW, pageH]);
@@ -1604,67 +1607,6 @@ async function gelatoApiCreateOrder(env, payload) {
 }
 
 
-// Bygger inlaga → preflightar/paddar till exakt sidor → bygger omslag med N → laddar upp → sparar på ordern.
-async function handleBuildAndAttach(req, env) {
-  try {
-    const b = await req.json().catch(() => ({}));
-    const order_id = b?.order_id;
-    if (!order_id) return err("Missing order_id", 400);
-
-    // Hämta order + draft
-    const ord = await kvGetOrder(env, order_id);
-    if (!ord) return err("Order not found", 404);
-
-    const story  = b?.story  || ord?.draft?.story;
-    const images = b?.images || ord?.draft?.images || [];
-    if (!story?.book?.pages) return err("Missing story (neither body nor draft had it)", 400);
-
-    // 1) Bygg inlaga (grund)
-    const interiorBytesBase = await buildFinalInteriorPdf(env, story, images);
-
-    // 2) Preflight mot Gelato: padda till EXAKT antal om "requires exactly N page(s)"
-    const productUid = env.GELATO_PRODUCT_UID || null;
-    const ensured = await ensureInteriorMeetsProductRequirement(env, productUid, interiorBytesBase);
-    const finalInteriorBytes = ensured.bytes;
-    const finalInteriorPages = ensured.pages; // ← EXAKT antal som Gelato kräver vid behov (t.ex. 37)
-
-    // 3) Bygg omslag med mått för INLAGA-sidor = finalInteriorPages (OBS: inte +4)
-    const coverBytes = await buildFinalCoverPdf(env, story, images, finalInteriorPages);
-
-    // 4) Ladda upp till R2
-    const ts = Date.now();
-    const safeTitle = safeTitleFrom(story);
-
-    const interior_key = `${safeTitle}_${ts}_INTERIOR.pdf`;
-    const cover_key    = `${safeTitle}_${ts}_COVER.pdf`;
-
-    const interior_url = await r2PutPublic(env, interior_key, finalInteriorBytes, "application/pdf");
-    const cover_url    = await r2PutPublic(env, cover_key,    coverBytes,        "application/pdf");
-
-    // 5) Spara metadata (kritisk: interior_pages = EXAKT antal vi skickar till Gelato)
-    const updated = await kvAttachFiles(env, order_id, {
-      interior_url, interior_key,
-      cover_url,    cover_key,
-      interior_pages: finalInteriorPages,
-    });
-console.log("BUILD&ATTACH", {
-  order_id,
-  interior_pages: finalInteriorPages,
-  interior_key, cover_key
-});
-
-    return ok({
-      order_id,
-      files: { interior_url, interior_key, cover_url, cover_key },
-      order: { id: updated.id, status: updated.status, files: updated.files },
-    });
-  } catch (e) {
-    return err(e?.message || "build-and-attach failed", 500);
-  }
-}
-
-
-
 /* --------------------------- /api/pdf -------------------------------- */
 async function handlePdfRequest(req, env) {
   const url = new URL(req.url);
@@ -1708,11 +1650,11 @@ async function handlePdfRequest(req, env) {
 async function handlePdfSingleUrl(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
-    const { story, images = [], mode = "preview", order_id } = body || {};
+    const { story, images = [], mode = "preview", order_id, deliverable = "digital" } = body || {};
     if (!story || !Array.isArray(story?.book?.pages)) return err("Missing story", 400);
 
     // 1) Bygg HELA boken i en PDF (cover + alla sidor + back cover)
-    const bytes = await buildPdf({ story, images, mode }, env, null);
+    const bytes = await buildPdf({ story, images, mode, deliverable }, env, null);
 
     // 2) Räkna sidor
     const doc = await PDFDocument.load(bytes);
@@ -1930,68 +1872,17 @@ async function handleCheckoutOrderId(req, env) {
     return ok({ order_id, source: "stripe" });
   } catch (e) { return err(e?.message || "order-id lookup failed", 500); }
 }
-
 /* ====================== STORY & IMAGES ====================== */
-// Dessa använder dina befintliga helpers: openaiJSON, OUTLINE_SYS, STORY_SYS,
-// heroDescriptor, getCameraHints, normalizePlan, makeCoherenceCode, deriveWardrobeSignature,
-// characterCardPrompt, geminiImage, buildFramePrompt, styleHint, shotLine.
-async function handleStory(req, env) {
-  try {
-    const body = await req.json().catch(() => ({}));
-    const { name, age, pages, category, style, theme, traits, reading_age } = body || {};
-    const targetAge = Number.isFinite(parseInt(reading_age, 10))
-      ? parseInt(reading_age, 10)
-      : (category || "kids") === "pets" ? 8 : parseInt(age || 6, 10);
+/* Helpers som redan finns i filen (används här):
+   - ok, err
+   - openaiJSON, OUTLINE_SYS, STORY_SYS
+   - heroDescriptor, getCameraHints, normalizePlan
+   - makeCoherenceCode, deriveWardrobeSignature
+   - styleGuard, geminiImage
+*/
 
-    const outlineUser = `
-${heroDescriptor({ category, name, age, traits })}
-Kategori: ${category || "kids"}.
-Läsålder: ${targetAge}.
-Önskat tema/poäng (om angivet): ${theme || "vänskap"}.
-Antal sidor: ${pages || 12}.
-Returnera enbart json.`.trim();
-
-    const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
-
-    const storyUser = `
-OUTLINE:
-${JSON.stringify(outline)}
-Skriv en engagerande, händelserik saga som är rolig att läsa högt.
-Variera miljöer och visuella ögonblick mellan varje sida.
-${heroDescriptor({ category, name, age, traits })}
-Läsålder: ${targetAge}. **Sidor: 14**. Stil: ${style || "cartoon"}. Kategori: ${category || "kids"}.
-Returnera enbart JSON i exakt formatet.
-`.trim();
-
-    const story = await openaiJSON(env, STORY_SYS, storyUser);
-
-    // Fallback översättning till scene_en om saknas
-    try {
-      const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
-      const needs = pages.some(p => !p.scene_en || !String(p.scene_en).trim());
-      if (needs && pages.length) {
-        const toTranslate = pages.map(p => ({ page: p.page, sv: p.scene || p.text || "" }));
-        const t = await openaiJSON(env,
-          "Du är en saklig översättare. Returnera endast giltig JSON.",
-          `Översätt följande scenangivelser till kort engelsk, visuell beskrivning (1–2 meningar, inga repliker).
-Returnera exakt: { "items":[{"page":number,"scene_en":string}, ...] } och inget mer.
-SVENSKA:
-${JSON.stringify(toTranslate)}`
-        );
-        const map = new Map((t?.items || []).map(x => [x.page, x.scene_en]));
-        story.book.pages = pages.map(p => ({ ...p, scene_en: p.scene_en || map.get(p.page) || "" }));
-      }
-    } catch {}
-
-    const camHints = await getCameraHints(env, story);
-    const plan = normalizePlan(story?.book?.pages || [], camHints.shots);
-    const coherence_code = makeCoherenceCode(story);
-    const wardrobe_signature = deriveWardrobeSignature(story);
-
-    return ok({ outline, story, plan, coherence_code, wardrobe_signature });
-  } catch (e) { return err(e?.message || "Story generation failed", 500); }
-
-  function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
+/** Bygger prompt för en fristående referensbild (”character card”) */
+function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
   const m = bible?.main_character || {};
   const name = m.name || "Hero";
   const age = m.age || 6;
@@ -2016,21 +1907,110 @@ ${JSON.stringify(toTranslate)}`
   ].filter(Boolean).join("\n");
 }
 
+/** Genererar outline + story och derivat (kamera-hints, plan, koherenskod, garderobssignatur). */
+async function handleStory(req, env) {
+  try {
+    const body = await req.json().catch(() => ({}));
+    const {
+      name,
+      age,
+      pages,
+      category,
+      style,
+      theme,
+      traits,
+      reading_age,
+    } = body || {};
+
+    // Läsålder: explicit reading_age > annars från barnets ålder > pets default 8
+    const parsedRA = parseInt(reading_age, 10);
+    const targetAge = Number.isFinite(parsedRA)
+      ? parsedRA
+      : ((category || "kids") === "pets" ? 8 : parseInt(age || 6, 10));
+
+    // 1) Outline
+    const outlineUser = `
+${heroDescriptor({ category, name, age, traits })}
+Kategori: ${category || "kids"}.
+Läsålder: ${targetAge}.
+Önskat tema/poäng (om angivet): ${theme || "vänskap"}.
+Antal sidor: ${pages || 12}.
+Returnera enbart json.`.trim();
+
+    const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
+
+    // 2) Story (tvingar exakt JSON-format enligt STORY_SYS)
+    const storyUser = `
+OUTLINE:
+${JSON.stringify(outline)}
+Skriv en engagerande, händelserik saga som är rolig att läsa högt.
+Variera miljöer och visuella ögonblick mellan varje sida.
+${heroDescriptor({ category, name, age, traits })}
+Läsålder: ${targetAge}. **Sidor: 14**. Stil: ${style || "cartoon"}. Kategori: ${category || "kids"}.
+Returnera enbart JSON i exakt formatet.
+`.trim();
+
+    const story = await openaiJSON(env, STORY_SYS, storyUser);
+
+    // 3) Fallback: fyll scene_en på sidor som saknar det (kort, visuell EN-beskrivning)
+    try {
+      const pgs = Array.isArray(story?.book?.pages) ? story.book.pages : [];
+      const needs = pgs.some(p => !p.scene_en || !String(p.scene_en).trim());
+      if (pgs.length && needs) {
+        const toTranslate = pgs.map(p => ({ page: p.page, sv: p.scene || p.text || "" }));
+        const t = await openaiJSON(
+          env,
+          "Du är en saklig översättare. Returnera endast giltig JSON.",
+          `Översätt följande scenangivelser till kort engelsk, visuell beskrivning (1–2 meningar, inga repliker).
+Returnera exakt: { "items":[{"page":number,"scene_en":string}, ...] } och inget mer.
+SVENSKA:
+${JSON.stringify(toTranslate)}`
+        );
+        const map = new Map((t?.items || []).map(x => [x.page, x.scene_en]));
+        story.book.pages = pgs.map(p => ({ ...p, scene_en: p.scene_en || map.get(p.page) || "" }));
+      }
+    } catch {
+      // Översättning är ”best effort”; fortsätt även om det fallerar
+    }
+
+    // 4) Kamerahints → bildplan
+    const camHints = await getCameraHints(env, story);
+    const plan = normalizePlan(story?.book?.pages || [], camHints.shots);
+
+    // 5) Koherens & garderob
+    const coherence_code = makeCoherenceCode(story);
+    const wardrobe_signature = deriveWardrobeSignature(story);
+
+    return ok({ outline, story, plan, coherence_code, wardrobe_signature });
+  } catch (e) {
+    return err(e?.message || "Story generation failed", 500);
+  }
 }
+
+/** Skapar referensbild (antingen från given data URL eller via Gemini). */
 async function handleRefImage(req, env) {
   try {
     const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
+
+    // 1) Om klienten skickar ett foto (dataURL/base64) – använd det rakt av
     if (photo_b64) {
       const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
-      if (b64.length > 64) return ok({ ref_image_b64: b64, provider: "client" });
+      if (b64 && b64.length > 64) return ok({ ref_image_b64: b64, provider: "client" });
       return err("Provided photo_b64 looked invalid", 400);
     }
+
+    // 2) Annars generera en neutral referensbild via Gemini
     const prompt = characterCardPrompt({ style, bible, traits });
     const g = await geminiImage(env, { prompt }, 70000, 2);
+
     if (g?.b64) return ok({ ref_image_b64: g.b64, provider: g.provider || "google" });
-    return ok({ ref_image_b64: null });
-  } catch (e) { return err(e?.message || "Ref generation failed", 500); }
+    // Om svaret bara innehåller URL (utan b64) skickar vi tillbaka null för att signalera att klienten kan hämta själv
+    return ok({ ref_image_b64: null, provider: g?.provider || "google", image_url: g?.image_url || null });
+  } catch (e) {
+    return err(e?.message || "Ref generation failed", 500);
+  }
 }
+
 async function handleImagesBatch(req, env) {
   try {
     const { style="cartoon", ref_image_b64, story, plan, concurrency=4, pages_subset, style_refs_b64, coherence_code, guidance } =
@@ -2203,37 +2183,6 @@ async function handleCover(req, env) {
   } catch (e) { return err(e?.message || "Cover generation failed", 500); }
 }
 
-/* ====================== PDF URL-varianter ====================== */
-async function handlePdfInteriorUrl(req, env) {
-  try {
-    const { story, images } = await req.json().catch(() => ({}));
-    if (!story?.book?.pages) return err("Missing story", 400);
-    const bytes = await buildFinalInteriorPdf(env, story, images || []);
-    const ts = Date.now();
-    const safeTitle = String(story?.book?.title || "bok").replace(/[^\wåäöÅÄÖ\-]+/g, "_");
-    const key = `${safeTitle}_${ts}_INTERIOR.pdf`;
-    const url = await r2PutPublic(env, key, bytes);
-    return ok({ url, key });
-  } catch (e) { return err(e?.message || "interior-url failed", 500); }
-}
-
-async function handlePdfCoverUrl(req, env) {
-  try {
-    const { story, images } = await req.json().catch(() => ({}));
-    if (!story?.book?.pages) return err("Missing story", 400);
-
-    // Räkna inlagans sidor från storyn (bör bli 30)
-    const interiorPages = computeInteriorPagesFromStory(story);
-
-    const bytes = await buildFinalCoverPdf(env, story, images || [], interiorPages);
-    const ts = Date.now();
-    const safeTitle = safeTitleFrom(story);
-    const key = `${safeTitle}_${ts}_COVER.pdf`;
-    const url = await r2PutPublic(env, key, bytes);
-    return ok({ url, key, interior_pages: interiorPages });
-  } catch (e) { return err(e?.message || "cover-url failed", 500); }
-}
-
 /* ====================== GELATO (router-alias) ====================== */
 async function handleGelatoShipmentMethods(req, env) {
   try {
@@ -2265,9 +2214,10 @@ async function handleGelatoCreate(req, env) {
 
     const ord = await kvGetOrder(env, order_id);
     if (!ord) return err("Order not found", 404);
-    if (!ord?.files?.interior_url || !ord?.files?.cover_url || !Number.isFinite(ord?.files?.interior_pages)) {
-      return err("Order is missing R2 files or interior_pages; run /api/pdf/build-and-attach first", 400);
-    }
+   if (!ord?.files?.single_pdf_url || !Number.isFinite(ord?.files?.page_count)) {
+  return err("Order is missing single_pdf_url or page_count; run /api/pdf/single-url first", 400);
+}
+
 try {
  const g = await gelatoCreateOrder(env, {
   order: ord, shipment: body?.shipment || {}, currency: body?.currency || undefined, customer: body?.customer || {}
@@ -2419,6 +2369,25 @@ async function handleGelatoProductInfo(req, env) {
     const status = e?.status || 500;
     return corsJson({ ok:false, error:String(e?.message||e), details:e?.data||null }, status);
   }
+}
+
+async function ensureSingle(order_id, deliverable) {
+  // deliverable: "digital" för PDF-köp, "print" för tryckt
+  const r = await fetch(`${API}/api/pdf/single-url`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      story: state.story,                // din sparade story
+      images: state.images,              // dina uppladdade/genererade imgs
+      mode: deliverable === "print" ? "print" : "preview",
+      deliverable,                       // 👈 NYTT (se backend patch nedan)
+      order_id                           // skriver single_pdf_url + page_count i KV
+    })
+  });
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || "single-url failed");
+  // j.url = EN laga upp-fil som alla view-knappar ska visa
+  return j.url;
 }
 
 
