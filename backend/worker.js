@@ -2394,7 +2394,8 @@ async function ensureSingle(order_id, deliverable) {
 
 // src/api/gelato/debug-validate.ts
 
-export const onRequestPost: PagesFunction<Env> = async (context) => {
+export async function onRequestPost(context) 
+ {
   const { request, env } = context;
 
   let payload: {
