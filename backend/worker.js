@@ -32,6 +32,11 @@ async function stripe(env, path, init = {}) {
 }
 
 
+
+export const DEFAULT_BLEED_MM = 3;
+
+
+
 const GELATO_TTL = 30 * 24 * 60 * 60; // 30 dagar, tryckt bok tar längre tid än PDF
 
 async function kvPutGelato(env, id, data) {
@@ -1799,68 +1804,78 @@ async function handlePdfRequest(req, env) {
 
 async function handlePdfSingleUrl(req, env) {
   try {
-    const body = await req.json().catch(() => ({}));
+    const payload = await req.json().catch(() => ({}));
 
-    const story       = body?.story;
-    const images      = Array.isArray(body?.images) ? body.images : [];
-    const trim        = body?.trim || DEFAULT_TRIM;   // behåll din egen default
-    const bleed_mm    = Number.isFinite(body?.bleed_mm) ? body.bleed_mm : 3;
-    const mode        = body?.mode || "preview";
-    const deliverable = body?.deliverable || "digital";  // "print" eller "digital"
-    const order_id    = body?.order_id || null;
+    const {
+      story,
+      images,
+      mode = "preview",
+      trim = "square200",
+      bleed_mm,
+      deliverable = "digital",
+      order_id
+    } = payload;
 
-    const isPrint = deliverable === "print";
-
-    if (!story) return err("Missing story", 400);
+    const normDeliverable = String(deliverable || "digital").toLowerCase();
+    const isPrint = normDeliverable === "print" || normDeliverable === "printed";
 
     // ========================= PRINT-PATHWAY =========================
     if (isPrint) {
       // 1) Bygg ren inlaga (utan omslag)
-      const interior = await buildPrintInteriorPdf({ story, images, trim, bleed_mm }, env);
-      const bytes    = interior.bytes;
-      const pages    = interior.pages;
+      const interior = await buildPrintInteriorPdf(
+        { story, images, trim, bleed_mm },
+        env
+      );
+      const bytes = interior.bytes;
+      const pages = interior.pages;
 
       // 2) Ladda upp inlaga till R2
-      const ts          = Date.now();
-      const safeTitle   = safeTitleFrom(story);
+      const ts = Date.now();
+      const safeTitle = safeTitleFrom(story);
       const interiorKey = `${safeTitle}_${ts}_INTERIOR_PRINT.pdf`;
       const interiorUrl = await r2PutPublic(env, interiorKey, bytes, "application/pdf");
 
-      let coverUrl  = null;
+      let coverUrl = null;
       let coverSpec = null;
 
       // 3) Försök skapa omslags-wrap om vi har en omslagsbild
+      const imgs = Array.isArray(images) ? images : [];
       const coverRow =
-        images.find((x) => x?.kind === "cover") ||
-        images.find((x) => x?.page === 0) ||
-        images.find((x) => x?.page === 1) ||
+        imgs.find((x) => x?.kind === "cover") ||
+        imgs.find((x) => x?.page === 0) ||
+        imgs.find((x) => x?.page === 1) ||
         null;
 
       if (coverRow) {
         try {
           const productUid = env.GELATO_PRODUCT_UID;
+
           if (productUid && Number.isFinite(pages) && pages > 0) {
             coverSpec = await gelatoGetCoverDimensions(env, productUid, pages).catch(() => null);
           }
 
-          const coverBytes = await buildCoverWrapPdf({ env, coverRow, spec: coverSpec });
-          const coverKey   = `${safeTitle}_${ts}_COVER_WRAP.pdf`;
-          coverUrl         = await r2PutPublic(env, coverKey, coverBytes, "application/pdf");
+          const coverBytes = await buildCoverWrapPdf({
+            env,
+            coverRow,
+            spec: coverSpec
+          });
+
+          const coverKey = `${safeTitle}_${ts}_COVER_WRAP.pdf`;
+          coverUrl = await r2PutPublic(env, coverKey, coverBytes, "application/pdf");
 
           if (order_id) {
             await kvAttachFiles(env, order_id, {
               // 🔹 Print-specifika fält
               print_interior_pdf_url: interiorUrl,
               print_interior_pdf_key: interiorKey,
-              print_page_count:       pages,
-              cover_wrap_pdf_url:     coverUrl,
-              cover_wrap_pdf_key:     coverKey,
-              cover_spec:             coverSpec || null,
-
-              // 🔹 Generiska fält som success-sida + Gelato-check förväntar sig
+              print_page_count: pages,
+              cover_wrap_pdf_url: coverUrl,
+              cover_wrap_pdf_key: coverKey,
+              cover_spec: coverSpec || null,
+              // 🔹 Generiska fält för Gelato + success-sidan
               single_pdf_url: interiorUrl,
               single_pdf_key: interiorKey,
-              page_count:     pages,
+              page_count: pages
             });
           }
         } catch (e) {
@@ -1868,36 +1883,33 @@ async function handlePdfSingleUrl(req, env) {
             await kvAttachFiles(env, order_id, {
               print_interior_pdf_url: interiorUrl,
               print_interior_pdf_key: interiorKey,
-              print_page_count:       pages,
-              cover_wrap_error:       String(e?.message || e),
-
+              print_page_count: pages,
+              cover_wrap_error: String(e?.message || e),
               // 🔹 Generiska fält ändå, så Gelato kan jobba utan omslag
               single_pdf_url: interiorUrl,
               single_pdf_key: interiorKey,
-              page_count:     pages,
+              page_count: pages
             });
           }
         }
       } else if (order_id) {
-        // Ingen omslagsbild → spara åtminstone inlaga + sidantal
+        // Ingen omslagsbild → spara åtminstone inlaga + sidantal + generiska fält
         await kvAttachFiles(env, order_id, {
           print_interior_pdf_url: interiorUrl,
           print_interior_pdf_key: interiorKey,
-          print_page_count:       pages,
-
-          // 🔹 Generiska fält här också
+          print_page_count: pages,
           single_pdf_url: interiorUrl,
           single_pdf_key: interiorKey,
-          page_count:     pages,
+          page_count: pages
         });
       }
 
       return ok({
-        url:        interiorUrl,
-        key:        interiorKey,
+        url: interiorUrl,
+        key: interiorKey,
         pages,
-        cover_url:  coverUrl,
-        cover_spec: coverSpec,
+        cover_url: coverUrl,
+        cover_spec: coverSpec
       });
     }
 
@@ -1907,28 +1919,29 @@ async function handlePdfSingleUrl(req, env) {
       env,
       null
     );
-    const doc   = await PDFDocument.load(fullBytes);
+
+    const doc = await PDFDocument.load(fullBytes);
     const pages = doc.getPageCount();
 
-    const ts        = Date.now();
+    const ts = Date.now();
     const safeTitle = safeTitleFrom(story);
-    const key       = `${safeTitle}_${ts}_BOOK.pdf`;
-    const url       = await r2PutPublic(env, key, fullBytes, "application/pdf");
+    const key = `${safeTitle}_${ts}_BOOK.pdf`;
+    const url = await r2PutPublic(env, key, fullBytes, "application/pdf");
 
     if (order_id) {
       await kvAttachFiles(env, order_id, {
         single_pdf_url: url,
         single_pdf_key: key,
-        page_count:     pages,
+        page_count: pages
       });
     }
 
     return ok({ url, key, pages });
-
   } catch (e) {
     return err(e?.message || "single-url failed", 500);
   }
 }
+
 
 
 

@@ -339,32 +339,34 @@
     );
   }
 
-  // 🔑 Skapa & spara EN PDF om den inte redan finns
-  async function ensureSingle(order_id, deliverable){
-    // Hämta ev. existerande
-    let o = await api.getOrder(order_id);
-    if (o?.files?.single_pdf_url) return o; // redan klart
+ // 🔑 Skapa & spara EN PDF om den inte redan finns
+async function ensureSingle(order_id, deliverable){
+  // Hämta ev. existerande order
+  let o = await api.getOrder(order_id);
+  if (o?.files?.single_pdf_url) return o; // redan klart
 
-    // Vi har inte story/images i success-sidan; backend bygger från inskickad order-kontekst.
-    // Därför kallar vi single-url utan story/images här – backend använder order.files/images i KV.
-    // Om din backend kräver story/images: skicka dem via success (lägg dem i sessionStorage tidigare i flödet).
-    try {
-      setBanner("Skapar din bok (PDF) …");
-      await api.ensureSingleUrl({
-        story: o?.draft?.story || o?.story || undefined, // best effort om finns
-        images: o?.draft?.images || o?.images || undefined,
-        mode: (deliverable === "print") ? "print" : "preview",
-        order_id,
-        deliverable
-      });
-      await sleep(800);
-      o = await api.getOrder(order_id);
-    } catch (e){
-      // Om backend kräver story/images och de saknas: visa tydligt fel
-      throw new Error(e?.message || "Misslyckades skapa enfilspdf.");
-    }
-    return o;
+  try {
+    setBanner("Skapar din bok (PDF) …");
+
+    // Vi ber backend skapa / uppdatera rätt PDF
+    await api.ensureSingleUrl({
+      order_id,
+      // låt backend använda KV/story, vi behöver inte skicka allting här
+      mode: (deliverable === "print") ? "print" : "preview",
+      deliverable,
+      // 🔹 matchar din TRIMS-konfig
+      trim: "square200"
+    });
+
+    // Liten paus, sedan hämta uppdaterad order
+    await sleep(800);
+    o = await api.getOrder(order_id);
+  } catch (e){
+    throw new Error(e?.message || "Misslyckades skapa enfilspdf.");
   }
+  return o;
+}
+
 
   async function fillShipMethods(country){
     try{
