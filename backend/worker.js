@@ -1782,7 +1782,7 @@ async function handlePdfSingleUrl(req, env) {
   try {
     const payload = await req.json().catch(() => ({}));
 
-    const {
+    let {
       story,
       images,
       mode = "preview",
@@ -1792,22 +1792,27 @@ async function handlePdfSingleUrl(req, env) {
       order_id,
     } = payload || {};
 
+    // 🔎 1) Om story saknas men vi har order_id → hämta från KV (draften)
+    if ((!story || !Array.isArray(story?.book?.pages)) && order_id) {
+      const ord = await kvGetOrder(env, order_id);
+      if (ord?.draft?.story && Array.isArray(ord.draft.story?.book?.pages)) {
+        story  = ord.draft.story;
+        // använd ev. images från body i första hand, annars från KV-draften
+        images = images || ord.draft.images || ord.draft.image_rows || [];
+      }
+    }
+
+    // 🔒 2) Fortfarande ingen story? Då failar vi, men med lite extra debug-info
     if (!story || !Array.isArray(story?.book?.pages)) {
-      return err("Missing story.book.pages", 400);
+      return err("Missing story.book.pages", 400, {
+        has_order: !!order_id,
+        has_draft: false,
+      });
     }
 
     const normDeliverable = String(deliverable || "digital").toLowerCase();
     const isPrint = normDeliverable === "print" || normDeliverable === "printed";
 
-    // 🔹 För PRINT vill vi trigga full "print-bok":
-    //    - omslag fram
-    //    - titelsida
-    //    - ev. endpapers
-    //    - 14 uppslag (bild+text)
-    //    - slutsida
-    //    - baksida
-    //
-    // 🔹 För DIGITAL använder vi digital-varianten (ingen extra blank-sida mm).
     const trace = traceStart();
     const bytes = await buildPdf(
       {
@@ -1822,7 +1827,7 @@ async function handlePdfSingleUrl(req, env) {
       trace
     );
 
-    // Räkna sidor ur den FAKTISKA PDF:en (det är detta Gelato ska få)
+    // Räkna verkligt sidantal i den PDF vi faktiskt genererade
     const doc = await PDFDocument.load(bytes);
     const pages = doc.getPageCount();
 
@@ -1832,7 +1837,7 @@ async function handlePdfSingleUrl(req, env) {
     const key = `${safeTitle}_${ts}${suffix}`;
     const url = await r2PutPublic(env, key, bytes, "application/pdf");
 
-    // Spara på ordern så både success-sidan och Gelato kan använda samma fil
+    // Spara på ordern så både success-sidan & Gelato vet var filen finns
     if (order_id) {
       await kvAttachFiles(env, order_id, {
         single_pdf_url: url,

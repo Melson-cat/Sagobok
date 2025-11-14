@@ -246,6 +246,12 @@
         headers:{ "content-type":"application/json" },
         body: JSON.stringify({ story, images, mode, order_id, deliverable })
       }),
+        ensureSingleUrl: ({ story, images, mode, order_id, deliverable, trim }) =>
+    fetchJSON(`${BACKEND}/api/pdf/single-url`, {
+      method:"POST",
+      headers:{ "content-type":"application/json" },
+      body: JSON.stringify({ story, images, mode, order_id, deliverable, trim })
+    }),
     getShipMethods: (country) =>
       fetchJSON(`${BACKEND}/api/gelato/shipment-methods?country=${encodeURIComponent(country)}`),
     createGelato: (order_id, shipment, customer) =>
