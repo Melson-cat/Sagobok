@@ -2627,6 +2627,100 @@ async function handleGelatoOrderStatus(req, env) {
     return err(e?.message || "order-status failed", 500);
   }
 }
+
+
+async function handleGelatoDebugValidate(req, env) {
+  try {
+    const body = await req.json().catch(() => ({}));
+    const fileUrl   = body.fileUrl || body.url;
+    const pageCount = Number(body.pageCount);
+    const productUid = body.productUid || env.GELATO_PRODUCT_UID;
+    const currency   = (body.currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
+    const country    = (body.country  || env.GELATO_DEFAULT_COUNTRY  || "SE").toUpperCase();
+
+    if (!productUid) return err("Missing GELATO_PRODUCT_UID or productUid", 400);
+    if (!fileUrl)    return err("Missing fileUrl", 400);
+    if (!Number.isFinite(pageCount) || pageCount <= 0) {
+      return err("Invalid pageCount", 400);
+    }
+
+    // Bygg en minimal "draft"-order mot Gelato v4
+    const payload = {
+      orderType: "draft",                             // 🔹 INGEN riktig order/produktion
+      orderReferenceId: "debug-" + Date.now(),
+      customerReferenceId: "debug-client",
+      currency,
+      shippingAddress: {
+        firstName: "Test",
+        lastName:  "Debug",
+        email:     env.GELATO_TEST_EMAIL || "noreply@example.com",
+        phone:     "0700000000",
+        addressLine1: "Storgatan 1",
+        city:      "Örebro",
+        postCode:  "70000",
+        country,
+      },
+      items: [
+        {
+          itemReferenceId: "debug-item-1",
+          productUid,
+          quantity: 1,
+          pageCount,
+          // 🔑 En enda multi-page-PDF, som supporten sa:
+          files: [
+            {
+              fileType: "default",
+              fileUrl,
+              pageCount,
+            }
+          ],
+        }
+      ],
+      metadata: [
+        { key: "bp_debug", value: "true" },
+        { key: "bp_pages", value: String(pageCount) }
+      ]
+    };
+
+    const url = `${GELATO_BASE.order}/orders`;
+    const gelatoResp = await gelatoFetch(url, env, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+
+    return ok({ ok: true, payloadSent: payload, gelato: gelatoResp });
+  } catch (e) {
+    if (e?.name === "GelatoError") {
+      return ok({
+        ok: false,
+        error: e.message,
+        status: e.status,
+        url: e.url,
+        details: e.data || e.raw || null,
+        where: "gelato.debug-validate",
+      }, { status: 400 });
+    }
+    return err(e?.message || "gelato debug-validate failed", 500, { where: "gelato.debug-validate" });
+  }
+}
+
+async function handleGelatoDebugStatus(req, env) {
+  try {
+    const url = new URL(req.url);
+    const gelatoId = url.searchParams.get("gelato_id") || url.searchParams.get("id");
+    if (!gelatoId) return err("Missing gelato_id", 400);
+
+    const data = await gelatoGetOrder(env, gelatoId);
+    const status = mapGelatoStatus(data);
+
+    return ok({ ok: true, gelato_id: gelatoId, status, raw: data });
+  } catch (e) {
+    return err(e?.message || "gelato debug-status failed", 500);
+  }
+}
+
+
+
 export default {
   async fetch(req, env, ctx) {
     // 1) Alltid svara på preflight
