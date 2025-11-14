@@ -1442,6 +1442,11 @@ async function buildPdf({ story, images, mode = "preview", trim = "square200", b
     p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8,0.1,0.1) });
   }
 
+   /* -------- PRINT endpaper (blank sida direkt efter omslag) -------- */
+  if (String(deliverable).toLowerCase() === "print") {
+    // Helt tom sida 2 (insidan av omslaget)
+    pdfDoc.addPage([pageW, pageH]);
+  }
   /* -------- TITELSIDA (efter omslag) -------- */
 try {
   const titlePage = pdfDoc.addPage([pageW, pageH]);
@@ -1484,10 +1489,6 @@ try {
 } catch (e) {
   tr(trace, "titlepage:error", { error: String(e?.message || e) });
 }
-/* -------- PRINT endpaper (blank sida 2) -------- */
-if (String(deliverable).toLowerCase() === "print") {
- pdfDoc.addPage([pageW, pageH]); // helt blank
- }
 
   /* -------- 14 uppslag: bild vänster, text höger + vine -------- */
   const outer = mmToPt(GRID.outer_mm);
@@ -1551,10 +1552,11 @@ if (String(deliverable).toLowerCase() === "print") {
     drawHeart(page, cx, contentY + trimHpt * 0.38, mmToPt(14), rgb(0.50, 0.36, 0.82));
   }
 
-  /* -------- PRINT endpaper (sista sidan blank) -------- */
+   /* -------- PRINT endpaper (sista sidan blank) -------- */
 if (String(deliverable).toLowerCase() === "print") {
   pdfDoc.addPage([pageW, pageH]); // helt blank
  }
+
   /* -------- BACK COVER -------- */
   try {
     const page = pdfDoc.addPage([pageW, pageH]);
@@ -1568,6 +1570,8 @@ if (String(deliverable).toLowerCase() === "print") {
     const page = pdfDoc.addPage([pageW, pageH]);
     page.drawText("Baksidan kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
   }
+
+  
 
   const bytes = await pdfDoc.save();
   tr(trace, "pdf:done", { bytes: bytes.length });
