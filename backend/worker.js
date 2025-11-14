@@ -2646,41 +2646,40 @@ async function handleGelatoDebugValidate(req, env) {
 
     // Bygg en minimal "draft"-order mot Gelato v4
     const payload = {
-      orderType: "draft",                             // 🔹 INGEN riktig order/produktion
-      orderReferenceId: "debug-" + Date.now(),
-      customerReferenceId: "debug-client",
-      currency,
-      shippingAddress: {
-        firstName: "Test",
-        lastName:  "Debug",
-        email:     env.GELATO_TEST_EMAIL || "noreply@example.com",
-        phone:     "0700000000",
-        addressLine1: "Storgatan 1",
-        city:      "Örebro",
-        postCode:  "70000",
-        country,
-      },
-      items: [
+  orderType: "draft",                             // 🔹 INGEN riktig order
+  orderReferenceId: "debug-" + Date.now(),
+  customerReferenceId: "debug-client",
+  currency,
+  shippingAddress: {
+    firstName: "Test",
+    lastName:  "Debug",
+    email:     env.GELATO_TEST_EMAIL || "noreply@example.com",
+    phone:     "0700000000",
+    addressLine1: "Storgatan 1",
+    city:      "Örebro",
+    postCode:  "70000",
+    country,
+  },
+  items: [
+    {
+      itemReferenceId: "debug-item-1",
+      productUid,
+      quantity: 1,
+      pageCount,
+      files: [
         {
-          itemReferenceId: "debug-item-1",
-          productUid,
-          quantity: 1,
-          pageCount,
-          // 🔑 En enda multi-page-PDF, som supporten sa:
-          files: [
-            {
-              fileType: "default",
-              fileUrl,
-              pageCount,
-            }
-          ],
+          type: "content",   // <-- samma som i riktiga createOrder
+          url: fileUrl,      // <-- din R2-länk
         }
       ],
-      metadata: [
-        { key: "bp_debug", value: "true" },
-        { key: "bp_pages", value: String(pageCount) }
-      ]
-    };
+    }
+  ],
+  metadata: [
+    { key: "bp_debug", value: "true" },
+    { key: "bp_pages", value: String(pageCount) }
+  ]
+};
+
 
     const url = `${GELATO_BASE.order}/orders`;
     const gelatoResp = await gelatoFetch(url, env, {
