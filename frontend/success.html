@@ -397,75 +397,91 @@
   }
 
   function wireForm(order_id, paidOrder){
-    el.f.country.addEventListener("change", () => fillShipMethods(el.f.country.value));
+  el.f.country.addEventListener("change", () => fillShipMethods(el.f.country.value));
 
-    let submitting = false;
-    el.form.addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      if (submitting) return;
-      clearErr();
+  let submitting = false;
+  el.form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (submitting) return;
+    clearErr();
 
-      if (wasGelatoSubmitted(order_id)){
-        hide(el.form);
-        setBanner("Ordern är redan skickad till tryckpartnern ✔");
+    if (wasGelatoSubmitted(order_id)){
+      hide(el.form);
+      setBanner("Ordern är redan skickad till tryckpartnern ✔");
+      return;
+    }
+
+    try{
+      if (!el.form.checkValidity()) {
+        el.form.reportValidity();
         return;
       }
 
-      try{
-        if (!el.form.checkValidity()) {
-          el.form.reportValidity();
-          return;
-        }
+      submitting = true;
+      el.f.btn.disabled = true;
+      setBanner("Skickar till tryck…");
+      setText(el.f.hint, "Skickar ordern…");
 
-        submitting = true;
-        el.f.btn.disabled = true;
-        setBanner("Skickar till tryck…");
-        setText(el.f.hint, "Skickar ordern…");
-
-        const shipment = {
-          addressLine1: el.f.address1.value.trim(),
-          addressLine2: el.f.address2.value.trim(),
-          city:         el.f.city.value.trim(),
-          postCode:     normalizePostcode(el.f.country.value, el.f.postCode.value),
-          country:      el.f.country.value,
-          state:        "",
-          shipmentMethodUid: el.f.shipMeth.value || undefined,
-        };
-        const customer = {
-          firstName: el.f.firstName.value.trim(),
-          lastName:  el.f.lastName.value.trim(),
-          email:     (el.f.email.value.trim() || paidOrder?.email || ""),
-          phone:     el.f.phone.value.trim(),
-        };
-
-        if (!shipment.addressLine1 || !shipment.city || !shipment.postCode || !shipment.country){
-          throw new Error("Fyll i adress, postnummer, ort och land.");
-        }
-        if (!customer.firstName || !customer.lastName){
-          throw new Error("Fyll i för- och efternamn.");
-        }
-
-        const res = await api.createGelato(order_id, shipment, customer);
-        const gelatoId = res?.gelato?.id || res?.gelato?.orderId || res?.gelato?.data?.id || null;
-        markGelatoSubmitted(order_id, gelatoId);
-
-        setBanner("Tryckorder skapad ✓");
-        if (res?.gelato?.orderType === "draft" || res?.gelato?.status === "draft") {
-          setSub("Test-order simulerad (GELATO_DRY_RUN=true). Inga verkliga kostnader uppstod.");
-        } else {
-          setSub("Ordern har skickats till tryckpartnern. Vi uppdaterar status löpande.");
-        }
-        hide(el.form);
-
-      } catch (e){
-        el.f.btn.disabled = false;
-        submitting = false;
-        setText(el.f.hint, "");
-        showErr(e?.message || "Kunde inte skapa tryckorder.");
-        setBanner("Ett fel uppstod.");
+      // ✅ 1) SE TILL ATT ENFILSPDF FINNS (extra säkerhet)
+      let ord = await api.getOrder(order_id);
+      if (!ord?.files?.single_pdf_url || !ord.files.page_count) {
+        // För tryckt bok ska vi alltid bygga i "print"-mode
+        ord = await ensureSingle(order_id, "print");
       }
-    }, { once:false });
-  }
+
+      // Om något fortfarande är knas → kasta tydligt fel
+      if (!ord?.files?.single_pdf_url || !ord.files.page_count) {
+        throw new Error("Kunde inte skapa tryckfärdig PDF för ordern (saknar single_pdf_url/page_count).");
+      }
+
+      // ✅ 2) Bygg shipment + customer
+      const shipment = {
+        addressLine1: el.f.address1.value.trim(),
+        addressLine2: el.f.address2.value.trim(),
+        city:         el.f.city.value.trim(),
+        postCode:     normalizePostcode(el.f.country.value, el.f.postCode.value),
+        country:      el.f.country.value,
+        state:        "",
+        shipmentMethodUid: el.f.shipMeth.value || undefined,
+      };
+      const customer = {
+        firstName: el.f.firstName.value.trim(),
+        lastName:  el.f.lastName.value.trim(),
+        email:     (el.f.email.value.trim() || paidOrder?.email || ""),
+        phone:     el.f.phone.value.trim(),
+      };
+
+      if (!shipment.addressLine1 || !shipment.city || !shipment.postCode || !shipment.country){
+        throw new Error("Fyll i adress, postnummer, ort och land.");
+      }
+      if (!customer.firstName || !customer.lastName){
+        throw new Error("Fyll i för- och efternamn.");
+      }
+
+      // ✅ 3) Skicka till Gelato – nu med garanterad single_pdf_url + page_count
+      const res = await api.createGelato(order_id, shipment, customer);
+      const gelatoId = res?.gelato?.id || res?.gelato?.orderId || res?.gelato?.data?.id || null;
+      markGelatoSubmitted(order_id, gelatoId);
+
+      setBanner("Tryckorder skapad ✓");
+      if (res?.gelato?.orderType === "draft" || res?.gelato?.status === "draft") {
+        setSub("Test-order simulerad (GELATO_DRY_RUN=true). Inga verkliga kostnader uppstod.");
+      } else {
+        setSub("Ordern har skickats till tryckpartnern. Vi uppdaterar status löpande.");
+      }
+      hide(el.form);
+
+    } catch (e){
+      el.f.btn.disabled = false;
+      submitting = false;
+      setText(el.f.hint, "");
+      showErr(e?.message || "Kunde inte skapa tryckorder.");
+      setBanner("Ett fel uppstod.");
+      console.error("createGelato error:", e);
+    }
+  }, { once:false });
+}
+
 
   /* --------------------------- Init ------------------------------- */
   async function init(){
