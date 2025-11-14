@@ -244,8 +244,107 @@ async function gelatoGetPrices(env, productUid, { country, currency, pageCount }
   return gelatoFetch(url.toString(), env);
 }
 
-gelatoCreateOrder
+async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency }) {
+  const productUid = env.GELATO_PRODUCT_UID;
+  if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
+  // 🔍 bestäm typ mest för metadata
+  const kind = String(order?.kind || order?.draft?.kind || "").toLowerCase();
+  const isPrinted = kind === "printed";
+
+  // 🔹 EN fil: samma för print & digital
+  const contentUrl = order?.files?.single_pdf_url || null;
+  const pageCount = Number(order?.files?.page_count ?? 0);
+
+  if (!contentUrl) {
+    throw new Error("Order is missing files.single_pdf_url (run /api/pdf/single-url first)");
+  }
+  if (!Number.isFinite(pageCount) || pageCount <= 0) {
+    throw new Error("Order is missing/invalid files.page_count");
+  }
+
+  const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
+  const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
+  const CURR          = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
+
+  const cust = {
+    firstName: customer.firstName || "Test",
+    lastName:  customer.lastName  || "Kund",
+    email:     DRY_RUN ? FORCE_TEST_TO : (customer.email || FORCE_TEST_TO),
+    phone:     (shipment.phone && String(shipment.phone).trim()) || "0700000000",
+  };
+
+  const country = (shipment.country || "SE").toUpperCase();
+  const shippingAddress = {
+    firstName:    cust.firstName,
+    lastName:     cust.lastName,
+    email:        cust.email,
+    phone:        cust.phone,
+    addressLine1: shipment.addressLine1 || "Storgatan 1",
+    addressLine2: shipment.addressLine2 || undefined,
+    city:         shipment.city        || "Örebro",
+    postCode:     shipment.postCode    || "70000",
+    country,
+    ...(shipment.state ? { state: shipment.state } : {}),
+  };
+
+  const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
+
+  // 🔹 EN fil enligt Gelato support:
+  // "single multi-page PDF containing both cover and interior pages"
+  // "When using a single PDF, set the file type to 'default'"
+  const files = [
+    {
+      fileType: "default",     // <— viktigt
+      fileUrl:  contentUrl,
+      pageCount,
+      // lite bakåtkompatibelt fluff (skadar inte om Gelato ignorerar dem)
+      type: isPrinted ? "content" : "default",
+      url: contentUrl,
+    },
+  ];
+
+  const item = {
+    itemReferenceId: `item-${order.id}`,
+    productUid,
+    quantity: 1,
+    pageCount,
+    fileUrl: contentUrl,  // enkelvägen om de läser detta
+    files,
+  };
+
+  const payload = {
+    orderType: DRY_RUN ? "draft" : "order",
+    orderReferenceId: order.id,
+    customerReferenceId: "guest",
+    currency: CURR,
+    items: [item],
+    shippingAddress,
+    ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
+    metadata: [
+      { key: "bp_kind", value: String(order.kind || order?.draft?.kind || "printed") },
+      { key: "bp_pages", value: String(pageCount) },
+    ],
+  };
+
+  try {
+    console.log("📦 Payload to Gelato:", JSON.stringify(payload, null, 2));
+
+    const g = await gelatoApiCreateOrder(env, payload);
+    const gelato_id = g?.id || g?.orderId || null;
+    if (gelato_id) {
+      await kvIndexGelatoOrder(env, gelato_id, order.id);
+      await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id });
+    }
+    return g;
+  } catch (e) {
+    if (e?.status === 501 || e?.name === "NotImplemented") {
+      // behåll kompatibelt svar till debug-endpoints
+      return ok({ error: e.message, where: "gelato.create", status: 501 }, { status: 501 });
+    }
+    throw e;
+  }
+}
 
 
 
