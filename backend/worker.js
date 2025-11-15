@@ -2453,7 +2453,7 @@ async function handleGelatoCreate(request, env, ctx) {
       customerReferenceId: custRef,
       currency,
       shippingAddress,
-      items: [
+      products: [
         {
           itemReferenceId: itemRef,
           productUid: env.GELATO_PRODUCT_UID, // måste vara satt i env
