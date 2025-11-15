@@ -2726,15 +2726,19 @@ async function handleGelatoOrderStatus(req, env) {
   }
 }
 
-
 async function handleGelatoDebugValidate(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
-    const fileUrl   = body.fileUrl || body.url;
-    const pageCount = Number(body.pageCount);
+
+    const fileUrl    = body.fileUrl || body.url;
+    const pageCount  = Number(body.pageCount);
     const productUid = body.productUid || env.GELATO_PRODUCT_UID;
     const currency   = (body.currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
     const country    = (body.country  || env.GELATO_DEFAULT_COUNTRY  || "SE").toUpperCase();
+
+    // 👤 Kund + adress kan komma från body, annars fylls testvärden
+    const customer = body.customer || {};
+    const shipment = body.shipment || {};
 
     if (!productUid) return err("Missing GELATO_PRODUCT_UID or productUid", 400);
     if (!fileUrl)    return err("Missing fileUrl", 400);
@@ -2742,65 +2746,80 @@ async function handleGelatoDebugValidate(req, env) {
       return err("Invalid pageCount", 400);
     }
 
-    // Bygg en minimal "draft"-order mot Gelato v4
     const payload = {
-  orderType: "draft",                             // 🔹 INGEN riktig order
-  orderReferenceId: "debug-" + Date.now(),
-  customerReferenceId: "debug-client",
-  currency,
-  recipient: {
-  firstName: customer.firstName,
-  lastName: customer.lastName,
-  addressLine1: shipment.addressLine1,
-  addressLine2: shipment.addressLine2 || "",
-  city: shipment.city,
-  postCode: shipment.postCode,
-  country: shipment.country,
-  email: customer.email,
-  phone: customer.phone,
-},
-  items: [
-    {
-      itemReferenceId: "debug-item-1",
-      productUid,
-      quantity: 1,
-      pageCount,
-      files: [
+      orderType: "draft", // 🔹 bara test
+      orderReferenceId: "debug-" + Date.now(),
+      customerReferenceId: "debug-client",
+      currency,
+      recipient: {
+        firstName:    customer.firstName || "Test",
+        lastName:     customer.lastName  || "Kund",
+        addressLine1: shipment.addressLine1 || "Testgatan 1",
+        addressLine2: shipment.addressLine2 || "",
+        city:         shipment.city        || "Stockholm",
+        postCode:     shipment.postCode    || "111 22",
+        country,
+        email:        customer.email || "test@example.com",
+        phone:        customer.phone || "0700000000",
+      },
+      items: [
         {
-          type: "content",   // <-- samma som i riktiga createOrder
-          url: fileUrl,      // <-- din R2-länk
-        }
+          itemReferenceId: "debug-item-1",
+          productUid,
+          quantity: 1,
+          pageCount,
+          files: [
+            {
+              type: "content",      // v4
+              url: fileUrl,
+            },
+          ],
+        },
       ],
-    }
-  ],
-  metadata: [
-    { key: "bp_debug", value: "true" },
-    { key: "bp_pages", value: String(pageCount) }
-  ]
-};
-
+      metadata: [
+        { key: "bp_debug", value: "true" },
+        { key: "bp_pages", value: String(pageCount) },
+      ],
+    };
 
     const url = `${GELATO_BASE.order}/orders`;
-    const gelatoResp = await gelatoFetch(url, env, {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+    try {
+      const gelatoResp = await gelatoFetch(url, env, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
 
-    return ok({ ok: true, payloadSent: payload, gelato: gelatoResp });
-  } catch (e) {
-    if (e?.name === "GelatoError") {
+      // ✅ Lyckat svar
       return ok({
-        ok: false,
-        error: e.message,
-        status: e.status,
-        url: e.url,
-        details: e.data || e.raw || null,
-        where: "gelato.debug-validate",
-      }, { status: 400 });
+        ok: true,
+        payloadSent: payload,
+        gelato: gelatoResp,
+      });
+    } catch (e) {
+      if (e?.name === "GelatoError") {
+        // 🔍 Visa ALLT Gelato svarar, men utan att krascha workern
+        return ok(
+          {
+            ok: false,
+            error: e.message,
+            status: e.status,
+            url: e.url,
+            details: e.data || e.raw || null,
+            where: "gelato.debug-validate",
+            payloadSent: payload,
+          },
+          { status: 400 },
+        );
+      }
+      throw e;
     }
-    return err(e?.message || "gelato debug-validate failed", 500, { where: "gelato.debug-validate" });
+  } catch (e) {
+    return err(e?.message || "gelato debug-validate failed", 500, {
+      where: "gelato.debug-validate",
+    });
   }
 }
+
 
 async function handleGelatoDebugStatus(req, env) {
   try {
