@@ -2748,16 +2748,17 @@ async function handleGelatoDebugValidate(req, env) {
   orderReferenceId: "debug-" + Date.now(),
   customerReferenceId: "debug-client",
   currency,
-  shippingAddress: {
-    firstName: "Test",
-    lastName:  "Debug",
-    email:     env.GELATO_TEST_EMAIL || "noreply@example.com",
-    phone:     "0700000000",
-    addressLine1: "Storgatan 1",
-    city:      "Örebro",
-    postCode:  "70000",
-    country,
-  },
+  recipient: {
+  firstName: customer.firstName,
+  lastName: customer.lastName,
+  addressLine1: shipment.addressLine1,
+  addressLine2: shipment.addressLine2 || "",
+  city: shipment.city,
+  postCode: shipment.postCode,
+  country: shipment.country,
+  email: customer.email,
+  phone: customer.phone,
+},
   items: [
     {
       itemReferenceId: "debug-item-1",
