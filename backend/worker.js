@@ -2425,29 +2425,54 @@ async function handleGelatoPrices(req, env) {
 async function handleGelatoCreate(request, env, ctx) {
   try {
     const body = await request.json();
-    const { order_id, shipment, customer, pdf_url } = body;
+    const {
+      order_id,
+      shipment = {},
+      customer = {},
+      pdf_url,
+      page_count    // 👈 kan komma från frontend vid debug
+    } = body;
+
+    const currency = (env.GELATO_CURRENCY || "SEK").toUpperCase();
+    const orderId  = order_id || "debug-order-1";
+    const custRef  = customer.email || `cust-${orderId}`;
+    const itemRef  = `${orderId}-1`;
+
+    const shippingAddress = {
+      firstName:    customer.firstName || "Test",
+      lastName:     customer.lastName || "Kund",
+      addressLine1: shipment.addressLine1 || "Testgatan 1",
+      addressLine2: shipment.addressLine2 || "",
+      city:         shipment.city || "Stockholm",
+      postCode:     shipment.postCode || "111 22",
+      country:      shipment.country || "SE",
+      email:        customer.email || "test@example.com",
+      phone:        customer.phone || ""
+    };
+
+    // 🔢 1) Bestäm pageCount
+    // För debug: använd page_count från body.
+    // Senare i "skarpt" flöde hämtar vi från din order (files.page_count).
+    let finalPageCount = page_count;
+
+    if (!finalPageCount) {
+      // TODO: här kan du sen hämta från din order-store:
+      // const ord = await loadOrder(env, orderId);
+      // finalPageCount = ord?.files?.page_count;
+    }
 
     if (!pdf_url) {
       return err("Saknar pdf_url i body (för debug).", 400);
     }
 
-    const currency = (env.GELATO_CURRENCY || "SEK").toUpperCase();
-    const orderId  = order_id || "debug-order-1";
-    const custRef  = customer?.email || `cust-${orderId}`;
-    const itemRef  = `${orderId}-1`;
+    if (!finalPageCount) {
+      return err(
+        "Saknar page_count – Gelato kräver pageCount för den här produkten.",
+        400
+      );
+    }
 
-    const shippingAddress = {
-      firstName:    customer?.firstName || "Test",
-      lastName:     customer?.lastName || "Kund",
-      addressLine1: shipment?.addressLine1 || "Testgatan 1",
-      addressLine2: shipment?.addressLine2 || "",
-      city:         shipment?.city || "Stockholm",
-      postCode:     shipment?.postCode || "111 22",
-      country:      shipment?.country || "SE",
-      email:        customer?.email || "test@example.com",
-      phone:        customer?.phone || ""
-    };
-
+    // 🧱 2) Bygg payload till Gelato (NOTE: products + pageCount)
     const gelatoOrder = {
       orderReferenceId:    orderId,
       customerReferenceId: custRef,
@@ -2456,8 +2481,9 @@ async function handleGelatoCreate(request, env, ctx) {
       products: [
         {
           itemReferenceId: itemRef,
-          productUid: env.GELATO_PRODUCT_UID, // måste vara satt i env
+          productUid: env.GELATO_PRODUCT_UID,
           quantity: 1,
+          pageCount: finalPageCount,      // 👈 VIKTIGT
           files: [
             {
               type: "default",
@@ -2466,16 +2492,11 @@ async function handleGelatoCreate(request, env, ctx) {
           ]
         }
       ],
-      shipmentMethodUid: shipment?.shipmentMethodUid || undefined
+      shipmentMethodUid: shipment.shipmentMethodUid || undefined
     };
 
-    // 🔍 1) Anropa QUOTE – men kasta inte, ta emot allt
     const quote = await gelatoQuote(env, gelatoOrder);
 
-    // 🔍 2) Logga till Worker-loggen (syns i Cloudflare)
-    console.log("Gelato QUOTE debug:", quote);
-
-    // 🔄 3) Skicka ut ALLT till frontend så vi ser i console.log()
     return ok({
       mode: "quote-debug",
       payloadSentToGelato: gelatoOrder,
@@ -2487,6 +2508,7 @@ async function handleGelatoCreate(request, env, ctx) {
     return err(error.message || "Gelato create failed", 400);
   }
 }
+
 
 
 
