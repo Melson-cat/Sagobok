@@ -2425,21 +2425,16 @@ async function handleGelatoCreate(request, env, ctx) {
     const body = await request.json();
     const { order_id, shipment, customer, pdf_url } = body;
 
-    // För debug: vi tillåter att du skickar pdf_url direkt i request-body.
+    // För debug: vi kräver pdf_url
     if (!pdf_url) {
-      return new Response(
-        JSON.stringify({ error: "Saknar pdf_url i body (för debug)." }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
+      return err("Saknar pdf_url i body (för debug).", 400);
     }
 
-    // Hårdkoda valuta för nu, eller läs från env / din order
     const currency = (env.GELATO_CURRENCY || "SEK").toUpperCase();
     const orderId  = order_id || "debug-order-1";
     const custRef  = customer?.email || `cust-${orderId}`;
     const itemRef  = `${orderId}-1`;
 
-    // Bygg shippingAddress enligt Gelatos krav
     const shippingAddress = {
       firstName: customer?.firstName || "Test",
       lastName:  customer?.lastName || "Kund",
@@ -2447,12 +2442,11 @@ async function handleGelatoCreate(request, env, ctx) {
       addressLine2: shipment?.addressLine2 || "",
       city:         shipment?.city || "Stockholm",
       postCode:     shipment?.postCode || "111 22",
-      country:      shipment?.country || "SE",   // två bokstäver, t.ex. "SE"
-      email:        customer?.email || "test@example.com", // ⚠️ viktigt
+      country:      shipment?.country || "SE",
+      email:        customer?.email || "test@example.com",
       phone:        customer?.phone || ""
     };
 
-    // Själva orderPayload som skickas till Gelato
     const gelatoOrder = {
       orderReferenceId:    orderId,
       customerReferenceId: custRef,
@@ -2471,35 +2465,25 @@ async function handleGelatoCreate(request, env, ctx) {
           ]
         }
       ],
-      // Om du vill skicka shipmentMethodUid redan nu kan du göra det:
       shipmentMethodUid: shipment?.shipmentMethodUid || undefined
     };
 
-    // 🔍 DET ÄR HÄR vi debuggar: QUOTE först
+    // 🔍 QUOTE till Gelato
     const quote = await gelatoQuote(env, gelatoOrder);
 
-    // ⬇️ JUST NU – BARA DEBUG-RESPONS, INGEN RIKTIG ORDER
-    return new Response(
-      JSON.stringify({
-        mode: "quote-debug",
-        payloadSentToGelato: gelatoOrder,
-        quoteResponse: quote
-      }, null, 2),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    );
+    // ✅ Viktigt: använd ok(...) så CORS-headrar kommer med
+    return ok({
+      mode: "quote-debug",
+      payloadSentToGelato: gelatoOrder,
+      quoteResponse: quote
+    });
 
-    // När detta funkar kan vi senare lägga till:
-    // - riktig order till /v4/orders
-    // - GELATO_DRY_RUN osv.
-
-  } catch (err) {
-    console.error("handleGelatoCreate error:", err);
-    return new Response(
-      JSON.stringify({ error: err.message || "Gelato create failed" }),
-      { status: 400, headers: { "Content-Type": "application/json" } }
-    );
+  } catch (error) {
+    console.error("handleGelatoCreate error:", error);
+    return err(error.message || "Gelato create failed", 400);
   }
 }
+
 
 
 
