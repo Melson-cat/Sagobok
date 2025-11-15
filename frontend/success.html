@@ -240,12 +240,6 @@
       fetchJSON(`${BACKEND}/api/checkout/order-id?session_id=${encodeURIComponent(sid)}`),
     getOrder: (id) =>
       fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(id)}`),
-    ensureSingleUrl: ({ story, images, mode, order_id, deliverable }) =>
-      fetchJSON(`${BACKEND}/api/pdf/single-url`, {
-        method:"POST",
-        headers:{ "content-type":"application/json" },
-        body: JSON.stringify({ story, images, mode, order_id, deliverable })
-      }),
         ensureSingleUrl: ({ story, images, mode, order_id, deliverable, trim }) =>
     fetchJSON(`${BACKEND}/api/pdf/single-url`, {
       method:"POST",

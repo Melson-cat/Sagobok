@@ -248,13 +248,8 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
-  // 🔍 bestäm typ mest för metadata
-  const kind = String(order?.kind || order?.draft?.kind || "").toLowerCase();
-  const isPrinted = kind === "printed";
-
-  // 🔹 EN fil: samma för print & digital
   const contentUrl = order?.files?.single_pdf_url || null;
-  const pageCount = Number(order?.files?.page_count ?? 0);
+  const pageCount  = Number(order?.files?.page_count ?? 0);
 
   if (!contentUrl) {
     throw new Error("Order is missing files.single_pdf_url (run /api/pdf/single-url first)");
@@ -267,84 +262,64 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
   const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
   const CURR          = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
 
-  const cust = {
-    firstName: customer.firstName || "Test",
-    lastName:  customer.lastName  || "Kund",
-    email:     DRY_RUN ? FORCE_TEST_TO : (customer.email || FORCE_TEST_TO),
-    phone:     (shipment.phone && String(shipment.phone).trim()) || "0700000000",
-  };
+  const custEmail = customer.email || FORCE_TEST_TO;
 
-  const country = (shipment.country || "SE").toUpperCase();
-  const shippingAddress = {
-    firstName:    cust.firstName,
-    lastName:     cust.lastName,
-    email:        cust.email,
-    phone:        cust.phone,
+  const recipient = {
+    firstName:    customer.firstName || "Test",
+    lastName:     customer.lastName  || "Kund",
     addressLine1: shipment.addressLine1 || "Storgatan 1",
-    addressLine2: shipment.addressLine2 || undefined,
-    city:         shipment.city        || "Örebro",
-    postCode:     shipment.postCode    || "70000",
-    country,
-    ...(shipment.state ? { state: shipment.state } : {}),
+    addressLine2: shipment.addressLine2 || "",
+    city:         shipment.city      || "Örebro",
+    postCode:     shipment.postCode  || "70000",
+    country:      (shipment.country || "SE").toUpperCase(),
+    email:        DRY_RUN ? FORCE_TEST_TO : custEmail,
+    phone:        customer.phone || shipment.phone || "0700000000",
   };
 
   const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
 
-  // 🔹 EN fil enligt Gelato support:
-  // "single multi-page PDF containing both cover and interior pages"
-  // "When using a single PDF, set the file type to 'default'"
-  const files = [
+  const products = [
     {
-      fileType: "default",     // <— viktigt
-      fileUrl:  contentUrl,
+      itemReferenceId: `book-${order.id || "1"}`,
+      productUid,
+      quantity: 1,
       pageCount,
-      // lite bakåtkompatibelt fluff (skadar inte om Gelato ignorerar dem)
-      type: isPrinted ? "content" : "default",
-      url: contentUrl,
-    },
+      files: [
+        {
+          type: "default",        // ✅ samma som i quote-testet
+          url:  contentUrl
+        }
+      ]
+    }
   ];
-
-  const item = {
-    itemReferenceId: `item-${order.id}`,
-    productUid,
-    quantity: 1,
-    pageCount,
-    fileUrl: contentUrl,  // enkelvägen om de läser detta
-    files,
-  };
 
   const payload = {
     orderType: DRY_RUN ? "draft" : "order",
     orderReferenceId: order.id,
-    customerReferenceId: "guest",
+    customerReferenceId: custEmail || `cust-${order.id}`,
     currency: CURR,
-    items: [item],
-    shippingAddress,
+    recipient,
+    products,
     ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
     metadata: [
-      { key: "bp_kind", value: String(order.kind || order?.draft?.kind || "printed") },
+      { key: "bp_kind",  value: String(order.kind || order?.draft?.kind || "printed") },
       { key: "bp_pages", value: String(pageCount) },
     ],
   };
 
-  try {
-    console.log("📦 Payload to Gelato:", JSON.stringify(payload, null, 2));
+  console.log("📦 Payload to Gelato (order):", JSON.stringify(payload, null, 2));
 
-    const g = await gelatoApiCreateOrder(env, payload);
-    const gelato_id = g?.id || g?.orderId || null;
-    if (gelato_id) {
-      await kvIndexGelatoOrder(env, gelato_id, order.id);
-      await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id });
-    }
-    return g;
-  } catch (e) {
-    if (e?.status === 501 || e?.name === "NotImplemented") {
-      // behåll kompatibelt svar till debug-endpoints
-      return ok({ error: e.message, where: "gelato.create", status: 501 }, { status: 501 });
-    }
-    throw e;
+  const g = await gelatoApiCreateOrder(env, payload);
+  const gelato_id = g?.id || g?.orderId || null;
+
+  if (gelato_id && order?.id) {
+    await kvIndexGelatoOrder(env, gelato_id, order.id);
+    await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id });
   }
+
+  return { payload, gelato: g };
 }
+
 
 
 
@@ -1301,10 +1276,27 @@ async function getFontOrFallback(trace, pdfDoc, label, urls, standardName) {
   return await pdfDoc.embedFont(standardName);
 }
 /* ---------------------------- Build PDF ------------------------------ */
-async function buildPdf({ story, images, mode = "preview", trim = "square200", bleed_mm, watermark_text, deliverable = "digital" }, env, trace) {
+async function buildPdf(
+  {
+    story,
+    images,
+    mode = "preview",
+    trim = "square200",
+    bleed_mm,
+    watermark_text,
+    deliverable = "digital",  // "digital" | "print"
+  },
+  env,
+  trace
+) {
   tr(trace, "pdf:start");
   const trimSpec = TRIMS[trim] || TRIMS.square200;
-  const bleed = mode === "print" ? (Number.isFinite(bleed_mm) ? bleed_mm : trimSpec.default_bleed_mm) : 0;
+  const bleed =
+    mode === "print"
+      ? Number.isFinite(bleed_mm)
+        ? bleed_mm
+        : trimSpec.default_bleed_mm
+      : 0;
 
   const trimWpt = mmToPt(trimSpec.w_mm);
   const trimHpt = mmToPt(trimSpec.h_mm);
@@ -1313,44 +1305,69 @@ async function buildPdf({ story, images, mode = "preview", trim = "square200", b
   const contentX = mmToPt(bleed);
   const contentY = mmToPt(bleed);
 
+  const isPrintDeliverable =
+    String(deliverable || "digital").toLowerCase() === "print";
+
   const pdfDoc = await PDFDocument.create();
   pdfDoc.registerFontkit(fontkit);
   tr(trace, "pdf:doc-created");
 
-  const helv      = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const helvBold  = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const helvIt    = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+  const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const helvBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const helvIt = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
 
-  const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(/\/+$/, "");
-  const NUN_R  = [`${base}/Nunito-Regular.ttf`];
+  const base = (env.FONT_BASE_URL || "https://sagobok.pages.dev/fonts").replace(
+    /\/+$/,
+    ""
+  );
+  const NUN_R = [`${base}/Nunito-Regular.ttf`];
   const NUN_SB = [`${base}/Nunito-Semibold.ttf`];
-  const nunito     = await getFontOrFallback(trace, pdfDoc, "nunito", NUN_R,  StandardFonts.TimesRoman);
-  const nunitoSemi = await getFontOrFallback(trace, pdfDoc, "nunitoSemi", NUN_SB, StandardFonts.Helvetica);
+  const nunito = await getFontOrFallback(
+    trace,
+    pdfDoc,
+    "nunito",
+    NUN_R,
+    StandardFonts.TimesRoman
+  );
+  const nunitoSemi = await getFontOrFallback(
+    trace,
+    pdfDoc,
+    "nunitoSemi",
+    NUN_SB,
+    StandardFonts.Helvetica
+  );
   tr(trace, "pdf:fonts-ready");
 
   const readingAge = story?.book?.reading_age || 6;
-  const { size: baseTextSize, leading: baseLeading } = fontSpecForReadingAge(readingAge);
+  const { size: baseTextSize, leading: baseLeading } =
+    fontSpecForReadingAge(readingAge);
 
   const title = String(story?.book?.title ?? "Min bok");
-  const subtitle =
-    String(
-      story?.book?.tagline ??
-      (story?.book?.bible?.main_character?.name ? `Med ${story.book.bible.main_character.name}` : "") ??
+  const subtitle = String(
+    story?.book?.tagline ??
+      (story?.book?.bible?.main_character?.name
+        ? `Med ${story.book.bible.main_character.name}`
+        : "") ??
       ""
-    );
-  const blurb =
-    String(
-      story?.book?.back_blurb ??
-      (story?.book?.lesson ? `Lärdom: ${story.book.lesson}.` : "En berättelse skapad med BokPiloten.") ??
-      ""
-    );
+  );
+  const blurb = String(
+    story?.book?.back_blurb ??
+      (story?.book?.lesson
+        ? `Lärdom: ${story.book.lesson}.`
+        : "En berättelse skapad med BokPiloten.") ?? ""
+  );
   const pagesStory = [...(story?.book?.pages || [])];
 
   // Indexera inkomna bilder
-  let coverSrc = images?.find((x) => x?.kind === "cover" || x?.page === 0) || null;
+  let coverSrc =
+    images?.find((x) => x?.kind === "cover" || x?.page === 0) || null;
   const imgByPage = new Map();
   (images || []).forEach((row) => {
-    if (Number.isFinite(row?.page) && row.page > 0 && (row.image_id || row.url || row.image_url || row.data_url)) {
+    if (
+      Number.isFinite(row?.page) &&
+      row.page > 0 &&
+      (row.image_id || row.url || row.image_url || row.data_url)
+    ) {
       imgByPage.set(row.page, row);
     }
   });
@@ -1362,133 +1379,310 @@ async function buildPdf({ story, images, mode = "preview", trim = "square200", b
     if (pagesStory.length > want) return pagesStory.slice(0, want);
     const out = [...pagesStory];
     while (out.length < want)
-      out.push(pagesStory[pagesStory.length - 1] || { page: out.length + 1, text: "", scene: "" });
+      out.push(
+        pagesStory[pagesStory.length - 1] || {
+          page: out.length + 1,
+          text: "",
+          scene: "",
+        }
+      );
     return out;
   }
   const scenePages = mapTo14ScenePages();
   tr(trace, "pdf:scene-pages", { count: scenePages.length });
 
-  /* -------- FRONT COVER -------- */
-  try {
-    const coverPage = pdfDoc.addPage([pageW, pageH]);
-    if (!coverSrc) coverSrc = imgByPage.get(1) || null;
+  /* ------- små helpers för omslag (återanvänds för print/digital) ---- */
 
-    if (coverSrc) {
-      const bytes = await getImageBytes(env, coverSrc);
-      const coverImg = await embedImage(pdfDoc, bytes);
-      if (coverImg) drawImageCover(coverPage, coverImg, 0, 0, pageW, pageH);
-    } else {
-      coverPage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.94,0.96,1) });
-    }
-
-    const safeInset = mmToPt(GRID.outer_mm + 2);
-    const tw  = trimWpt - safeInset * 2;
-    const cx  = contentX + trimWpt / 2;
-    const topCenterY0 = contentY + trimHpt - mmToPt(GRID.outer_mm + 16);
-
-    const measure = (txt, font, baseSize, leading, minSize, maxW, maxH) => {
-      const s = String(txt ?? "");
-      for (let size = baseSize; size >= minSize; size--) {
-        const lineH = size * leading;
-        const words = s.split(/\s+/);
-        const lines = [];
-        let line = "";
-        for (const w of words) {
-          const t = line ? line + " " + w : w;
-          if (font.widthOfTextAtSize(t, size) <= maxW) line = t;
-          else { if (line) lines.push(line); line = w; }
+  // Mäter textblock för title/subtitle
+  function measureBlock(txt, font, baseSize, leading, minSize, maxW, maxH) {
+    const s = String(txt ?? "");
+    for (let size = baseSize; size >= minSize; size--) {
+      const lineH = size * leading;
+      const words = s.split(/\s+/);
+      const lines = [];
+      let line = "";
+      for (const w of words) {
+        const t = line ? line + " " + w : w;
+        if (font.widthOfTextAtSize(t, size) <= maxW) line = t;
+        else {
+          if (line) lines.push(line);
+          line = w;
         }
-        if (line) lines.push(line);
-        const blockH = lines.length * lineH;
-        if (blockH <= maxH) return { size, lineH, lines, blockH };
       }
-      return { size: 12, lineH: 12 * 1.1, lines: [], blockH: 0 };
-    };
+      if (line) lines.push(line);
+      const blockH = lines.length * lineH;
+      if (blockH <= maxH) return { size, lineH, lines, blockH };
+    }
+    return { size: 12, lineH: 12 * 1.1, lines: [], blockH: 0 };
+  }
 
-    const titleM = measure(title, nunitoSemi, Math.min(trimWpt, trimHpt) * 0.16, 1.08, 22, tw, mmToPt(32));
-    const subtitleSize = Math.max(14, (titleM.size * 0.48) | 0);
-    const subM = subtitle ? measure(subtitle, nunito, subtitleSize, 1.12, 12, tw, mmToPt(18)) : { blockH: 0 };
-
-    const padY = mmToPt(4), padX = mmToPt(6), gap = mmToPt(4);
-    const badgeH = titleM.blockH + (subtitle ? (gap + subM.blockH) : 0) + padY * 2;
-    const badgeY = topCenterY0 - badgeH / 2;
-
-    coverPage.drawRectangle({
-      x: contentX + safeInset - padX, y: badgeY, width: tw + padX * 2, height: badgeH,
-      color: rgb(1,1,1), opacity: 0.25,
+  function drawFrontCoverOn(page, baseX, baseY, boxW, boxH) {
+    // Bakgrund (fallback om ingen bild)
+    page.drawRectangle({
+      x: baseX + contentX,
+      y: baseY + contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: rgb(0.94, 0.96, 1),
     });
 
+    // Bild
+    (async () => {
+      // OBS: körs bara om vi lyckas fetcha
+    })();
+
+    // I praktiken ritar vi titelbadge osv direkt här, bilden ritas separat i try-blocket nedan.
+  }
+
+  /**
+   * Renderar framsidan (titel + ev bild) i en given "halva".
+   * halfX/halfY är basen för sidan (t.ex. 0 för digital, pageW för höger halva i spread).
+   */
+  async function renderFrontCover(page, halfX, halfY, boxW, boxH) {
+    if (!coverSrc) coverSrc = imgByPage.get(1) || null;
+
+    // Bild
+    if (coverSrc) {
+      try {
+        const bytes = await getImageBytes(env, coverSrc);
+        const coverImg = await embedImage(pdfDoc, bytes);
+        if (coverImg) {
+          drawImageCover(page, coverImg, halfX, halfY, boxW, boxH);
+        } else {
+          page.drawRectangle({
+            x: halfX + contentX,
+            y: halfY + contentY,
+            width: trimWpt,
+            height: trimHpt,
+            color: rgb(0.94, 0.96, 1),
+          });
+        }
+      } catch (e) {
+        tr(trace, "cover:image:error", {
+          error: String(e?.message || e),
+        });
+        page.drawRectangle({
+          x: halfX + contentX,
+          y: halfY + contentY,
+          width: trimWpt,
+          height: trimHpt,
+          color: rgb(0.94, 0.96, 1),
+        });
+      }
+    } else {
+      page.drawRectangle({
+        x: halfX + contentX,
+        y: halfY + contentY,
+        width: trimWpt,
+        height: trimHpt,
+        color: rgb(0.94, 0.96, 1),
+      });
+    }
+
+    // Titel + tagline i badge
+    const safeInset = mmToPt(GRID.outer_mm + 2);
+    const tw = trimWpt - safeInset * 2;
+    const cx = halfX + contentX + trimWpt / 2;
+    const topCenterY0 =
+      halfY + contentY + trimHpt - mmToPt(GRID.outer_mm + 16);
+
+    const titleM = measureBlock(
+      title,
+      nunitoSemi,
+      Math.min(trimWpt, trimHpt) * 0.16,
+      1.08,
+      22,
+      tw,
+      mmToPt(32)
+    );
+    const subtitleSize = Math.max(14, (titleM.size * 0.48) | 0);
+    const subM = subtitle
+      ? measureBlock(
+          subtitle,
+          nunito,
+          subtitleSize,
+          1.12,
+          12,
+          tw,
+          mmToPt(18)
+        )
+      : { blockH: 0 };
+
+    const padY = mmToPt(4),
+      padX = mmToPt(6),
+      gap = mmToPt(4);
+    const badgeH =
+      titleM.blockH + (subtitle ? gap + subM.blockH : 0) + padY * 2;
+    const badgeY = topCenterY0 - badgeH / 2;
+
+    page.drawRectangle({
+      x: halfX + contentX + safeInset - padX,
+      y: badgeY,
+      width: tw + padX * 2,
+      height: badgeH,
+      color: rgb(1, 1, 1),
+      opacity: 0.25,
+    });
+
+    // Titelrader
     {
       let y = badgeY + badgeH - padY - titleM.lineH / 2;
       for (const ln of titleM.lines) {
         const w = nunitoSemi.widthOfTextAtSize(ln, titleM.size);
-        coverPage.drawText(ln, { x: cx - w / 2, y, size: titleM.size, font: nunitoSemi, color: rgb(0.05,0.05,0.05) });
+        page.drawText(ln, {
+          x: cx - w / 2,
+          y,
+          size: titleM.size,
+          font: nunitoSemi,
+          color: rgb(0.05, 0.05, 0.05),
+        });
         y -= titleM.lineH;
       }
     }
 
+    // Undertitel/tagline
     if (subtitle) {
       const subCenterY = badgeY + padY + subM.blockH / 2;
       let y = subCenterY + subM.blockH / 2 - subM.lineH;
       for (const ln of subM.lines) {
         const w = nunito.widthOfTextAtSize(ln, subtitleSize);
-        coverPage.drawText(ln, { x: cx - w / 2, y, size: subtitleSize, font: nunito, color: rgb(0.12,0.12,0.12) });
+        page.drawText(ln, {
+          x: cx - w / 2,
+          y,
+          size: subtitleSize,
+          font: nunito,
+          color: rgb(0.12, 0.12, 0.12),
+        });
         y -= subM.lineH;
       }
+    }
+  }
+
+  async function renderBackCover(page, halfX, halfY, boxW, boxH) {
+    try {
+      const bg = rgb(0.58, 0.54, 0.86);
+      page.drawRectangle({
+        x: halfX + contentX,
+        y: halfY + contentY,
+        width: trimWpt,
+        height: trimHpt,
+        color: bg,
+      });
+      const centerX = halfX + contentX + trimWpt / 2;
+      const centerY = halfY + contentY + trimHpt / 2;
+      drawWrappedCenterColor(
+        page,
+        blurb,
+        centerX,
+        centerY,
+        trimWpt * 0.72,
+        trimHpt * 0.36,
+        nunito,
+        14,
+        1.42,
+        12,
+        rgb(1, 1, 1),
+        "center"
+      );
+    } catch (e) {
+      tr(trace, "back:error", { error: String(e?.message || e) });
+      page.drawText("Baksidan kunde inte renderas.", {
+        x: halfX + mmToPt(15),
+        y: halfY + mmToPt(15),
+        size: 12,
+        font: nunito,
+        color: rgb(0.8, 0.1, 0.1),
+      });
+    }
+  }
+
+  /* -------- OMSLAG -------- */
+  try {
+    if (isPrintDeliverable) {
+      // 🧾 PRINT: första sidan är ett liggande cover spread (bak + rygg + fram)
+      const spreadW = pageW * 2; // enkel approximation: 2× inlaga + bleed
+      const spreadPage = pdfDoc.addPage([spreadW, pageH]);
+
+      // Vänster halva = baksida
+      await renderBackCover(spreadPage, 0, 0, pageW, pageH);
+
+      // Höger halva = framsida
+      await renderFrontCover(spreadPage, pageW, 0, pageW, pageH);
+    } else {
+      // 💻 DIGITAL/PREVIEW: separat framsida som egen sida (som tidigare)
+      const coverPage = pdfDoc.addPage([pageW, pageH]);
+      await renderFrontCover(coverPage, 0, 0, pageW, pageH);
     }
   } catch (e) {
     tr(trace, "cover:error", { error: String(e?.message || e) });
     const p = pdfDoc.addPage([pageW, pageH]);
-    p.drawText("Omslag kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8,0.1,0.1) });
+    p.drawText("Omslag kunde inte renderas.", {
+      x: mmToPt(15),
+      y: mmToPt(15),
+      size: 12,
+      font: nunito,
+      color: rgb(0.8, 0.1, 0.1),
+    });
   }
 
-   /* -------- PRINT endpaper (blank sida direkt efter omslag) -------- */
-  if (String(deliverable).toLowerCase() === "print") {
+  /* -------- PRINT endpaper (blank sida direkt efter omslag) -------- */
+  if (isPrintDeliverable) {
     // Helt tom sida 2 (insidan av omslaget)
     pdfDoc.addPage([pageW, pageH]);
   }
+
   /* -------- TITELSIDA (efter omslag) -------- */
-try {
-  const titlePage = pdfDoc.addPage([pageW, pageH]);
-  titlePage.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.98, 0.99, 1) });
-  const cx = contentX + trimWpt / 2;
-  const cy = contentY + trimHpt / 2 + mmToPt(4);
+  try {
+    const titlePage = pdfDoc.addPage([pageW, pageH]);
+    titlePage.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: rgb(0.98, 0.99, 1),
+    });
+    const cx = contentX + trimWpt / 2;
+    const cy = contentY + trimHpt / 2 + mmToPt(4);
 
-  const mainTitle = String(story?.book?.title || "Min Sagobok");
-  const subLine = String(story?.book?.bible?.main_character?.name ? `av ${story.book.bible.main_character.name}` : "Skapad med BokPiloten");
+    const mainTitle = String(story?.book?.title || "Min Sagobok");
+    const subLine = String(
+      story?.book?.bible?.main_character?.name
+        ? `av ${story.book.bible.main_character.name}`
+        : "Skapad med BokPiloten"
+    );
 
-  const mainSize = Math.min(trimWpt, trimHpt) * 0.08;
-  const subSize  = mainSize * 0.45;
+    const mainSize = Math.min(trimWpt, trimHpt) * 0.08;
+    const subSize = mainSize * 0.45;
 
-  // Titel
-  const titleW = nunitoSemi.widthOfTextAtSize(mainTitle, mainSize);
-  titlePage.drawText(mainTitle, {
-    x: cx - titleW / 2,
-    y: cy + mainSize * 0.4,
-    size: mainSize,
-    font: nunitoSemi,
-    color: rgb(0.15, 0.15, 0.25)
-  });
+    // Titel
+    const titleW = nunitoSemi.widthOfTextAtSize(mainTitle, mainSize);
+    titlePage.drawText(mainTitle, {
+      x: cx - titleW / 2,
+      y: cy + mainSize * 0.4,
+      size: mainSize,
+      font: nunitoSemi,
+      color: rgb(0.15, 0.15, 0.25),
+    });
 
-  // Underrad
-  const subW = nunito.widthOfTextAtSize(subLine, subSize);
-  const subY = cy - subSize * 1.4;
-  titlePage.drawText(subLine, {
-    x: cx - subW / 2,
-    y: subY,
-    size: subSize,
-    font: nunito,
-    color: rgb(0.35, 0.35, 0.45)
-  });
+    // Underrad
+    const subW = nunito.widthOfTextAtSize(subLine, subSize);
+    const subY = cy - subSize * 1.4;
+    titlePage.drawText(subLine, {
+      x: cx - subW / 2,
+      y: subY,
+      size: subSize,
+      font: nunito,
+      color: rgb(0.35, 0.35, 0.45),
+    });
 
-  // 💜 HJÄRTA (matchar slut-sidan)
-  const gap       = mmToPt(6);
-  const heartSize = mmToPt(14);
-  const heartY    = subY - heartSize - gap;
-  drawHeart(titlePage, cx, heartY, heartSize, rgb(0.50, 0.36, 0.82));
-} catch (e) {
-  tr(trace, "titlepage:error", { error: String(e?.message || e) });
-}
+    // 💜 HJÄRTA (matchar slut-sidan)
+    const gap = mmToPt(6);
+    const heartSize = mmToPt(14);
+    const heartY = subY - heartSize - gap;
+    drawHeart(titlePage, cx, heartY, heartSize, rgb(0.5, 0.36, 0.82));
+  } catch (e) {
+    tr(trace, "titlepage:error", { error: String(e?.message || e) });
+  }
 
   /* -------- 14 uppslag: bild vänster, text höger + vine -------- */
   const outer = mmToPt(GRID.outer_mm);
@@ -1498,7 +1692,13 @@ try {
 
     // Vänster: bild
     const left = pdfDoc.addPage([pageW, pageH]);
-    left.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(1, 1, 1) });
+    left.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: rgb(1, 1, 1),
+    });
     try {
       const src = imgByPage.get(scene.page);
       let imgObj = null;
@@ -1507,36 +1707,88 @@ try {
         imgObj = await embedImage(pdfDoc, bytes);
       }
       if (imgObj) drawImageCover(left, imgObj, 0, 0, pageW, pageH);
-      else left.drawText("Bild saknas", { x: contentX + mmToPt(4), y: contentY + mmToPt(6), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
+      else
+        left.drawText("Bild saknas", {
+          x: contentX + mmToPt(4),
+          y: contentY + mmToPt(6),
+          size: 12,
+          font: nunito,
+          color: rgb(0.8, 0.1, 0.1),
+        });
     } catch (e) {
-      tr(trace, "page:image:error", { page: scene?.page, error: String(e?.message || e) });
-      left.drawText("Bildfel", { x: contentX + mmToPt(4), y: contentY + mmToPt(6), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
+      tr(trace, "page:image:error", {
+        page: scene?.page,
+        error: String(e?.message || e),
+      });
+      left.drawText("Bildfel", {
+        x: contentX + mmToPt(4),
+        y: contentY + mmToPt(6),
+        size: 12,
+        font: nunito,
+        color: rgb(0.8, 0.1, 0.1),
+      });
     }
 
     // Höger: text
     const right = pdfDoc.addPage([pageW, pageH]);
-    right.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
+    right.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: rgb(0.96, 0.98, 1),
+    });
 
-    const cx = contentX + trimWpt / 2, cy = contentY + trimHpt / 2 + mmToPt(6);
+    const cx = contentX + trimWpt / 2,
+      cy = contentY + trimHpt / 2 + mmToPt(6);
     drawWrappedCenterColor(
-      right, mainText, cx, cy, trimWpt * 0.76, trimHpt * 0.46, nunito,
-      Math.round(baseTextSize * TEXT_SCALE), baseLeading, 12, rgb(0.08, 0.08, 0.1), "center"
+      right,
+      mainText,
+      cx,
+      cy,
+      trimWpt * 0.76,
+      trimHpt * 0.46,
+      nunito,
+      Math.round(baseTextSize * TEXT_SCALE),
+      baseLeading,
+      12,
+      rgb(0.08, 0.08, 0.1),
+      "center"
     );
 
-    // Sidnummer
+    // Sidnummer (behåller din nuvarande logik)
     const pageNum = 2 + i * 2 + 1;
     const pn = String(pageNum);
     const pnW = nunito.widthOfTextAtSize(pn, 10);
-    right.drawText(pn, { x: contentX + trimWpt - outer - pnW, y: contentY + mmToPt(6), size: 10, font: nunito, color: rgb(0.35, 0.35, 0.45) });
+    right.drawText(pn, {
+      x: contentX + trimWpt - outer - pnW,
+      y: contentY + mmToPt(6),
+      size: 10,
+      font: nunito,
+      color: rgb(0.35, 0.35, 0.45),
+    });
 
     // Vine dekor
-    drawVineSafe(right, cx, contentY + trimHpt * 0.34, trimWpt * 0.80, rgb(0.25,0.32,0.55), 2.4);
+    drawVineSafe(
+      right,
+      cx,
+      contentY + trimHpt * 0.34,
+      trimWpt * 0.8,
+      rgb(0.25, 0.32, 0.55),
+      2.4
+    );
   }
 
   /* -------- SLUT -------- */
   {
     const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: rgb(0.96, 0.98, 1) });
+    page.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: rgb(0.96, 0.98, 1),
+    });
 
     const cx = contentX + trimWpt / 2;
     const topY = contentY + trimHpt * 0.58;
@@ -1544,160 +1796,47 @@ try {
     drawWrappedCenterColor(
       page,
       "Snipp snapp snut – så var sagan slut!",
-      cx, topY,
-      trimWpt * 0.76, mmToPt(30),
-      nunito, 22, 1.22, 14, rgb(0.1,0.1,0.12), "center"
+      cx,
+      topY,
+      trimWpt * 0.76,
+      mmToPt(30),
+      nunito,
+      22,
+      1.22,
+      14,
+      rgb(0.1, 0.1, 0.12),
+      "center"
     );
 
-    drawHeart(page, cx, contentY + trimHpt * 0.38, mmToPt(14), rgb(0.50, 0.36, 0.82));
+    drawHeart(
+      page,
+      cx,
+      contentY + trimHpt * 0.38,
+      mmToPt(14),
+      rgb(0.5, 0.36, 0.82)
+    );
   }
 
-   /* -------- PRINT endpaper (sista sidan blank) -------- */
-if (String(deliverable).toLowerCase() === "print") {
-  pdfDoc.addPage([pageW, pageH]); // helt blank
- }
-
-  /* -------- BACK COVER -------- */
-  try {
-    const page = pdfDoc.addPage([pageW, pageH]);
-    const bg = rgb(0.58, 0.54, 0.86);
-    page.drawRectangle({ x: contentX, y: contentY, width: trimWpt, height: trimHpt, color: bg });
-    const centerX = contentX + trimWpt / 2;
-    const centerY = contentY + trimHpt / 2;
-    drawWrappedCenterColor(page, blurb, centerX, centerY, trimWpt * 0.72, trimHpt * 0.36, nunito, 14, 1.42, 12, rgb(1,1,1), "center");
-  } catch (e) {
-    tr(trace, "back:error", { error: String(e?.message || e) });
-    const page = pdfDoc.addPage([pageW, pageH]);
-    page.drawText("Baksidan kunde inte renderas.", { x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1) });
+  /* -------- PRINT endpaper (sista sidan blank) -------- */
+  if (isPrintDeliverable) {
+    pdfDoc.addPage([pageW, pageH]); // helt blank
   }
 
-  
+  /* -------- BACK COVER (endast för digital/preview) -------- */
+  if (!isPrintDeliverable) {
+    try {
+      const page = pdfDoc.addPage([pageW, pageH]);
+      await renderBackCover(page, 0, 0, pageW, pageH);
+    } catch (e) {
+      tr(trace, "back:error", { error: String(e?.message || e) });
+    }
+  }
 
   const bytes = await pdfDoc.save();
   tr(trace, "pdf:done", { bytes: bytes.length });
   return bytes;
 }
 
-// Hjälper till att tolka cover-dimensions från Gelato v3
-function coverSizeFromSpec(spec) {
-  if (!spec || typeof spec !== "object") return null;
-
-  const unit = String(spec.measurementUnit || spec.unit || "mm").toLowerCase();
-
-  const wRaw =
-    spec.totalWidthMm ??
-    spec.totalWidth ??
-    spec.widthMm ??
-    spec.width ??
-    null;
-
-  const hRaw =
-    spec.totalHeightMm ??
-    spec.totalHeight ??
-    spec.heightMm ??
-    spec.height ??
-    null;
-
-  if (!wRaw || !hRaw) return null;
-
-  if (unit === "pt" || unit === "points") {
-    return { widthPt: wRaw, heightPt: hRaw };
-  }
-
-  // Tolka som mm (vanligast)
-  const wMm = wRaw;
-  const hMm = hRaw;
-  return { widthPt: mmToPt(wMm), heightPt: mmToPt(hMm) };
-}
-
-/**
- * Bygger en omslags-wrap-PDF (fram+rygg+bak) utifrån en kvadratisk omslagsbild.
- * - coverRow: ett av dina image-objekt (kind:"cover" eller page:0/1) med image_id/url/data_url
- * - spec: svar från Gelatos /cover-dimensions (kan vara null → fallback)
- */
-async function buildCoverWrapPdf({ env, coverRow, spec }) {
-  if (!coverRow) throw new Error("Missing coverRow for wrap PDF");
-
-  const trimSpec = TRIMS.square200;
-  const defaultBleedMm = trimSpec.default_bleed_mm ?? 3;
-  const defaultSpineMm = 10;
-
-  const size = coverSizeFromSpec(spec);
-  let widthPt, heightPt, bleedMm = defaultBleedMm, spineMm = defaultSpineMm;
-
-  if (size) {
-    widthPt = size.widthPt;
-    heightPt = size.heightPt;
-  } else {
-    // Fallback: 2×inlaga + rygg + bleed
-    const totalWmm = trimSpec.w_mm * 2 + spineMm + bleedMm * 2;
-    const totalHmm = trimSpec.h_mm + bleedMm * 2;
-    widthPt  = mmToPt(totalWmm);
-    heightPt = mmToPt(totalHmm);
-  }
-
-  const pdfDoc = await PDFDocument.create();
-  const page = pdfDoc.addPage([widthPt, heightPt]);
-
-  // Bakgrund
-  page.drawRectangle({
-    x: 0,
-    y: 0,
-    width: widthPt,
-    height: heightPt,
-    color: rgb(0.96, 0.98, 1),
-  });
-
-  // Omslagsbild
-  const imgBytes = await getImageBytes(env, coverRow);
-  const img = await embedImage(pdfDoc, imgBytes);
-  if (!img) throw new Error("Failed to embed cover image for wrap");
-
-  const marginPt = mmToPt(bleedMm + 2);
-
-  // Approximera "front"-ytan på högra halvan av wrapen
-  const frontX = widthPt * 0.5 + marginPt * 0.3;
-  const frontW = widthPt * 0.5 - marginPt * 1.3;
-  const frontY = marginPt;
-  const frontH = heightPt - marginPt * 2;
-
-  drawImageCover(page, img, frontX, frontY, frontW, frontH);
-
-  return await pdfDoc.save();
-}
-
-/**
- * Bygger en ren inlaga-PDF för tryck.
- * Strategi:
- * 1) Använd befintliga buildPdf(...) med deliverable:"print" → full bok (inkl omslag)
- * 2) Skala av första & sista sidan (som vi tolkar som omslag) → kvar blir inlagan
- */
-async function buildPrintInteriorPdf({ story, images, trim = "square200", bleed_mm }, env) {
-  const trace = traceStart();
-  const fullBytes = await buildPdf(
-    { story, images, mode: "print", trim, bleed_mm, deliverable: "print" },
-    env,
-    trace
-  );
-
-  const fullDoc = await PDFDocument.load(fullBytes);
-  const pageCount = fullDoc.getPageCount();
-
-  if (pageCount <= 2) {
-    // Inget att skala av – returnera som den är
-    return { bytes: fullBytes, pages: pageCount };
-  }
-
-  const interiorDoc = await PDFDocument.create();
-  const indices = [];
-  for (let i = 1; i < pageCount - 1; i++) indices.push(i); // allt utom första & sista
-
-  const copiedPages = await interiorDoc.copyPages(fullDoc, indices);
-  copiedPages.forEach((p) => interiorDoc.addPage(p));
-
-  const bytes = await interiorDoc.save();
-  return { bytes, pages: indices.length };
-}
 
 
 /* ------------------------- Upload handler ---------------------------- */
@@ -2874,10 +3013,6 @@ if (req.method === "GET" && pathname === "/api/gelato/debug-status") {
 if (req.method === "POST" && pathname === "/api/gelato/debug-validate") {
   return await handleGelatoDebugValidate(req, env);
 }
-
-
-
-
 
 
       // 9) 404
