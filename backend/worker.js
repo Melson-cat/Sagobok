@@ -2056,33 +2056,36 @@ async function handleCheckoutOrderId(req, env) {
 
 
 
-async function gelatoQuote(env, orderPayload) {
-// ---------------- Gelato helper: orders:quote ----------------
-async function gelatoQuote(env, orderPayload) {
-  const resp = await fetch("https://order.gelatoapis.com/v4/orders:quote", {
+async function gelatoQuote(env, order) {
+  const res = await fetch("https://order.gelatoapis.com/v4/orders:quote", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-API-KEY": env.GELATO_API_KEY
+      "X-API-KEY": env.GELATO_API_KEY,   // se till att denna finns i Wrangler/env
     },
-    body: JSON.stringify(orderPayload)
+    body: JSON.stringify(order),
   });
 
-  const text = await resp.text();
-  console.log("GELATO QUOTE RESPONSE:", resp.status, text);
-
-  if (!resp.ok) {
-    // Vi vill se *exakt* vad Gelato klagar på
-    throw new Error(`Gelato quote failed (${resp.status}): ${text}`);
-  }
-
+  const text = await res.text();
+  let json;
   try {
-    return JSON.parse(text);
+    json = text ? JSON.parse(text) : null;
   } catch {
-    return { raw: text };
+    json = { raw: text };
   }
+
+  if (!res.ok) {
+    console.error("Gelato QUOTE error:", res.status, json);
+    throw new Error(
+      json?.error?.message ||
+      json?.message ||
+      `Gelato quote HTTP ${res.status}`
+    );
+  }
+
+  return json;
 }
-}
+
 
 
 /* ====================== STORY & IMAGES ====================== */
@@ -2425,7 +2428,6 @@ async function handleGelatoCreate(request, env, ctx) {
     const body = await request.json();
     const { order_id, shipment, customer, pdf_url } = body;
 
-    // För debug: vi kräver pdf_url
     if (!pdf_url) {
       return err("Saknar pdf_url i body (för debug).", 400);
     }
@@ -2436,8 +2438,8 @@ async function handleGelatoCreate(request, env, ctx) {
     const itemRef  = `${orderId}-1`;
 
     const shippingAddress = {
-      firstName: customer?.firstName || "Test",
-      lastName:  customer?.lastName || "Kund",
+      firstName:   customer?.firstName || "Test",
+      lastName:    customer?.lastName || "Kund",
       addressLine1: shipment?.addressLine1 || "Testgatan 1",
       addressLine2: shipment?.addressLine2 || "",
       city:         shipment?.city || "Stockholm",
@@ -2455,7 +2457,7 @@ async function handleGelatoCreate(request, env, ctx) {
       items: [
         {
           itemReferenceId: itemRef,
-          productUid: env.GELATO_PRODUCT_UID, // t.ex. "photo-book_hardcover_200x200_mm"
+          productUid: env.GELATO_PRODUCT_UID,
           quantity: 1,
           files: [
             {
@@ -2468,10 +2470,10 @@ async function handleGelatoCreate(request, env, ctx) {
       shipmentMethodUid: shipment?.shipmentMethodUid || undefined
     };
 
-    // 🔍 QUOTE till Gelato
+    // 🔍 NU anropar vi Gelatos QUOTE-endpoint
     const quote = await gelatoQuote(env, gelatoOrder);
 
-    // ✅ Viktigt: använd ok(...) så CORS-headrar kommer med
+    // ✅ CORS via ok()
     return ok({
       mode: "quote-debug",
       payloadSentToGelato: gelatoOrder,
@@ -2483,6 +2485,7 @@ async function handleGelatoCreate(request, env, ctx) {
     return err(error.message || "Gelato create failed", 400);
   }
 }
+
 
 
 
