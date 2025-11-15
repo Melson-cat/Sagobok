@@ -2421,91 +2421,95 @@ async function handleGelatoPrices(req, env) {
   } catch (e) { return err(e?.message || "gelato prices failed", 500); }
 }
 
-// ---------------- /api/gelato/create (DEBUG = QUOTE) ----------------
-async function handleGelatoCreate(request, env, ctx) {
+async function handleGelatoCreate(req, env) {
   try {
-    const body = await request.json();
-    const {
-      order_id,
-      shipment = {},
-      customer = {},
-      pdf_url,
-      page_count    // 👈 kan komma från frontend vid debug
-    } = body;
+    const body = await req.json().catch(() => ({}));
 
-    const currency = (env.GELATO_CURRENCY || "SEK").toUpperCase();
-    const orderId  = order_id || "debug-order-1";
-    const custRef  = customer.email || `cust-${orderId}`;
-    const itemRef  = `${orderId}-1`;
+    const orderId   = body.order_id || `bp-${Date.now()}`;
+    const pdfUrl    = body.pdf_url;
+    const pageCount = Number(body.page_count);
 
-    const shippingAddress = {
-      firstName:    customer.firstName || "Test",
-      lastName:     customer.lastName || "Kund",
-      addressLine1: shipment.addressLine1 || "Testgatan 1",
-      addressLine2: shipment.addressLine2 || "",
-      city:         shipment.city || "Stockholm",
-      postCode:     shipment.postCode || "111 22",
-      country:      shipment.country || "SE",
-      email:        customer.email || "test@example.com",
-      phone:        customer.phone || ""
-    };
+    const shipment  = body.shipment || {};
+    const customer  = body.customer || {};
 
-    // 🔢 1) Bestäm pageCount
-    // För debug: använd page_count från body.
-    // Senare i "skarpt" flöde hämtar vi från din order (files.page_count).
-    let finalPageCount = page_count;
+    const productUid = body.productUid || env.GELATO_PRODUCT_UID;
+    const currency   = (env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
+    const country    = (shipment.country || env.GELATO_DEFAULT_COUNTRY || "SE").toUpperCase();
 
-    if (!finalPageCount) {
-      // TODO: här kan du sen hämta från din order-store:
-      // const ord = await loadOrder(env, orderId);
-      // finalPageCount = ord?.files?.page_count;
+    if (!pdfUrl) {
+      return err("Missing pdf_url", 400);
+    }
+    if (!Number.isFinite(pageCount) || pageCount <= 0) {
+      return err("Invalid page_count", 400);
+    }
+    if (!productUid) {
+      return err("Missing GELATO_PRODUCT_UID", 500);
     }
 
-    if (!pdf_url) {
-      return err("Saknar pdf_url i body (för debug).", 400);
-    }
-
-    if (!finalPageCount) {
-      return err(
-        "Saknar page_count – Gelato kräver pageCount för den här produkten.",
-        400
-      );
-    }
-
-    // 🧱 2) Bygg payload till Gelato (NOTE: products + pageCount)
-    const gelatoOrder = {
-      orderReferenceId:    orderId,
-      customerReferenceId: custRef,
+    const payload = {
+      orderReferenceId: orderId,
+      customerReferenceId: customer.email || "bp-customer",
       currency,
-      shippingAddress,
+      recipient: {
+        firstName:    customer.firstName || "Test",
+        lastName:     customer.lastName  || "Kund",
+        addressLine1: shipment.addressLine1,
+        addressLine2: shipment.addressLine2 || "",
+        city:         shipment.city,
+        postCode:     shipment.postCode,
+        country,
+        email:        customer.email,
+        phone:        customer.phone
+      },
       products: [
         {
-          itemReferenceId: itemRef,
-          productUid: env.GELATO_PRODUCT_UID,
+          itemReferenceId: "book-1",
+          productUid,
           quantity: 1,
-          pageCount: finalPageCount,      // 👈 VIKTIGT
+          pageCount,
           files: [
             {
               type: "default",
-              url: pdf_url
+              url: pdfUrl
             }
           ]
         }
-      ],
-      shipmentMethodUid: shipment.shipmentMethodUid || undefined
+      ]
     };
 
-    const quote = await gelatoQuote(env, gelatoOrder);
+    const url = `${GELATO_BASE.order}/orders:quote`; // 🔹 samma endpoint som i ditt test
 
-    return ok({
-      mode: "quote-debug",
-      payloadSentToGelato: gelatoOrder,
-      quoteResponse: quote
+    try {
+      const gelatoResp = await gelatoFetch(url, env, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+
+      return ok({
+        ok: true,
+        payloadSent: payload,
+        gelato: gelatoResp
+      });
+    } catch (e) {
+      if (e?.name === "GelatoError") {
+        return ok(
+          {
+            ok: false,
+            error: e.message,
+            status: e.status,
+            url: e.url,
+            details: e.data || e.raw || null,
+            where: "gelato.create"
+          },
+          { status: 400 }
+        );
+      }
+      throw e;
+    }
+  } catch (e) {
+    return err(e?.message || "gelato create failed", 500, {
+      where: "gelato.create"
     });
-
-  } catch (error) {
-    console.error("handleGelatoCreate error:", error);
-    return err(error.message || "Gelato create failed", 400);
   }
 }
 
