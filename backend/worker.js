@@ -2053,6 +2053,38 @@ async function handleCheckoutOrderId(req, env) {
     return ok({ order_id, source: "stripe" });
   } catch (e) { return err(e?.message || "order-id lookup failed", 500); }
 }
+
+
+
+async function gelatoQuote(env, orderPayload) {
+// ---------------- Gelato helper: orders:quote ----------------
+async function gelatoQuote(env, orderPayload) {
+  const resp = await fetch("https://order.gelatoapis.com/v4/orders:quote", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-KEY": env.GELATO_API_KEY
+    },
+    body: JSON.stringify(orderPayload)
+  });
+
+  const text = await resp.text();
+  console.log("GELATO QUOTE RESPONSE:", resp.status, text);
+
+  if (!resp.ok) {
+    // Vi vill se *exakt* vad Gelato klagar på
+    throw new Error(`Gelato quote failed (${resp.status}): ${text}`);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
+  }
+}
+}
+
+
 /* ====================== STORY & IMAGES ====================== */
 /* Helpers som redan finns i filen (används här):
    - ok, err
@@ -2387,43 +2419,88 @@ async function handleGelatoPrices(req, env) {
   } catch (e) { return err(e?.message || "gelato prices failed", 500); }
 }
 
-async function handleGelatoCreate(req, env) {
+// ---------------- /api/gelato/create (DEBUG = QUOTE) ----------------
+async function handleGelatoCreate(request, env, ctx) {
   try {
-    const body = await req.json().catch(()=> ({}));
-    const order_id = body?.order_id;
-    if (!order_id) return err("Missing order_id", 400);
+    const body = await request.json();
+    const { order_id, shipment, customer, pdf_url } = body;
 
-    const ord = await kvGetOrder(env, order_id);
-    if (!ord) return err("Order not found", 404);
-   if (!ord?.files?.single_pdf_url || !Number.isFinite(ord?.files?.page_count)) {
-  return err("Order is missing single_pdf_url or page_count; run /api/pdf/single-url first", 400);
-}
-
-try {
- const g = await gelatoCreateOrder(env, {
-  order: ord, shipment: body?.shipment || {}, currency: body?.currency || undefined, customer: body?.customer || {}
- });
- return ok({ gelato: g, order: await kvGetOrder(env, order_id) });
- } catch (e) {
- if (e?.status === 501 || e?.name === "NotImplemented") {
-   return ok({ error: e.message, where: "gelato.create", status: 501 }, { status: 501 });
- }
- throw e;
-}
-
-  } catch (e) {
-    if (e?.name === "GelatoError") {
-      return ok({
-        error: e.message,
-        where: "gelato.create",
-        status: e.status,
-        url: e.url,
-        details: e.data || e.raw || null
-      }, { status: 400 });
+    // För debug: vi tillåter att du skickar pdf_url direkt i request-body.
+    if (!pdf_url) {
+      return new Response(
+        JSON.stringify({ error: "Saknar pdf_url i body (för debug)." }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
     }
-    return err(e?.message || "gelato create failed", 500, { where: "gelato.create" });
+
+    // Hårdkoda valuta för nu, eller läs från env / din order
+    const currency = (env.GELATO_CURRENCY || "SEK").toUpperCase();
+    const orderId  = order_id || "debug-order-1";
+    const custRef  = customer?.email || `cust-${orderId}`;
+    const itemRef  = `${orderId}-1`;
+
+    // Bygg shippingAddress enligt Gelatos krav
+    const shippingAddress = {
+      firstName: customer?.firstName || "Test",
+      lastName:  customer?.lastName || "Kund",
+      addressLine1: shipment?.addressLine1 || "Testgatan 1",
+      addressLine2: shipment?.addressLine2 || "",
+      city:         shipment?.city || "Stockholm",
+      postCode:     shipment?.postCode || "111 22",
+      country:      shipment?.country || "SE",   // två bokstäver, t.ex. "SE"
+      email:        customer?.email || "test@example.com", // ⚠️ viktigt
+      phone:        customer?.phone || ""
+    };
+
+    // Själva orderPayload som skickas till Gelato
+    const gelatoOrder = {
+      orderReferenceId:    orderId,
+      customerReferenceId: custRef,
+      currency,
+      shippingAddress,
+      items: [
+        {
+          itemReferenceId: itemRef,
+          productUid: env.GELATO_PRODUCT_UID, // t.ex. "photo-book_hardcover_200x200_mm"
+          quantity: 1,
+          files: [
+            {
+              type: "default",
+              url: pdf_url
+            }
+          ]
+        }
+      ],
+      // Om du vill skicka shipmentMethodUid redan nu kan du göra det:
+      shipmentMethodUid: shipment?.shipmentMethodUid || undefined
+    };
+
+    // 🔍 DET ÄR HÄR vi debuggar: QUOTE först
+    const quote = await gelatoQuote(env, gelatoOrder);
+
+    // ⬇️ JUST NU – BARA DEBUG-RESPONS, INGEN RIKTIG ORDER
+    return new Response(
+      JSON.stringify({
+        mode: "quote-debug",
+        payloadSentToGelato: gelatoOrder,
+        quoteResponse: quote
+      }, null, 2),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+
+    // När detta funkar kan vi senare lägga till:
+    // - riktig order till /v4/orders
+    // - GELATO_DRY_RUN osv.
+
+  } catch (err) {
+    console.error("handleGelatoCreate error:", err);
+    return new Response(
+      JSON.stringify({ error: err.message || "Gelato create failed" }),
+      { status: 400, headers: { "Content-Type": "application/json" } }
+    );
   }
 }
+
 
 
 // --- product spec helper (needed by createOrder) ---
