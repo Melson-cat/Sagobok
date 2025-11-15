@@ -2061,30 +2061,29 @@ async function gelatoQuote(env, order) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-API-KEY": env.GELATO_API_KEY,   // se till att denna finns i Wrangler/env
+      "X-API-KEY": env.GELATO_API_KEY,
     },
     body: JSON.stringify(order),
   });
 
   const text = await res.text();
-  let json;
+  let json = null;
   try {
     json = text ? JSON.parse(text) : null;
   } catch {
-    json = { raw: text };
+    // text var inte giltig JSON, behåll bara rå text
   }
 
-  if (!res.ok) {
-    console.error("Gelato QUOTE error:", res.status, json);
-    throw new Error(
-      json?.error?.message ||
-      json?.message ||
-      `Gelato quote HTTP ${res.status}`
-    );
-  }
-
-  return json;
+  // ⛔️ Viktigt: kasta inte här – returnera ALLT för debug
+  return {
+    ok: res.ok,
+    status: res.status,
+    headers: Object.fromEntries(res.headers.entries()),
+    text,
+    json,
+  };
 }
+
 
 
 
@@ -2438,8 +2437,8 @@ async function handleGelatoCreate(request, env, ctx) {
     const itemRef  = `${orderId}-1`;
 
     const shippingAddress = {
-      firstName:   customer?.firstName || "Test",
-      lastName:    customer?.lastName || "Kund",
+      firstName:    customer?.firstName || "Test",
+      lastName:     customer?.lastName || "Kund",
       addressLine1: shipment?.addressLine1 || "Testgatan 1",
       addressLine2: shipment?.addressLine2 || "",
       city:         shipment?.city || "Stockholm",
@@ -2457,7 +2456,7 @@ async function handleGelatoCreate(request, env, ctx) {
       items: [
         {
           itemReferenceId: itemRef,
-          productUid: env.GELATO_PRODUCT_UID,
+          productUid: env.GELATO_PRODUCT_UID, // måste vara satt i env
           quantity: 1,
           files: [
             {
@@ -2470,10 +2469,13 @@ async function handleGelatoCreate(request, env, ctx) {
       shipmentMethodUid: shipment?.shipmentMethodUid || undefined
     };
 
-    // 🔍 NU anropar vi Gelatos QUOTE-endpoint
+    // 🔍 1) Anropa QUOTE – men kasta inte, ta emot allt
     const quote = await gelatoQuote(env, gelatoOrder);
 
-    // ✅ CORS via ok()
+    // 🔍 2) Logga till Worker-loggen (syns i Cloudflare)
+    console.log("Gelato QUOTE debug:", quote);
+
+    // 🔄 3) Skicka ut ALLT till frontend så vi ser i console.log()
     return ok({
       mode: "quote-debug",
       payloadSentToGelato: gelatoOrder,
@@ -2485,6 +2487,7 @@ async function handleGelatoCreate(request, env, ctx) {
     return err(error.message || "Gelato create failed", 400);
   }
 }
+
 
 
 
