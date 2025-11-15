@@ -2726,7 +2726,6 @@ async function handleGelatoOrderStatus(req, env) {
   }
 }
 
-handleGelatoDebugValidate
 
 
 async function handleGelatoDebugStatus(req, env) {
