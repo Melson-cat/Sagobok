@@ -248,22 +248,24 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
-  const contentUrl = order?.files?.single_pdf_url || null;
-  const pdfPages   = Number(order?.files?.page_count ?? 0);
+ const contentUrl   = order?.files?.single_pdf_url || null;
+const innerPages   = Number(order?.files?.page_count ?? 0);   // 👈 redan innersidor
+const totalPages   = Number(order?.files?.pdf_page_count ?? 0); // valfritt, debug
 
-  if (!contentUrl) {
-    throw new Error("Order is missing files.single_pdf_url (run /api/pdf/single-url first)");
-  }
-  if (!Number.isFinite(pdfPages) || pdfPages <= 0) {
-    throw new Error("Order is missing/invalid files.page_count");
-  }
+if (!contentUrl) {
+  throw new Error("Order is missing files.single_pdf_url (run /api/pdf/single-url first)");
+}
+if (!Number.isFinite(innerPages) || innerPages <= 0) {
+  throw new Error("Order is missing/invalid files.page_count (inner pages)");
+}
 
-  // 🔢 Gelato räknar bara innersidor → vår första sida är omslags-spreaden
-  const pageCount = pdfPages - 1;
+// Gelato vill ha innersidor → använd innerPages direkt
+const pageCount = innerPages;
 
-  if (!Number.isFinite(pageCount) || pageCount <= 0) {
-    throw new Error(`Derived Gelato pageCount is invalid (pdfPages=${pdfPages}, pageCount=${pageCount})`);
-  }
+if (!Number.isFinite(pageCount) || pageCount <= 0) {
+  throw new Error(`Derived Gelato pageCount is invalid (innerPages=${innerPages}, totalPages=${totalPages})`);
+}
+
 
   // Valfritt: liten varning om något är off
   if (pageCount % 2 !== 0) {
@@ -2584,105 +2586,46 @@ async function handleGelatoCreate(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
 
-    const orderId = body.order_id || `bp-${Date.now()}`;
+    const orderId = body.order_id;
+    if (!orderId) return err("Missing order_id", 400);
 
-    // Försök läsa från body först
-    let pdfUrl    = body.pdf_url || null;
-    let pageCount = Number(body.page_count);
-
-    // Om något saknas → försök hämta från KV-order
-    if (!pdfUrl || !Number.isFinite(pageCount) || pageCount <= 0) {
-      const ord = await kvGetOrder(env, orderId);
-      if (ord?.files) {
-        if (!pdfUrl && ord.files.single_pdf_url) {
-          pdfUrl = ord.files.single_pdf_url;
-        }
-        if ((!Number.isFinite(pageCount) || pageCount <= 0) && Number.isFinite(ord.files.page_count)) {
-          pageCount = Number(ord.files.page_count);
-        }
-      }
-    }
-
-    if (!pdfUrl) {
-      return err("Missing pdf_url", 400);
-    }
-    if (!Number.isFinite(pageCount) || pageCount <= 0) {
-      return err("Invalid page_count", 400);
-    }
+    // Hämta ordern från KV
+    const ord = await kvGetOrder(env, orderId);
+    if (!ord) return err("Order not found in KV", 404);
 
     const shipment  = body.shipment || {};
     const customer  = body.customer || {};
-    const productUid = body.productUid || env.GELATO_PRODUCT_UID;
-    const currency   = (env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
-    const country    = (shipment.country || env.GELATO_DEFAULT_COUNTRY || "SE").toUpperCase();
+    const currency  = body.currency || undefined;
 
-    if (!productUid) {
-      return err("Missing GELATO_PRODUCT_UID", 500);
+    // Viktigt: se till att page_count & single_pdf_url är satta via /api/pdf/single-url
+    if (!ord.files?.single_pdf_url || !Number.isFinite(ord.files?.page_count)) {
+      return err("Order is missing PDF data (single_pdf_url or page_count). Run /api/pdf/single-url first.", 400);
     }
 
-    const payload = {
-      orderReferenceId: orderId,
-      customerReferenceId: customer.email || "bp-customer",
+    const { payload, gelato } = await gelatoCreateOrder(env, {
+      order: ord,
+      shipment,
+      customer,
       currency,
-      recipient: {
-        firstName:    customer.firstName || "Test",
-        lastName:     customer.lastName  || "Kund",
-        addressLine1: shipment.addressLine1,
-        addressLine2: shipment.addressLine2 || "",
-        city:         shipment.city,
-        postCode:     shipment.postCode,
-        country,
-        email:        customer.email,
-        phone:        customer.phone
-      },
-      products: [
-        {
-          itemReferenceId: "book-1",
-          productUid,
-          quantity: 1,
-          pageCount,
-          files: [
-            {
-              type: "default",
-              url: pdfUrl,
-            }
-          ]
-        }
-      ]
-    };
+    });
 
-    const url = `${GELATO_BASE.order}/orders:quote`;
-
-    try {
-      const gelatoResp = await gelatoFetch(url, env, {
-        method: "POST",
-        body: JSON.stringify(payload)
-      });
-
-      return ok({
-        ok: true,
-        payloadSent: payload,
-        gelato: gelatoResp
-      });
-    } catch (e) {
-      if (e?.name === "GelatoError") {
-        return ok(
-          {
-            ok: false,
-            error: e.message,
-            status: e.status,
-            url: e.url,
-            details: e.data || e.raw || null,
-            where: "gelato.create"
-          },
-          { status: 400 }
-        );
-      }
-      throw e;
-    }
+    return ok({ ok: true, payloadSent: payload, gelato });
   } catch (e) {
+    if (e?.name === "GelatoError") {
+      return ok(
+        {
+          ok: false,
+          error: e.message,
+          status: e.status,
+          url: e.url,
+          details: e.data || e.raw || null,
+          where: "gelato.create",
+        },
+        { status: 400 }
+      );
+    }
     return err(e?.message || "gelato create failed", 500, {
-      where: "gelato.create"
+      where: "gelato.create",
     });
   }
 }
