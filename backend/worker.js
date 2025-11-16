@@ -2564,16 +2564,24 @@ async function handleGelatoCreate(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
 
-    const orderId   = body.order_id || `bp-${Date.now()}`;
-    const pdfUrl    = body.pdf_url;
-    const pageCount = Number(body.page_count);
+    const orderId = body.order_id || `bp-${Date.now()}`;
 
-    const shipment  = body.shipment || {};
-    const customer  = body.customer || {};
+    // Försök läsa från body först
+    let pdfUrl    = body.pdf_url || null;
+    let pageCount = Number(body.page_count);
 
-    const productUid = body.productUid || env.GELATO_PRODUCT_UID;
-    const currency   = (env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
-    const country    = (shipment.country || env.GELATO_DEFAULT_COUNTRY || "SE").toUpperCase();
+    // Om något saknas → försök hämta från KV-order
+    if (!pdfUrl || !Number.isFinite(pageCount) || pageCount <= 0) {
+      const ord = await kvGetOrder(env, orderId);
+      if (ord?.files) {
+        if (!pdfUrl && ord.files.single_pdf_url) {
+          pdfUrl = ord.files.single_pdf_url;
+        }
+        if ((!Number.isFinite(pageCount) || pageCount <= 0) && Number.isFinite(ord.files.page_count)) {
+          pageCount = Number(ord.files.page_count);
+        }
+      }
+    }
 
     if (!pdfUrl) {
       return err("Missing pdf_url", 400);
@@ -2581,6 +2589,13 @@ async function handleGelatoCreate(req, env) {
     if (!Number.isFinite(pageCount) || pageCount <= 0) {
       return err("Invalid page_count", 400);
     }
+
+    const shipment  = body.shipment || {};
+    const customer  = body.customer || {};
+    const productUid = body.productUid || env.GELATO_PRODUCT_UID;
+    const currency   = (env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
+    const country    = (shipment.country || env.GELATO_DEFAULT_COUNTRY || "SE").toUpperCase();
+
     if (!productUid) {
       return err("Missing GELATO_PRODUCT_UID", 500);
     }
@@ -2609,14 +2624,14 @@ async function handleGelatoCreate(req, env) {
           files: [
             {
               type: "default",
-              url: pdfUrl
+              url: pdfUrl,
             }
           ]
         }
       ]
     };
 
-    const url = `${GELATO_BASE.order}/orders:quote`; // 🔹 samma endpoint som i ditt test
+    const url = `${GELATO_BASE.order}/orders:quote`;
 
     try {
       const gelatoResp = await gelatoFetch(url, env, {
@@ -2651,6 +2666,7 @@ async function handleGelatoCreate(req, env) {
     });
   }
 }
+
 
 
 
