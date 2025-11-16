@@ -3005,6 +3005,7 @@ if (req.method === "POST" && pathname === "/api/pdf/count-by-url") {
 
 if (req.method === "POST" && pathname === "/api/pdf/single-url") {
   return await handlePdfSingleUrl(req, env);
+  return withCORS(r);
 }
 if (req.method === "GET" && pathname === "/api/gelato/debug-status") {
   return await handleGelatoDebugStatus(req, env);
