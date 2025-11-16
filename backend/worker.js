@@ -1930,7 +1930,6 @@ async function handlePdfRequest(req, env) {
     return new Response(body, { status: 500, headers: { "content-type": "application/json", "x-request-id": reqId, ...CORS } });
   }
 }
-
 async function handlePdfSingleUrl(req, env) {
   try {
     const payload = await req.json().catch(() => ({}));
@@ -1980,36 +1979,43 @@ async function handlePdfSingleUrl(req, env) {
       trace
     );
 
-    // Räkna verkligt sidantal i den PDF vi faktiskt genererade
-    const doc = await PDFDocument.load(bytes);
-    const pages = doc.getPageCount();
+    // 🔢 Räkna verkligt sidantal i den PDF vi faktiskt genererade
+    const doc        = await PDFDocument.load(bytes);
+    const totalPages = doc.getPageCount();
 
-    const ts = Date.now();
+    // För vårt fotobokscase:
+    // sida 1 = omslag (liggande), resten = innersidor
+    const innerPages = Math.max(0, totalPages - 1);
+
+    const ts        = Date.now();
     const safeTitle = safeTitleFrom(story);
-    const suffix = isPrint ? "_PRINT_BOOK.pdf" : "_BOOK.pdf";
-    const key = `${safeTitle}_${ts}${suffix}`;
-    const url = await r2PutPublic(env, key, bytes, "application/pdf");
+    const suffix    = isPrint ? "_PRINT_BOOK.pdf" : "_BOOK.pdf";
+    const key       = `${safeTitle}_${ts}${suffix}`;
+    const url       = await r2PutPublic(env, key, bytes, "application/pdf");
 
     // Spara på ordern så både success-sidan & Gelato vet var filen finns
     if (order_id) {
       await kvAttachFiles(env, order_id, {
-        single_pdf_url: url,
-        single_pdf_key: key,
-        page_count: pages,
-        deliverable: normDeliverable,
+        single_pdf_url:   url,
+        single_pdf_key:   key,
+        page_count:       innerPages,   // 👈 DETTA läser Gelato-koden
+        pdf_page_count:   totalPages,   // 👈 extra debug/info
+        deliverable:      normDeliverable,
       });
     }
 
-    return ok({
+    return withCORS(ok({
       url,
       key,
-      pages,
+      pages_total: totalPages,
+      pages_inner: innerPages,
       deliverable: normDeliverable,
-    });
+    }));
   } catch (e) {
-    return err(e?.message || "single-url failed", 500);
+    return withCORS(err(e?.message || "single-url failed", 500));
   }
 }
+
 
 
 
