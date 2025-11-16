@@ -249,13 +249,25 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
   const contentUrl = order?.files?.single_pdf_url || null;
-  const pageCount  = Number(order?.files?.page_count ?? 0);
+  const pdfPages   = Number(order?.files?.page_count ?? 0);
 
   if (!contentUrl) {
     throw new Error("Order is missing files.single_pdf_url (run /api/pdf/single-url first)");
   }
-  if (!Number.isFinite(pageCount) || pageCount <= 0) {
+  if (!Number.isFinite(pdfPages) || pdfPages <= 0) {
     throw new Error("Order is missing/invalid files.page_count");
+  }
+
+  // 🔢 Gelato räknar bara innersidor → vår första sida är omslags-spreaden
+  const pageCount = pdfPages - 1;
+
+  if (!Number.isFinite(pageCount) || pageCount <= 0) {
+    throw new Error(`Derived Gelato pageCount is invalid (pdfPages=${pdfPages}, pageCount=${pageCount})`);
+  }
+
+  // Valfritt: liten varning om något är off
+  if (pageCount % 2 !== 0) {
+    console.warn("⚠️ Gelato pageCount är udda – kolla layouten", { pdfPages, pageCount });
   }
 
   const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
@@ -283,10 +295,10 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
       itemReferenceId: `book-${order.id || "1"}`,
       productUid,
       quantity: 1,
-      pageCount,
+      pageCount,                 // ✅ nu använder vi inner-sidorna (pdfPages - 1)
       files: [
         {
-          type: "default",        // ✅ samma som i quote-testet
+          type: "default",
           url:  contentUrl
         }
       ]
@@ -302,8 +314,9 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
     products,
     ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
     metadata: [
-      { key: "bp_kind",  value: String(order.kind || order?.draft?.kind || "printed") },
-      { key: "bp_pages", value: String(pageCount) },
+      { key: "bp_kind",        value: String(order.kind || order?.draft?.kind || "printed") },
+      { key: "bp_pages_pdf",   value: String(pdfPages) },   // 👈 totalt i PDF
+      { key: "bp_pages_gelato", value: String(pageCount) }, // 👈 det Gelato faktiskt fick
     ],
   };
 
@@ -319,6 +332,7 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
 
   return { payload, gelato: g };
 }
+
 
 
 
