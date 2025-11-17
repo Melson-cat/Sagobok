@@ -2433,36 +2433,31 @@ async function gelatoGetOrder(env, gelatoOrderId) {
   return gelatoFetch(url, env, { method: "GET" });
 }
 
-/** Skapa Gelato-order utifrån KV-order */
 async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency }) {
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
- const contentUrl = order?.files?.single_pdf_url || null;
-const pdfPages   = Number(order?.files?.page_count ?? 0);
+  const contentUrl = order?.files?.single_pdf_url || null;
+  const pdfPages   = Number(order?.files?.page_count ?? 0);
 
-if (!contentUrl) {
-  throw new Error("Order is missing files.single_pdf_url (run /api/pdf/single-url first)");
-}
-if (!Number.isFinite(pdfPages) || pdfPages <= 0) {
-  throw new Error("Order is missing/invalid files.page_count");
-}
+  if (!contentUrl) {
+    throw new Error("Order is missing files.single_pdf_url (run /api/pdf/single-url first)");
+  }
+  if (!Number.isFinite(pdfPages) || pdfPages <= 0) {
+    throw new Error("Order is missing/invalid files.page_count");
+  }
 
-// Gelato vill ha det faktiska sidantalet, inkl. cover + endpapers
-const pageCount = pdfPages;
+  // ✅ Gelato vill att pageCount = TOTALT antal sidor i PDF:en (inkl. omslag)
+  const pageCount = pdfPages;
 
-if (!Number.isFinite(pageCount) || pageCount <= 0) {
-  throw new Error(`Derived Gelato pageCount is invalid (pageCount=${pageCount})`);
-}
+  if (!Number.isFinite(pageCount) || pageCount <= 0) {
+    throw new Error(`Derived Gelato pageCount is invalid (pdfPages=${pdfPages}, pageCount=${pageCount})`);
+  }
 
-// Valfritt: varna om ojämnt sidantal
-if (pageCount % 2 !== 0) {
-  console.warn("⚠️ Gelato pageCount är udda – se till att PDF:en följer fotoboksreglerna", {
-    pdfPages,
-    pageCount,
-  });
-}
-
+  // För säkerhets skull: kasta om det är udda → då vet vi att buildPdf är fel
+  if (pageCount % 2 !== 0) {
+    throw new Error(`Print-PDF har ett udda antal sidor (${pageCount}). Justera buildPdf så det blir jämnt (t.ex. 34).`);
+  }
 
   const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
   const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
@@ -2484,7 +2479,7 @@ if (pageCount % 2 !== 0) {
     itemReferenceId: `book-${order.id || "1"}`,
     productUid,
     quantity: 1,
-    pageCount,
+    pageCount,                     // ✅ exakt samma som pdfPages
     files: [
       { type: "default", url: contentUrl }
     ],
@@ -2492,21 +2487,21 @@ if (pageCount % 2 !== 0) {
 
   const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
 
-  // 🔥 Viktig del: vi skickar både "shippingAddress/items" OCH "recipients"
-  // så vi matchar Gelatos felmeddelanden (shippingAddress/items)
-  // + det ni fått från support (recipients).
+  // 🔥 Matchar det Scoop sa:
+  // - v4/orders → items + shippingAddress
+  // - (recipients kan vi ha kvar parallellt, det stör inte)
   const payload = {
     orderType: DRY_RUN ? "draft" : "order",
     orderReferenceId: order.id,
     customerReferenceId: custEmail || `cust-${order.id}`,
     currency: CURR,
 
-    // v4 "simple" struktur
+    // "nya" v4-fält
     shippingAddress,
     items: [item],
     ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
 
-    // multi-recipient flavour (det support kallat "recipients")
+    // multi-recipient flavour (valfritt, men helt ok att skicka)
     recipients: [
       {
         firstName: customer.firstName || "Test",
@@ -2537,6 +2532,7 @@ if (pageCount % 2 !== 0) {
 
   return { payload, gelato: g };
 }
+
 
 /* ====================== Gelato – produktinfo/debug ====================== */
 
