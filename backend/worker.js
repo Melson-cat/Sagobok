@@ -1249,199 +1249,147 @@ const scenePages = mapTo16ScenePages();
    * Renderar framsidan (titel + ev bild) i en given "halva".
    * halfX/halfY är basen för sidan (t.ex. 0 för digital, pageW för höger halva i spread).
    */
-  async function renderFrontCover(page, halfX, halfY, boxW, boxH) {
-    if (!coverSrc) coverSrc = imgByPage.get(1) || null;
+  // --- front stays same measureBlock(...) ---
 
-    // Bild
-    if (coverSrc) {
-      try {
-        const bytes = await getImageBytes(env, coverSrc);
-        const coverImg = await embedImage(pdfDoc, bytes);
-        if (coverImg) {
-          drawImageCover(page, coverImg, halfX, halfY, boxW, boxH);
-        } else {
-          page.drawRectangle({
-            x: halfX + contentX,
-            y: halfY + contentY,
-            width: trimWpt,
-            height: trimHpt,
-            color: rgb(0.94, 0.96, 1),
-          });
-        }
-      } catch (e) {
-        tr(trace, "cover:image:error", {
-          error: String(e?.message || e),
-        });
-        page.drawRectangle({
-          x: halfX + contentX,
-          y: halfY + contentY,
-          width: trimWpt,
-          height: trimHpt,
-          color: rgb(0.94, 0.96, 1),
-        });
-      }
-    } else {
-      page.drawRectangle({
-        x: halfX + contentX,
-        y: halfY + contentY,
-        width: trimWpt,
-        height: trimHpt,
-        color: rgb(0.94, 0.96, 1),
-      });
-    }
+async function renderFrontCover(page, halfX, halfY, boxW, boxH) {
+  if (!coverSrc) coverSrc = imgByPage.get(1) || null;
 
-    // Titel + tagline i badge
-    const safeInset = mmToPt(GRID.outer_mm + 2);
-    const tw = trimWpt - safeInset * 2;
-    const cx = halfX + contentX + trimWpt / 2;
-    const topCenterY0 =
-      halfY + contentY + trimHpt - mmToPt(GRID.outer_mm + 16);
+  // Full-bleed fallback
+  const bgLight = rgb(0.94, 0.96, 1);
+  const safeInset = mmToPt(GRID.outer_mm + 2);
 
-    const titleM = measureBlock(
-      title,
-      nunitoSemi,
-      Math.min(trimWpt, trimHpt) * 0.16,
-      1.08,
-      22,
-      tw,
-      mmToPt(32)
-    );
-    const subtitleSize = Math.max(14, (titleM.size * 0.48) | 0);
-    const subM = subtitle
-      ? measureBlock(
-          subtitle,
-          nunito,
-          subtitleSize,
-          1.12,
-          12,
-          tw,
-          mmToPt(18)
-        )
-      : { blockH: 0 };
-
-    const padY = mmToPt(4),
-      padX = mmToPt(6),
-      gap = mmToPt(4);
-    const badgeH =
-      titleM.blockH + (subtitle ? gap + subM.blockH : 0) + padY * 2;
-    const badgeY = topCenterY0 - badgeH / 2;
-
-    page.drawRectangle({
-      x: halfX + contentX + safeInset - padX,
-      y: badgeY,
-      width: tw + padX * 2,
-      height: badgeH,
-      color: rgb(1, 1, 1),
-      opacity: 0.25,
-    });
-
-    // Titelrader
-    {
-      let y = badgeY + badgeH - padY - titleM.lineH / 2;
-      for (const ln of titleM.lines) {
-        const w = nunitoSemi.widthOfTextAtSize(ln, titleM.size);
-        page.drawText(ln, {
-          x: cx - w / 2,
-          y,
-          size: titleM.size,
-          font: nunitoSemi,
-          color: rgb(0.05, 0.05, 0.05),
-        });
-        y -= titleM.lineH;
-      }
-    }
-
-    // Undertitel/tagline
-    if (subtitle) {
-      const subCenterY = badgeY + padY + subM.blockH / 2;
-      let y = subCenterY + subM.blockH / 2 - subM.lineH;
-      for (const ln of subM.lines) {
-        const w = nunito.widthOfTextAtSize(ln, subtitleSize);
-        page.drawText(ln, {
-          x: cx - w / 2,
-          y,
-          size: subtitleSize,
-          font: nunito,
-          color: rgb(0.12, 0.12, 0.12),
-        });
-        y -= subM.lineH;
-      }
-    }
-  }
-
-  async function renderBackCover(page, halfX, halfY, boxW, boxH) {
+  // Image (cover/crop to fill)
+  if (coverSrc) {
     try {
-      const bg = rgb(0.58, 0.54, 0.86);
-      page.drawRectangle({
-        x: halfX + contentX,
-        y: halfY + contentY,
-        width: trimWpt,
-        height: trimHpt,
-        color: bg,
-      });
-      const centerX = halfX + contentX + trimWpt / 2;
-      const centerY = halfY + contentY + trimHpt / 2;
-      drawWrappedCenterColor(
-        page,
-        blurb,
-        centerX,
-        centerY,
-        trimWpt * 0.72,
-        trimHpt * 0.36,
-        nunito,
-        14,
-        1.42,
-        12,
-        rgb(1, 1, 1),
-        "center"
-      );
-    } catch (e) {
-      tr(trace, "back:error", { error: String(e?.message || e) });
-      page.drawText("Baksidan kunde inte renderas.", {
-        x: halfX + mmToPt(15),
-        y: halfY + mmToPt(15),
-        size: 12,
-        font: nunito,
-        color: rgb(0.8, 0.1, 0.1),
-      });
+      const bytes = await getImageBytes(env, coverSrc);
+      const coverImg = await embedImage(pdfDoc, bytes);
+      if (coverImg) {
+        // fills exactly the half box, centered – may crop slightly
+        drawImageCover(page, coverImg, halfX, halfY, boxW, boxH);
+      } else {
+        page.drawRectangle({ x: halfX, y: halfY, width: boxW, height: boxH, color: bgLight });
+      }
+    } catch {
+      page.drawRectangle({ x: halfX, y: halfY, width: boxW, height: boxH, color: bgLight });
+    }
+  } else {
+    page.drawRectangle({ x: halfX, y: halfY, width: boxW, height: boxH, color: bgLight });
+  }
+
+  // Title + subtitle badge (computed from the half box)
+  const tw = boxW - safeInset * 2;
+  const cx = halfX + boxW / 2;
+  const topCenterY0 = halfY + boxH - mmToPt(GRID.outer_mm + 16);
+
+  const titleM = measureBlock(
+    title,
+    nunitoSemi,
+    Math.min(boxW, boxH) * 0.16,
+    1.08,
+    22,
+    tw,
+    mmToPt(32)
+  );
+  const subtitleSize = Math.max(14, (titleM.size * 0.48) | 0);
+  const subM = subtitle
+    ? measureBlock(subtitle, nunito, subtitleSize, 1.12, 12, tw, mmToPt(18))
+    : { blockH: 0 };
+
+  const padY = mmToPt(4), padX = mmToPt(6), gap = mmToPt(4);
+  const badgeH = titleM.blockH + (subtitle ? gap + subM.blockH : 0) + padY * 2;
+  const badgeY = topCenterY0 - badgeH / 2;
+
+  page.drawRectangle({
+    x: halfX + safeInset - padX,
+    y: badgeY,
+    width: tw + padX * 2,
+    height: badgeH,
+    color: rgb(1, 1, 1),
+    opacity: 0.25,
+  });
+
+  // Title lines
+  {
+    let y = badgeY + badgeH - padY - titleM.lineH / 2;
+    for (const ln of titleM.lines) {
+      const w = nunitoSemi.widthOfTextAtSize(ln, titleM.size);
+      page.drawText(ln, { x: cx - w / 2, y, size: titleM.size, font: nunitoSemi, color: rgb(0.05,0.05,0.05) });
+      y -= titleM.lineH;
     }
   }
 
-  /* -------- OMSLAG -------- */
-  try {
-    if (isPrintDeliverable) {
-      // 🧾 PRINT: första sidan är ett liggande cover spread (bak + rygg + fram)
-     // NEW: exact Gelato cover sheet size
-const COVER_W_MM = 458.0;
-const COVER_H_MM = 246.0;
-
-const coverWpt = mmToPt(COVER_W_MM);
-const coverHpt = mmToPt(COVER_H_MM);
-const halfWpt  = coverWpt / 2;
-
-// Page 1 = landscape cover sheet (back+spine+front)
-const spreadPage = pdfDoc.addPage([coverWpt, coverHpt]);
-
-// Left half = back cover, right half = front cover
-await renderBackCover (spreadPage, 0,       0, halfWpt, coverHpt);
-await renderFrontCover(spreadPage, halfWpt, 0, halfWpt, coverHpt);
-
-    } else {
-      // 💻 DIGITAL/PREVIEW: separat framsida som egen sida (som tidigare)
-      const coverPage = pdfDoc.addPage([pageW, pageH]);
-      await renderFrontCover(coverPage, 0, 0, pageW, pageH);
+  // Subtitle
+  if (subtitle) {
+    const subCenterY = badgeY + padY + subM.blockH / 2;
+    let y = subCenterY + subM.blockH / 2 - subM.lineH;
+    for (const ln of subM.lines) {
+      const w = nunito.widthOfTextAtSize(ln, subtitleSize);
+      page.drawText(ln, { x: cx - w / 2, y, size: subtitleSize, font: nunito, color: rgb(0.12,0.12,0.12) });
+      y -= subM.lineH;
     }
-  } catch (e) {
-    tr(trace, "cover:error", { error: String(e?.message || e) });
-    const p = pdfDoc.addPage([pageW, pageH]);
-    p.drawText("Omslag kunde inte renderas.", {
-      x: mmToPt(15),
-      y: mmToPt(15),
-      size: 12,
-      font: nunito,
-      color: rgb(0.8, 0.1, 0.1),
-    });
   }
+}
+
+async function renderBackCover(page, halfX, halfY, boxW, boxH) {
+  // Full-bleed solid back in your purple
+  const bg = rgb(0.58, 0.54, 0.86);
+  page.drawRectangle({ x: halfX, y: halfY, width: boxW, height: boxH, color: bg });
+
+  // Centered blurb box
+  const centerX = halfX + boxW / 2;
+  const centerY = halfY + boxH / 2;
+  drawWrappedCenterColor(
+    page,
+    blurb,
+    centerX,
+    centerY,
+    boxW * 0.72,
+    boxH * 0.36,
+    nunito,
+    14,
+    1.42,
+    12,
+    rgb(1, 1, 1),
+    "center"
+  );
+}
+
+/* -------- OMSLAG (PRINT) -------- */
+try {
+  if (isPrintDeliverable) {
+    // Exact Gelato cover sheet size (includes back + spine + front)
+    const COVER_W_MM = 458.0;
+    const COVER_H_MM = 246.0;
+    const coverWpt = mmToPt(COVER_W_MM);
+    const coverHpt = mmToPt(COVER_H_MM);
+    const halfWpt  = coverWpt / 2;
+
+    const spreadPage = pdfDoc.addPage([coverWpt, coverHpt]);
+
+    // Paint whole spread first (kills any black gutter/spine)
+    const purple = rgb(0.58, 0.54, 0.86);
+    spreadPage.drawRectangle({ x: 0, y: 0, width: coverWpt, height: coverHpt, color: purple });
+
+    // Left = back, Right = front (each full-bleed to its half)
+    await renderBackCover (spreadPage, 0,       0, halfWpt, coverHpt);
+    await renderFrontCover(spreadPage, halfWpt, 0, halfWpt, coverHpt);
+
+    // Safety: overpaint a 1pt spine strip in purple to hide any seam from viewers
+    spreadPage.drawRectangle({ x: halfWpt - 0.5, y: 0, width: 1, height: coverHpt, color: purple });
+
+  } else {
+    // Digital preview unchanged
+    const coverPage = pdfDoc.addPage([pageW, pageH]);
+    await renderFrontCover(coverPage, 0, 0, pageW, pageH);
+  }
+} catch (e) {
+  tr(trace, "cover:error", { error: String(e?.message || e) });
+  const p = pdfDoc.addPage([pageW, pageH]);
+  p.drawText("Omslag kunde inte renderas.", {
+    x: mmToPt(15), y: mmToPt(15), size: 12, font: nunito, color: rgb(0.8, 0.1, 0.1),
+  });
+}
+
 
   /* -------- PRINT endpaper (blank sida direkt efter omslag) -------- */
   if (isPrintDeliverable) {
