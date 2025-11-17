@@ -1803,7 +1803,8 @@ async function handlePdfSingleUrl(req, env) {
 
     // För vårt fotobokscase:
     // sida 1 = omslag (liggande), resten = innersidor
-    const innerPages = Math.max(0, totalPages - 1);
+    const innerPages = totalPages;
+
 
     const ts        = Date.now();
     const safeTitle = safeTitleFrom(story);
