@@ -762,22 +762,30 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
   const coh    = coherence_code || makeCoherenceCode(story);
   const age    = story?.book?.bible?.main_character?.age || 5;
 
-  const wardrobeLine = !isPet && wardrobe_signature
+  const wardrobeLine = (!isPet && wardrobe_signature)
     ? `Wardrobe: ${wardrobe_signature}. The hero always wears the same outfit and colors. Do NOT change garment type, color family, or pattern.`
     : "";
 
-  const identityLines = [
-    `Use the same hero as in the reference (${characterName}).`,
-    `Age ≈ ${age}. Depict clear *child* anatomy.`,
-    `Never depict the hero as a teen or adult. No makeup. Keep same hairstyle, color and length.`,
-    `Hero must appear visibly in frame unless the SCENE_EN explicitly excludes them.`
-  ].join(" ");
+  const identityLines = isPet
+    ? [
+        `Use the exact same animal as in the reference (${characterName}).`,
+        `Match the same species, breed, fur color, markings, and proportions.`,
+        `Never turn the hero into a human. Keep it clearly an animal on every page.`,
+        `If the written description and the reference image disagree, follow the appearance in the reference image.`,
+      ].join(" ")
+    : [
+        `Use the same child hero as in the reference (${characterName}).`,
+        `Age ≈ ${age}. Depict clear *child* anatomy.`,
+        `Never depict the hero as a teen or adult. No makeup. Keep same hairstyle, color and length.`,
+        `If the written description and the reference image disagree,  follow the reference image for identity and body type.`,
+        `Hero must appear visibly in frame unless the SCENE_EN explicitly excludes them.`,
+      ].join(" ");
 
   const consistency = [
     `This is page ${page.page} of ${pageCount} in the same continuous story.`,
     `Keep STYLE and lighting consistent.`,
     `Maintain identical identity and outfit.`,
-    `Do not reuse the same camera height/angle and composition as the previous page.`,
+    `Do not include logos or text.`,
   ].join(" ");
 
   const cinematicContext = [
