@@ -1798,13 +1798,8 @@ async function handlePdfSingleUrl(req, env) {
     );
 
     // 🔢 Räkna verkligt sidantal i den PDF vi faktiskt genererade
-    const doc        = await PDFDocument.load(bytes);
-    const totalPages = doc.getPageCount();
-
-    // För vårt fotobokscase:
-    // sida 1 = omslag (liggande), resten = innersidor
-    const innerPages = totalPages;
-
+    const doc = await PDFDocument.load(bytes);
+    const pageCount = doc.getPageCount();      // ✅ EN siffra vi bryr oss om
 
     const ts        = Date.now();
     const safeTitle = safeTitleFrom(story);
@@ -1812,13 +1807,13 @@ async function handlePdfSingleUrl(req, env) {
     const key       = `${safeTitle}_${ts}${suffix}`;
     const url       = await r2PutPublic(env, key, bytes, "application/pdf");
 
-    // Spara på ordern så både success-sidan & Gelato vet var filen finns
+    // 💾 Spara på ordern så både success-sidan & Gelato vet var filen finns
     if (order_id) {
       await kvAttachFiles(env, order_id, {
         single_pdf_url:   url,
         single_pdf_key:   key,
-        page_count:       innerPages,   // 👈 DETTA läser Gelato-koden
-        pdf_page_count:   totalPages,   // 👈 extra debug/info
+        page_count:       pageCount,   // 👈 total pages, den ENDA som betyder något
+        pdf_page_count:   pageCount,   // (valfri extra debug, samma värde)
         deliverable:      normDeliverable,
       });
     }
@@ -1826,14 +1821,16 @@ async function handlePdfSingleUrl(req, env) {
     return withCORS(ok({
       url,
       key,
-      pages_total: totalPages,
-      pages_inner: innerPages,
+      page_count:  pageCount,         // huvudfältet
+      pages_total: pageCount,         // för kompatibilitet
+      pages_inner: pageCount,         // för kompatibilitet
       deliverable: normDeliverable,
     }));
   } catch (e) {
     return withCORS(err(e?.message || "single-url failed", 500));
   }
 }
+
 
 
 
@@ -2439,7 +2436,7 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
   const contentUrl = order?.files?.single_pdf_url || null;
-  const pdfPages   = Number(order?.files?.page_count ?? 0);
+  const pdfPages   = Number(order?.files?.page_count ?? 0); // ✅ Totalt antal sidor
 
   if (!contentUrl) {
     throw new Error("Order is missing files.single_pdf_url (run /api/pdf/single-url first)");
@@ -2448,17 +2445,8 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
     throw new Error("Order is missing/invalid files.page_count");
   }
 
-  // ✅ Gelato vill att pageCount = TOTALT antal sidor i PDF:en (inkl. omslag)
+  // ✅ Gelato får exakt samma total-siffra som vi räknat från PDF:en
   const pageCount = pdfPages;
-
-  if (!Number.isFinite(pageCount) || pageCount <= 0) {
-    throw new Error(`Derived Gelato pageCount is invalid (pdfPages=${pdfPages}, pageCount=${pageCount})`);
-  }
-
-  // För säkerhets skull: kasta om det är udda → då vet vi att buildPdf är fel
-  if (pageCount % 2 !== 0) {
-    throw new Error(`Print-PDF har ett udda antal sidor (${pageCount}). Justera buildPdf så det blir jämnt (t.ex. 34).`);
-  }
 
   const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
   const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
@@ -2480,7 +2468,7 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
     itemReferenceId: `book-${order.id || "1"}`,
     productUid,
     quantity: 1,
-    pageCount,                     // ✅ exakt samma som pdfPages
+    pageCount,                     // ✅ totala sidantalet, samma som PDF
     files: [
       { type: "default", url: contentUrl }
     ],
@@ -2488,21 +2476,16 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
 
   const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
 
-  // 🔥 Matchar det Scoop sa:
-  // - v4/orders → items + shippingAddress
-  // - (recipients kan vi ha kvar parallellt, det stör inte)
   const payload = {
     orderType: DRY_RUN ? "draft" : "order",
     orderReferenceId: order.id,
     customerReferenceId: custEmail || `cust-${order.id}`,
     currency: CURR,
 
-    // "nya" v4-fält
     shippingAddress,
     items: [item],
     ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
 
-    // multi-recipient flavour (valfritt, men helt ok att skicka)
     recipients: [
       {
         firstName: customer.firstName || "Test",
@@ -2533,6 +2516,7 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
 
   return { payload, gelato: g };
 }
+
 
 
 /* ====================== Gelato – produktinfo/debug ====================== */
