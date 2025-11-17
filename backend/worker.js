@@ -2473,18 +2473,6 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
     items: [item],
     ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
 
-    // recipients kan vara kvar (Gelato accepterar) men shippingAddress MÅSTE vara komplett:
-    recipients: [
-      {
-        firstName: shippingAddress.firstName,
-        lastName:  shippingAddress.lastName,
-        email:     shippingAddress.email,
-        phone:     shippingAddress.phone,
-        shippingAddress,
-        items: [item],
-      }
-    ],
-
     metadata: [
       { key: "bp_kind",         value: String(order.kind || order?.draft?.kind || "printed") },
       { key: "bp_pages_pdf",    value: String(order?.files?.pdf_page_count ?? kvPageCount) },
