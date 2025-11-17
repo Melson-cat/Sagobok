@@ -1,7 +1,7 @@
 /* ===================================================================
    BokPiloten – Frontend v4.1 (CF Images + Cover + PDF)
    End-to-end: story -> ref -> images -> cover -> Cloudflare -> PDF
-   Ändring: sidantalet är låst (skickar alltid 14 till /api/story)
+   Ändring: sidantalet är låst (skickar alltid 16 till /api/story)
    =================================================================== */
 const API = "https://bokpilot-backend.sebastian-runell.workers.dev";
 
@@ -24,7 +24,7 @@ const POLL_TIMEOUT_MS  = 120000;
 const COVER_STRATEGY = "async";
 
 // Fast antal story-sidor 
-const STORY_PAGES = 14;
+const STORY_PAGES = 16;
 
 const HAS_PRINT_PDF_ENDPOINTS = true; // sätt till false om /api/pdf/interior /api/pdf/cover inte är på plats
 
@@ -394,7 +394,7 @@ function buildCards(pages, visibleCount) {
   smoothScrollTo(els.previewSection);
 }
 
-// Stabil slot-updaterare (cover=0, interiör=1..14)
+// Stabil slot-updaterare (cover=0, interiör=1..16)
 async function fillCard(page, imgUrl, providerLabel = "") {
   const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${page}"]`);
   if (!wrap || !imgUrl) return;

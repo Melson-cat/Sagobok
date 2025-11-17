@@ -612,7 +612,7 @@ Du är en svensk barnboksförfattare som får en outline för en svensk bildbok.
  }]
 }}
 HÅRDA FORMATREGLER:
-- EXAKT 14 sidor (page 1..14).
+- EXAKT 16 sidor (page 1..16).
 - 3–4 meningar per sida i "text" (svenska).
 - "scene_en" ska vara kort, filmisk, levande och konkret (inte dialog).
 - Varje sida måste vara visuellt distinkt.
@@ -1181,23 +1181,25 @@ async function buildPdf(
     }
   });
 
-  // Normalisera 14 scener
-  function mapTo14ScenePages() {
-    const want = 14;
-    if (pagesStory.length === want) return pagesStory;
-    if (pagesStory.length > want) return pagesStory.slice(0, want);
-    const out = [...pagesStory];
-    while (out.length < want)
-      out.push(
-        pagesStory[pagesStory.length - 1] || {
-          page: out.length + 1,
-          text: "",
-          scene: "",
-        }
-      );
-    return out;
+  // Normalisera 16 scener
+ function mapTo16ScenePages() {
+  const want = 16;
+  if (pagesStory.length === want) return pagesStory;
+  if (pagesStory.length > want) return pagesStory.slice(0, want);
+  const out = [...pagesStory];
+  while (out.length < want) {
+    out.push(
+      pagesStory[pagesStory.length - 1] || {
+        page: out.length + 1,
+        text: "",
+        scene: "",
+      }
+    );
   }
-  const scenePages = mapTo14ScenePages();
+  return out;
+}
+const scenePages = mapTo16ScenePages();
+
   tr(trace, "pdf:scene-pages", { count: scenePages.length });
 
   /* ------- små helpers för omslag (återanvänds för print/digital) ---- */
@@ -1493,9 +1495,9 @@ async function buildPdf(
     tr(trace, "titlepage:error", { error: String(e?.message || e) });
   }
 
-  /* -------- 14 uppslag: bild vänster, text höger + vine -------- */
+  /* -------- 16 uppslag: bild vänster, text höger + vine -------- */
   const outer = mmToPt(GRID.outer_mm);
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 16; i++) {
     const scene = scenePages[i] || {};
     const mainText = String(scene.text || "").trim();
 
@@ -1566,7 +1568,7 @@ async function buildPdf(
     );
 
     // Sidnummer (behåller din nuvarande logik)
-    const pageNum = 2 + i * 2 + 1;
+    const pageNum = 3 + i * 2 + 1;
     const pn = String(pageNum);
     const pnW = nunito.widthOfTextAtSize(pn, 10);
     right.drawText(pn, {
@@ -1626,35 +1628,6 @@ async function buildPdf(
     );
   }
 
-    /* -------- CREDIT / “Skapad av XXX” -------- */
-  {
-    const page = pdfDoc.addPage([pageW, pageH]);
-
-    // Ljus bakgrund
-    page.drawRectangle({
-      x: contentX,
-      y: contentY,
-      width: trimWpt,
-      height: trimHpt,
-      color: rgb(0.98, 0.99, 1),
-    });
-
-    const cx = contentX + trimWpt / 2;
-    const cy = contentY + trimHpt / 2;
-
-    const creditText = "Skapad av XXX"; // TODO: byt XXX till ditt varumärke
-
-    const fontSize = 18;
-    const tw = nunito.widthOfTextAtSize(creditText, fontSize);
-
-    page.drawText(creditText, {
-      x: cx - tw / 2,
-      y: cy,
-      size: fontSize,
-      font: nunito,
-      color: rgb(0.25, 0.25, 0.35),
-    });
-  }
 
 
   /* -------- PRINT endpaper (sista sidan blank) -------- */
@@ -2093,7 +2066,7 @@ ${JSON.stringify(outline)}
 Skriv en engagerande, händelserik saga som är rolig att läsa högt.
 Variera miljöer och visuella ögonblick mellan varje sida.
 ${heroDescriptor({ category, name, age, traits })}
-Läsålder: ${targetAge}. **Sidor: 14**. Stil: ${style || "cartoon"}. Kategori: ${category || "kids"}.
+Läsålder: ${targetAge}. **Sidor: 16**. Stil: ${style || "cartoon"}. Kategori: ${category || "kids"}.
 Returnera enbart JSON i exakt formatet.
 `.trim();
 
