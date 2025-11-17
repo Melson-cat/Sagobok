@@ -1762,7 +1762,7 @@ async function handlePdfSingleUrl(req, env) {
       order_id,
     } = payload || {};
 
-    // 1) Hämta story från KV om vi bara fått order_id
+    // 1) Om story saknas men vi har order_id → hämta från KV (draft)
     if ((!story || !Array.isArray(story?.book?.pages)) && order_id) {
       const ord = await kvGetOrder(env, order_id);
       if (ord?.draft?.story && Array.isArray(ord.draft.story?.book?.pages)) {
@@ -1771,7 +1771,7 @@ async function handlePdfSingleUrl(req, env) {
       }
     }
 
-    // 2) Säkerställ att story finns
+    // 2) Fortfarande ingen story → fail med debug
     if (!story || !Array.isArray(story?.book?.pages)) {
       return err("Missing story.book.pages", 400, {
         has_order: !!order_id,
@@ -1782,7 +1782,6 @@ async function handlePdfSingleUrl(req, env) {
     const normDeliverable = String(deliverable || "digital").toLowerCase();
     const isPrint = normDeliverable === "print" || normDeliverable === "printed";
 
-    // 3) Bygg PDF (print/digital)
     const trace = traceStart();
     const bytes = await buildPdf(
       {
@@ -1797,41 +1796,42 @@ async function handlePdfSingleUrl(req, env) {
       trace
     );
 
-    // 4) Räkna verkligt sidantal i PDF:en
-    const doc       = await PDFDocument.load(bytes);
-    const pageCount = doc.getPageCount();   // 👈 enda vi bryr oss om
+    // 3) Räkna verkligt antal sidor i PDF:en
+    const doc        = await PDFDocument.load(bytes);
+    const totalPages = doc.getPageCount();
 
-    // 5) Ladda upp till R2
+    // (valfri sanity – logga om det INTE är 34)
+    if (totalPages !== 34) {
+      console.log("⚠️ PDF har inte 34 sidor som förväntat:", { totalPages, order_id });
+    }
+
+    // 4) Ladda upp PDF till R2
     const ts        = Date.now();
     const safeTitle = safeTitleFrom(story);
     const suffix    = isPrint ? "_PRINT_BOOK.pdf" : "_BOOK.pdf";
     const key       = `${safeTitle}_${ts}${suffix}`;
     const url       = await r2PutPublic(env, key, bytes, "application/pdf");
 
-    // 6) Spara på ordern (så success-sidan + Gelato kan läsa)
+    // 5) Spara på ordern: ENDA saken vi bryr oss om är total pageCount
     if (order_id) {
       await kvAttachFiles(env, order_id, {
-        single_pdf_url:   url,
-        single_pdf_key:   key,
-        page_count:       pageCount,        // 👈 total pages, inget annat
-        deliverable:      normDeliverable,
+        single_pdf_url: url,
+        single_pdf_key: key,
+        page_count:     totalPages,       // ✅ TOTALT antal sidor i PDF:en
+        deliverable:    normDeliverable,
       });
     }
 
-    // 7) Svara till frontend
     return withCORS(ok({
       url,
       key,
-      page_count: pageCount,
+      page_count:  totalPages,           // samma här, för tydlighet
       deliverable: normDeliverable,
     }));
   } catch (e) {
     return withCORS(err(e?.message || "single-url failed", 500));
   }
 }
-
-
-
 
 
 
@@ -2429,13 +2429,12 @@ async function gelatoGetOrder(env, gelatoOrderId) {
   const url = `${GELATO_BASE.order}/orders/${encodeURIComponent(gelatoOrderId)}`;
   return gelatoFetch(url, env, { method: "GET" });
 }
-
 async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency }) {
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
   const contentUrl = order?.files?.single_pdf_url || null;
-  const pdfPages   = Number(order?.files?.page_count ?? 0);  // 👈 total pages från single-url
+  const pdfPages   = Number(order?.files?.page_count ?? 0);  // ✅ total pages från single-url
 
   if (!contentUrl) {
     throw new Error("Order is missing files.single_pdf_url (run /api/pdf/single-url first)");
@@ -2444,8 +2443,16 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
     throw new Error("Order is missing/invalid files.page_count");
   }
 
-  // 🔹 Det enda vi skickar vidare till Gelato
+  // 🔑 Det ENDA vi använder mot Gelato: total pageCount = pdfPages
   const pageCount = pdfPages;
+
+  // (valfri debug – logga om det skulle råka bli udda)
+  if (pageCount % 2 !== 0) {
+    console.log("⚠️ pageCount är udda – Gelato kan komma klaga:", {
+      pageCount,
+      orderId: order?.id,
+    });
+  }
 
   const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
   const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
@@ -2467,7 +2474,7 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
     itemReferenceId: `book-${order.id || "1"}`,
     productUid,
     quantity: 1,
-    pageCount,                      // 👈 exakt samma som page_count i KV
+    pageCount,                     // ✅ TOTALT antal sidor i PDF:en (t.ex. 34)
     files: [
       { type: "default", url: contentUrl }
     ],
@@ -2498,7 +2505,7 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
 
     metadata: [
       { key: "bp_kind",         value: String(order.kind || order?.draft?.kind || "printed") },
-      { key: "bp_pages_gelato", value: String(pageCount) },
+      { key: "bp_pages_gelato", value: String(pageCount) },  // bara för oss att se
     ],
   };
 
@@ -2514,6 +2521,7 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
 
   return { payload, gelato: g };
 }
+
 
 
 
