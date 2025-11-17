@@ -1411,14 +1411,21 @@ const scenePages = mapTo16ScenePages();
   try {
     if (isPrintDeliverable) {
       // 🧾 PRINT: första sidan är ett liggande cover spread (bak + rygg + fram)
-      const spreadW = pageW * 2; // enkel approximation: 2× inlaga + bleed
-      const spreadPage = pdfDoc.addPage([spreadW, pageH]);
+     // NEW: exact Gelato cover sheet size
+const COVER_W_MM = 458.0;
+const COVER_H_MM = 246.0;
 
-      // Vänster halva = baksida
-      await renderBackCover(spreadPage, 0, 0, pageW, pageH);
+const coverWpt = mmToPt(COVER_W_MM);
+const coverHpt = mmToPt(COVER_H_MM);
+const halfWpt  = coverWpt / 2;
 
-      // Höger halva = framsida
-      await renderFrontCover(spreadPage, pageW, 0, pageW, pageH);
+// Page 1 = landscape cover sheet (back+spine+front)
+const spreadPage = pdfDoc.addPage([coverWpt, coverHpt]);
+
+// Left half = back cover, right half = front cover
+await renderBackCover (spreadPage, 0,       0, halfWpt, coverHpt);
+await renderFrontCover(spreadPage, halfWpt, 0, halfWpt, coverHpt);
+
     } else {
       // 💻 DIGITAL/PREVIEW: separat framsida som egen sida (som tidigare)
       const coverPage = pdfDoc.addPage([pageW, pageH]);
@@ -2394,43 +2401,44 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
   const productUid = env.GELATO_PRODUCT_UID;
   if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
 
-  const contentUrl = order?.files?.single_pdf_url || null;
+  const contentUrl  = order?.files?.single_pdf_url || null;
   const kvPageCount = Number(order?.files?.page_count ?? 0);
 
   if (!contentUrl) throw new Error("Order is missing files.single_pdf_url (run /api/pdf/single-url first)");
-  if (!Number.isFinite(kvPageCount) || kvPageCount <= 0) throw new Error("Order is missing/invalid files.page_count");
+  if (!Number.isFinite(kvPageCount) || kvPageCount <= 0) {
+    throw new Error("Order is missing/invalid files.page_count");
+  }
 
-  // 🔒 Lås till 34 för vår fotobok
-  const FIXED_PAGECOUNT = 34;
-  const pageCount = FIXED_PAGECOUNT;
+  // 🔒 Alltid 34 till Gelato (produktens pageCount), oavsett faktisk PDF-sidcount
+  const pageCount = 34;
 
-  const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
+  const DRY_RUN = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
   const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
-  const CURR          = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
+  const CURR = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
 
   const custEmail = (customer.email || FORCE_TEST_TO);
   const recvEmail = DRY_RUN ? FORCE_TEST_TO : custEmail;
   const recvPhone = customer.phone || shipment.phone || "0700000000";
 
-  // ✅ Inkludera namn + kontakt i shippingAddress (krävs av Gelato)
+  // ✅ Endast shippingAddress (Gelato kräver namn + kontakt här)
   const shippingAddress = {
-    firstName:  customer.firstName || shipment.firstName || "Test",
-    lastName:   customer.lastName  || shipment.lastName  || "Kund",
-    email:      recvEmail,
-    phone:      recvPhone,
-    addressLine1: shipment.addressLine1 || "Storgatan 1",
-    addressLine2: shipment.addressLine2 || "",
-    city:         shipment.city || "Örebro",
-    postCode:     shipment.postCode || "70000",
-    country:      (shipment.country || "SE").toUpperCase(),
-    state:        shipment.state || undefined,
+    firstName:     (customer.firstName || shipment.firstName || "Test").toString(),
+    lastName:      (customer.lastName  || shipment.lastName  || "Kund").toString(),
+    email:         recvEmail,
+    phone:         recvPhone,
+    addressLine1:  (shipment.addressLine1 || "Storgatan 1").toString(),
+    addressLine2:  (shipment.addressLine2 || "").toString(),
+    city:          (shipment.city || "Örebro").toString(),
+    postCode:      (shipment.postCode || "70000").toString(),
+    country:       String(shipment.country || "SE").toUpperCase(),
+    state:         shipment.state || undefined,
   };
 
   const item = {
     itemReferenceId: `book-${order.id || "1"}`,
     productUid,
     quantity: 1,
-    pageCount,                            // 👈 ALLTID 34 nu
+    pageCount, // 👈 ALLTID 34
     files: [{ type: "default", url: contentUrl }],
   };
 
@@ -2442,7 +2450,7 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
     customerReferenceId: custEmail || `cust-${order.id}`,
     currency: CURR,
 
-    shippingAddress,                      // 👈 namnfält finns här nu
+    shippingAddress,           // 👈 inga recipients – enbart shippingAddress
     items: [item],
     ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
 
@@ -2465,7 +2473,6 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
 
   return { payload, gelato: g };
 }
-
 
 
 
