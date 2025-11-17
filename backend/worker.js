@@ -37,16 +37,6 @@ export const DEFAULT_BLEED_MM = 3;
 
 
 
-const GELATO_TTL = 30 * 24 * 60 * 60; // 30 dagar, tryckt bok tar längre tid än PDF
-
-async function kvPutGelato(env, id, data) {
-  await env.ORDERS.put(`gelato:${id}`, JSON.stringify(data), { expirationTtl: GELATO_TTL });
-}
-async function kvGetGelato(env, id) {
-  return await env.ORDERS.get(`gelato:${id}`, { type: "json" });
-}
-
-
 /* ------------------------------ Globals ------------------------------ */
 const OPENAI_MODEL = "gpt-4o-mini";
 
@@ -144,11 +134,6 @@ async function kvUpdateStatus(env, id, status, patch = {}) {
   return next;
 }
 
-// Mappar Gelatos orderId → din order.id (för webhook-lookup)
-async function kvIndexGelatoOrder(env, gelatoId, orderId, ttlSec = 60*24*60*60) {
-  if (!gelatoId || !orderId) return;
-  await env.ORDERS.put(`GELATO_IDX:${gelatoId}`, orderId, { expirationTtl: ttlSec });
-}
 
 
 // --- Session → Order mapping (för snabb lookup från success-sida) ---
@@ -175,168 +160,6 @@ async function kvAttachFiles(env, order_id, files) {
   return next;
 }
 
-/* ------------------------------ Gelato helpers ------------------------------ */
-const GELATO_BASE = {
-  order:   "https://order.gelatoapis.com/v4",
-  product: "https://product.gelatoapis.com/v3",
-  ship:    "https://shipment.gelatoapis.com/v1",
-};
-
-function gelatoHeaders(env) {
-  return {
-    "content-type": "application/json",
-    "X-API-KEY": env.GELATO_API_KEY,
-  };
-}
-
-async function gelatoFetch(url, env, init = {}) {
-  const r = await fetch(url, {
-    ...init,
-    headers: { ...gelatoHeaders(env), ...(init.headers || {}) },
-  });
-
-  const txt = await r.text();
-  let data = null;
-  try { data = txt ? JSON.parse(txt) : null; } catch { data = { raw: txt }; }
-
-  if (!r.ok) {
-    const err = new Error(`Gelato ${r.status}: ${data?.message || data?.error || "Request contains errors"}`);
-    err.name = "GelatoError";
-    err.status = r.status;
-    err.url = url;
-    err.data = data;       // <-- kan innehålla validationErrors / fields
-    err.raw = txt;
-    throw err;
-  }
-  return data;
-}
-
-function mapGelatoStatus(data) {
-  // Fält Gelato brukar skicka tillbaka på GET /orders/{id}
-  const s =
-    data?.fulfillmentStatus ||
-    data?.status ||
-    data?.orderStatus ||
-    data?.order?.status ||
-    null;
-
-  // Hämta ev. senaste status från historik om fältet ovan saknas
-  const hist = Array.isArray(data?.statusHistory) ? data.statusHistory : [];
-  const lastHist = hist.length ? (hist[hist.length - 1]?.status || hist[hist.length - 1]) : null;
-
-  return String(s || lastHist || "unknown").toLowerCase();
-}
-
-
-/** Hämtar shipment methods (valfritt filtrera på land). */
-async function gelatoGetShipmentMethods(env, country) {
-  const url = new URL(`${GELATO_BASE.ship}/shipment-methods`);
-  if (country) url.searchParams.set("country", country);
-  return gelatoFetch(url.toString(), env);
-}
-
-/** Hämtar prislista för ett produktUid (valfritt pageCount/country/currency). */
-async function gelatoGetPrices(env, productUid, { country, currency, pageCount } = {}) {
-  const url = new URL(`${GELATO_BASE.product}/products/${encodeURIComponent(productUid)}/prices`);
-  if (country)   url.searchParams.set("country", country);
-  if (currency)  url.searchParams.set("currency", currency);
-  if (pageCount) url.searchParams.set("pageCount", String(pageCount));
-  return gelatoFetch(url.toString(), env);
-}
-
-async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency }) {
-  const productUid = env.GELATO_PRODUCT_UID;
-  if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
-
-  const contentUrl = order?.files?.single_pdf_url || null;
-  const pdfPages   = Number(order?.files?.page_count ?? 0);
-
-  if (!contentUrl) {
-    throw new Error("Order is missing files.single_pdf_url (run /api/pdf/single-url first)");
-  }
-  if (!Number.isFinite(pdfPages) || pdfPages <= 0) {
-    throw new Error("Order is missing/invalid files.page_count");
-  }
-
-  // 🔢 Gelato räknar bara innersidor → vår första sida är omslags-spreaden
-  const pageCount = pdfPages - 1;
-
-  if (!Number.isFinite(pageCount) || pageCount <= 0) {
-    throw new Error(`Derived Gelato pageCount is invalid (pdfPages=${pdfPages}, pageCount=${pageCount})`);
-  }
-
-  // Valfritt: liten varning om något är off
-  if (pageCount % 2 !== 0) {
-    console.warn("⚠️ Gelato pageCount är udda – kolla layouten", { pdfPages, pageCount });
-  }
-
-  const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
-  const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
-  const CURR          = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
-
-  const custEmail = customer.email || FORCE_TEST_TO;
-
-  const recipient = {
-    firstName:    customer.firstName || "Test",
-    lastName:     customer.lastName  || "Kund",
-    addressLine1: shipment.addressLine1 || "Storgatan 1",
-    addressLine2: shipment.addressLine2 || "",
-    city:         shipment.city      || "Örebro",
-    postCode:     shipment.postCode  || "70000",
-    country:      (shipment.country || "SE").toUpperCase(),
-    email:        DRY_RUN ? FORCE_TEST_TO : custEmail,
-    phone:        customer.phone || shipment.phone || "0700000000",
-  };
-
-  const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
-
-  const products = [
-    {
-      itemReferenceId: `book-${order.id || "1"}`,
-      productUid,
-      quantity: 1,
-      pageCount,                 // ✅ inner-sidorna (pdfPages - 1)
-      files: [
-        {
-          type: "default",
-          url:  contentUrl
-        }
-      ]
-    }
-  ];
-
-  const payload = {
-    orderType: DRY_RUN ? "draft" : "order", // ⬅️ detta gör att vi INTE skickar riktig order när GELATO_DRY_RUN=true
-    orderReferenceId: order.id,
-    customerReferenceId: custEmail || `cust-${order.id}`,
-    currency: CURR,
-    recipient,
-    products,
-    ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
-    metadata: [
-      { key: "bp_kind",         value: String(order.kind || order?.draft?.kind || "printed") },
-      { key: "bp_pages_pdf",    value: String(pdfPages) },   // totalt i PDF
-      { key: "bp_pages_gelato", value: String(pageCount) },  // det Gelato får
-    ],
-  };
-
-  console.log("📦 Payload to Gelato (order):", JSON.stringify(payload, null, 2));
-
-  const g = await gelatoApiCreateOrder(env, payload);
-  const gelato_id = g?.id || g?.orderId || null;
-
-  if (gelato_id && order?.id) {
-    await kvIndexGelatoOrder(env, gelato_id, order.id);
-    await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id });
-  }
-
-  return { payload, gelato: g };
-}
-
-
-
-
-
 
 
 async function handleOrderGet(req, env) {
@@ -350,36 +173,7 @@ async function handleOrderGet(req, env) {
   return ok({ order: ord });
 }
 
-async function handleGelatoStatus(req, env) {
-  const { searchParams } = new URL(req.url);
-  const order_id = searchParams.get("order_id");
-  if (!order_id) return err("Missing order_id", 400);
 
-  const ord = await kvGetOrder(env, order_id);
-  if (!ord) return err("Order not found", 404);
-
-  const gelatoId = ord?.files?.gelato_order_id;
-  if (!gelatoId) return err("No gelato_order_id on this order", 404);
-
-  const g = await gelatoFetch(`${GELATO_BASE.order}/orders/${gelatoId}`, env, { method: "GET" });
-
-  // Liten normalisering + derived status
-  const status = (g.fulfillmentStatus || g.status || "").toLowerCase() || "unknown";
-  const hist = Array.isArray(g.statusHistory) ? g.statusHistory : [];
-  const lastHist = hist.length ? (hist[hist.length - 1]?.status || hist[hist.length - 1]) : null;
-
-  return ok({
-    order: ord,
-    gelato: g,
-    derived: {
-      status,
-      lastHistory: lastHist,
-      pageCount: g?.items?.[0]?.pageCount ?? ord?.files?.page_count ?? null,
-      productUid: g?.items?.[0]?.productUid ?? null,
-      shippingAddress: g?.shippingAddress ?? null
-    }
-  });
-}
 
 async function handlePdfCountByUrl(req) {
   const { url } = await req.json().catch(()=> ({}));
@@ -1832,6 +1626,37 @@ async function buildPdf(
     );
   }
 
+    /* -------- CREDIT / “Skapad av XXX” -------- */
+  {
+    const page = pdfDoc.addPage([pageW, pageH]);
+
+    // Ljus bakgrund
+    page.drawRectangle({
+      x: contentX,
+      y: contentY,
+      width: trimWpt,
+      height: trimHpt,
+      color: rgb(0.98, 0.99, 1),
+    });
+
+    const cx = contentX + trimWpt / 2;
+    const cy = contentY + trimHpt / 2;
+
+    const creditText = "Skapad av XXX"; // TODO: byt XXX till ditt varumärke
+
+    const fontSize = 18;
+    const tw = nunito.widthOfTextAtSize(creditText, fontSize);
+
+    page.drawText(creditText, {
+      x: cx - tw / 2,
+      y: cy,
+      size: fontSize,
+      font: nunito,
+      color: rgb(0.25, 0.25, 0.35),
+    });
+  }
+
+
   /* -------- PRINT endpaper (sista sidan blank) -------- */
   if (isPrintDeliverable) {
     pdfDoc.addPage([pageW, pageH]); // helt blank
@@ -1882,14 +1707,6 @@ async function handleUploadRequest(req, env) {
   }
 }
 
-async function gelatoApiCreateOrder(env, payload) {
-  const url = `${GELATO_BASE.order}/orders`;
-  return gelatoFetch(url, env, {
-    method: "POST",
-    headers: { ...gelatoHeaders(env) },
-    body: JSON.stringify(payload),
-  });
-}
 
 
 /* --------------------------- /api/pdf -------------------------------- */
@@ -2216,36 +2033,6 @@ async function handleCheckoutOrderId(req, env) {
 
 
 
-async function gelatoQuote(env, order) {
-  const res = await fetch("https://order.gelatoapis.com/v4/orders:quote", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-KEY": env.GELATO_API_KEY,
-    },
-    body: JSON.stringify(order),
-  });
-
-  const text = await res.text();
-  let json = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    // text var inte giltig JSON, behåll bara rå text
-  }
-
-  // ⛔️ Viktigt: kasta inte här – returnera ALLT för debug
-  return {
-    ok: res.ok,
-    status: res.status,
-    headers: Object.fromEntries(res.headers.entries()),
-    text,
-    json,
-  };
-}
-
-
-
 
 /* ====================== STORY & IMAGES ====================== */
 /* Helpers som redan finns i filen (används här):
@@ -2558,27 +2345,293 @@ async function handleCover(req, env) {
   } catch (e) { return err(e?.message || "Cover generation failed", 500); }
 }
 
-/* ====================== GELATO (router-alias) ====================== */
+/* ======================== Gelato – helpers ========================= */
+
+const GELATO_BASE = {
+  order:   "https://order.gelatoapis.com/v4",
+  product: "https://product.gelatoapis.com/v3",
+  ship:    "https://shipment.gelatoapis.com/v1",
+};
+
+function gelatoHeaders(env) {
+  return {
+    "content-type": "application/json",
+    "X-API-KEY": env.GELATO_API_KEY,
+  };
+}
+
+async function gelatoFetch(url, env, init = {}) {
+  const r = await fetch(url, {
+    ...init,
+    headers: { ...gelatoHeaders(env), ...(init.headers || {}) },
+  });
+
+  const txt = await r.text();
+  let data = null;
+  try { data = txt ? JSON.parse(txt) : null; } catch { data = { raw: txt }; }
+
+  if (!r.ok) {
+    const err = new Error(`Gelato ${r.status}: ${data?.message || data?.error || "Request contains errors"}`);
+    err.name = "GelatoError";
+    err.status = r.status;
+    err.url = url;
+    err.data = data;
+    err.raw = txt;
+    throw err;
+  }
+  return data;
+}
+
+function mapGelatoStatus(data) {
+  const s =
+    data?.fulfillmentStatus ||
+    data?.status ||
+    data?.orderStatus ||
+    data?.order?.status ||
+    null;
+
+  const hist = Array.isArray(data?.statusHistory) ? data.statusHistory : [];
+  const lastHist = hist.length ? (hist[hist.length - 1]?.status || hist[hist.length - 1]) : null;
+
+  return String(s || lastHist || "unknown").toLowerCase();
+}
+
+/** Shipment methods */
+async function gelatoGetShipmentMethods(env, country) {
+  const url = new URL(`${GELATO_BASE.ship}/shipment-methods`);
+  if (country) url.searchParams.set("country", country);
+  return gelatoFetch(url.toString(), env);
+}
+
+/** Prislista för produkt */
+async function gelatoGetPrices(env, productUid, { country, currency, pageCount } = {}) {
+  const url = new URL(`${GELATO_BASE.product}/products/${encodeURIComponent(productUid)}/prices`);
+  if (country)   url.searchParams.set("country", country);
+  if (currency)  url.searchParams.set("currency", currency);
+  if (pageCount) url.searchParams.set("pageCount", String(pageCount));
+  return gelatoFetch(url.toString(), env);
+}
+
+async function gelatoApiCreateOrder(env, payload) {
+  const url = `${GELATO_BASE.order}/orders`;
+  return gelatoFetch(url, env, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Mappar Gelatos orderId → din order.id (för webhook lookup) */
+async function kvIndexGelatoOrder(env, gelatoId, orderId, ttlSec = 60 * 24 * 60 * 60) {
+  if (!gelatoId || !orderId) return;
+  await env.ORDERS.put(`GELATO_IDX:${gelatoId}`, orderId, { expirationTtl: ttlSec });
+}
+
+/** Hämta orderinfo från Gelato */
+async function gelatoGetOrder(env, gelatoOrderId) {
+  if (!gelatoOrderId) throw new Error("Missing gelatoOrderId");
+  const url = `${GELATO_BASE.order}/orders/${encodeURIComponent(gelatoOrderId)}`;
+  return gelatoFetch(url, env, { method: "GET" });
+}
+
+/** Skapa Gelato-order utifrån KV-order */
+async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, currency }) {
+  const productUid = env.GELATO_PRODUCT_UID;
+  if (!productUid) throw new Error("GELATO_PRODUCT_UID not configured");
+
+ const contentUrl = order?.files?.single_pdf_url || null;
+const pdfPages   = Number(order?.files?.page_count ?? 0);
+
+if (!contentUrl) {
+  throw new Error("Order is missing files.single_pdf_url (run /api/pdf/single-url first)");
+}
+if (!Number.isFinite(pdfPages) || pdfPages <= 0) {
+  throw new Error("Order is missing/invalid files.page_count");
+}
+
+// Gelato vill ha det faktiska sidantalet, inkl. cover + endpapers
+const pageCount = pdfPages;
+
+if (!Number.isFinite(pageCount) || pageCount <= 0) {
+  throw new Error(`Derived Gelato pageCount is invalid (pageCount=${pageCount})`);
+}
+
+// Valfritt: varna om ojämnt sidantal
+if (pageCount % 2 !== 0) {
+  console.warn("⚠️ Gelato pageCount är udda – se till att PDF:en följer fotoboksreglerna", {
+    pdfPages,
+    pageCount,
+  });
+}
+
+
+  const DRY_RUN       = String(env.GELATO_DRY_RUN || "").toLowerCase() === "true";
+  const FORCE_TEST_TO = env.GELATO_TEST_EMAIL || "noreply@bokpiloten.se";
+  const CURR          = (currency || env.GELATO_DEFAULT_CURRENCY || "SEK").toUpperCase();
+
+  const custEmail   = customer.email || FORCE_TEST_TO;
+  const recvEmail   = DRY_RUN ? FORCE_TEST_TO : custEmail;
+  const recvPhone   = customer.phone || shipment.phone || "0700000000";
+
+  const shippingAddress = {
+    addressLine1: shipment.addressLine1 || "Storgatan 1",
+    addressLine2: shipment.addressLine2 || "",
+    city:         shipment.city || "Örebro",
+    postCode:     shipment.postCode || "70000",
+    country:      (shipment.country || "SE").toUpperCase(),
+  };
+
+  const item = {
+    itemReferenceId: `book-${order.id || "1"}`,
+    productUid,
+    quantity: 1,
+    pageCount,
+    files: [
+      { type: "default", url: contentUrl }
+    ],
+  };
+
+  const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
+
+  // 🔥 Viktig del: vi skickar både "shippingAddress/items" OCH "recipients"
+  // så vi matchar Gelatos felmeddelanden (shippingAddress/items)
+  // + det ni fått från support (recipients).
+  const payload = {
+    orderType: DRY_RUN ? "draft" : "order",
+    orderReferenceId: order.id,
+    customerReferenceId: custEmail || `cust-${order.id}`,
+    currency: CURR,
+
+    // v4 "simple" struktur
+    shippingAddress,
+    items: [item],
+    ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
+
+    // multi-recipient flavour (det support kallat "recipients")
+    recipients: [
+      {
+        firstName: customer.firstName || "Test",
+        lastName:  customer.lastName  || "Kund",
+        email:     recvEmail,
+        phone:     recvPhone,
+        shippingAddress,
+        items: [item],
+      }
+    ],
+
+    metadata: [
+      { key: "bp_kind",         value: String(order.kind || order?.draft?.kind || "printed") },
+      { key: "bp_pages_pdf",    value: String(pdfPages) },
+      { key: "bp_pages_gelato", value: String(pageCount) },
+    ],
+  };
+
+  console.log("📦 Payload to Gelato (order):", JSON.stringify(payload, null, 2));
+
+  const g = await gelatoApiCreateOrder(env, payload);
+  const gelato_id = g?.id || g?.orderId || null;
+
+  if (gelato_id && order?.id) {
+    await kvIndexGelatoOrder(env, gelato_id, order.id);
+    await kvAttachFiles(env, order.id, { gelato_order_id: gelato_id });
+  }
+
+  return { payload, gelato: g };
+}
+
+/* ====================== Gelato – produktinfo/debug ====================== */
+
+const GELATO_BASE_V3 = { product: "https://product.gelatoapis.com/v3" };
+
+async function gelatoFetchV3(url, env, init = {}) {
+  const r = await fetch(url, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      "X-API-KEY": env.GELATO_API_KEY,
+      ...(init.headers || {})
+    }
+  });
+  const txt = await r.text();
+  let data = null;
+  try { data = txt ? JSON.parse(txt) : null; } catch { data = { raw: txt }; }
+  if (!r.ok) {
+    const e = new Error(`Gelato ${r.status}: ${data?.message || data?.error || "Request contains errors"}`);
+    e.name = "GelatoError";
+    e.status = r.status;
+    e.data = data;
+    e.raw = txt;
+    throw e;
+  }
+  return data;
+}
+
+async function gelatoGetCoverDimensions(env, productUid, pageCount) {
+  if (!productUid) throw new Error("Missing GELATO_PRODUCT_UID");
+  if (!Number.isFinite(pageCount) || pageCount <= 0) {
+    throw new Error("Invalid pageCount for cover-dimensions");
+  }
+
+  const u = new URL(`${GELATO_BASE_V3.product}/products/${encodeURIComponent(productUid)}/cover-dimensions`);
+  u.searchParams.set("pageCount", String(pageCount));
+  return gelatoFetchV3(u.toString(), env);
+}
+
+function extractPageInfoFromProductV3(raw) {
+  const spec = raw?.printSpec || raw?.printSpecification || raw?.specification || raw || {};
+  return {
+    pageCountMin:      spec.pageCountMin ?? spec.minPageCount ?? null,
+    pageCountDefault:  spec.pageCountDefault ?? null,
+    pageCountMax:      spec.pageCountMax ?? spec.maxPageCount ?? null,
+    pageIncrement:     spec.pageIncrement ?? spec.pageStep ?? null,
+    includesCoverInCount:
+      spec.includesCoverInCount ?? spec.pageCountIncludesCover ?? null,
+  };
+}
+
+async function probeValidPageCounts(env, uid, { from = 20, to = 60 }) {
+  const okCounts = [];
+  for (let n = from; n <= to; n++) {
+    try {
+      const u = new URL(`${GELATO_BASE_V3.product}/products/${encodeURIComponent(uid)}/cover-dimensions`);
+      u.searchParams.set("pageCount", String(n));
+      await gelatoFetchV3(u.toString(), env);
+      okCounts.push(n);
+    } catch {
+      // ignore ogiltiga
+    }
+  }
+  return okCounts;
+}
+
+/* ======================== Gelato – handlers ======================== */
+
 async function handleGelatoShipmentMethods(req, env) {
   try {
     const country = new URL(req.url).searchParams.get("country") || env.GELATO_DEFAULT_COUNTRY || "SE";
     const data = await gelatoGetShipmentMethods(env, country);
     return ok(data);
-  } catch (e) { return err(e?.message || "gelato shipment-methods failed", 500); }
+  } catch (e) {
+    return err(e?.message || "gelato shipment-methods failed", 500);
+  }
 }
+
 async function handleGelatoPrices(req, env) {
   try {
     const productUid = env.GELATO_PRODUCT_UID;
     if (!productUid) return err("Missing GELATO_PRODUCT_UID", 400);
     const url = new URL(req.url);
-    const country  = url.searchParams.get("country")  || env.GELATO_DEFAULT_COUNTRY || "SE";
-    const currency = url.searchParams.get("currency") || env.GELATO_DEFAULT_CURRENCY || "SEK";
+    const country   = url.searchParams.get("country")  || env.GELATO_DEFAULT_COUNTRY || "SE";
+    const currency  = url.searchParams.get("currency") || env.GELATO_DEFAULT_CURRENCY || "SEK";
     const pageCount = url.searchParams.get("pageCount");
     const prices = await gelatoGetPrices(env, productUid, {
-      country, currency, pageCount: pageCount ? Number(pageCount) : undefined,
+      country,
+      currency,
+      pageCount: pageCount ? Number(pageCount) : undefined,
     });
     return ok(prices);
-  } catch (e) { return err(e?.message || "gelato prices failed", 500); }
+  } catch (e) {
+    return err(e?.message || "gelato prices failed", 500);
+  }
 }
 
 async function handleGelatoCreate(req, env) {
@@ -2588,7 +2641,6 @@ async function handleGelatoCreate(req, env) {
     const orderId = body.order_id;
     if (!orderId) return err("Missing order_id", 400);
 
-    // Hämta ordern från KV
     const ord = await kvGetOrder(env, orderId);
     if (!ord) return err("Order not found in KV", 404);
 
@@ -2596,7 +2648,6 @@ async function handleGelatoCreate(req, env) {
     const customer  = body.customer || {};
     const currency  = body.currency || undefined;
 
-    // Viktigt: se till att page_count & single_pdf_url är satta via /api/pdf/single-url
     if (!ord.files?.single_pdf_url || !Number.isFinite(ord.files?.page_count)) {
       return err(
         "Order is missing PDF data (single_pdf_url or page_count). Run /api/pdf/single-url first.",
@@ -2632,34 +2683,10 @@ async function handleGelatoCreate(req, env) {
   }
 }
 
-
-
-
-
-
-
-
-
-// --- product spec helper (needed by createOrder) ---
-async function gelatoGetProductSpec(env, productUid) {
-  if (!productUid) throw new Error("Missing GELATO_PRODUCT_UID");
-  const url = `${GELATO_BASE.product}/products/${encodeURIComponent(productUid)}`;
-  return gelatoFetch(url, env, { method: "GET" });
-}
-
-// === NYTT === Hämta order-info från Gelato (order v4)
-async function gelatoGetOrder(env, gelatoOrderId) {
-  if (!gelatoOrderId) throw new Error("Missing gelatoOrderId");
-  const url = `${GELATO_BASE.order}/orders/${encodeURIComponent(gelatoOrderId)}`;
-  return gelatoFetch(url, env, { method: "GET" });
-}
-
-
 async function handleGelatoWebhook(req, env) {
   try {
     const evt = await req.json().catch(() => ({}));
 
-    // 📥 Logga all inkommande data
     console.log("🔁 Gelato Webhook Payload:", JSON.stringify(evt, null, 2));
 
     const gelatoOrderId =
@@ -2706,118 +2733,6 @@ async function handleGelatoWebhook(req, env) {
   }
 }
 
-
-const GELATO_BASE_V3 = { product: "https://product.gelatoapis.com/v3" };
-
-// Minimal fetch med X-API-KEY + JSON-parse + fel
-async function gelatoFetchV3(url, env, init = {}) {
-  const r = await fetch(url, {
-    ...init,
-    headers: {
-      "content-type": "application/json",
-      "X-API-KEY": env.GELATO_API_KEY,
-      ...(init.headers || {})
-    }
-  });
-  const txt = await r.text();
-  let data = null;
-  try { data = txt ? JSON.parse(txt) : null; } catch { data = { raw: txt }; }
-  if (!r.ok) {
-    const e = new Error(`Gelato ${r.status}: ${data?.message || data?.error || "Request contains errors"}`);
-    e.name = "GelatoError";
-    e.status = r.status;
-    e.data = data;
-    e.raw = txt;
-    throw e;
-  }
-  return data;
-}
-
-async function gelatoGetCoverDimensions(env, productUid, pageCount) {
-  if (!productUid) throw new Error("Missing GELATO_PRODUCT_UID");
-  if (!Number.isFinite(pageCount) || pageCount <= 0) {
-    throw new Error("Invalid pageCount for cover-dimensions");
-  }
-
-  const u = new URL(`${GELATO_BASE_V3.product}/products/${encodeURIComponent(productUid)}/cover-dimensions`);
-  u.searchParams.set("pageCount", String(pageCount));
-  return gelatoFetchV3(u.toString(), env); // återanvänder gelatoFetchV3
-}
-
-
-function corsJson(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-      "access-control-allow-origin": "*",
-      "access-control-allow-methods": "GET, OPTIONS",
-      "access-control-allow-headers": "*",
-      "access-control-expose-headers": "X-Request-Id",
-    }
-  });
-}
-
-// Försök läsa sidregler ur v3 /products/:uid
-function extractPageInfoFromProductV3(raw) {
-  const spec = raw?.printSpec || raw?.printSpecification || raw?.specification || raw || {};
-  // Vanliga nycklar som brukar finnas i v3 (varierar mellan produkter)
-  const pageInfo = {
-    pageCountMin:      spec.pageCountMin ?? spec.minPageCount ?? null,
-    pageCountDefault:  spec.pageCountDefault ?? null,
-    pageCountMax:      spec.pageCountMax ?? spec.maxPageCount ?? null,
-    pageIncrement:     spec.pageIncrement ?? spec.pageStep ?? null,
-    includesCoverInCount:
-      spec.includesCoverInCount ?? spec.pageCountIncludesCover ?? null,
-  };
-  return pageInfo;
-}
-
-// Probar vilka pageCount som accepteras genom cover-dimensions
-async function probeValidPageCounts(env, uid, { from = 20, to = 60 }) {
-  const okCounts = [];
-  for (let n = from; n <= to; n++) {
-    try {
-      const u = new URL(`${GELATO_BASE_V3.product}/products/${encodeURIComponent(uid)}/cover-dimensions`);
-      u.searchParams.set("pageCount", String(n));
-      await gelatoFetchV3(u.toString(), env); // svarar 200 om n är giltigt
-      okCounts.push(n);
-    } catch {
-      // ogiltigt pageCount → hoppa över
-    }
-  }
-  return okCounts;
-}
-
-// GET /api/gelato/product-info?uid=...&mode=(info|probe)&from=..&to=..
-async function handleGelatoProductInfo(req, env) {
-  try {
-    const u = new URL(req.url);
-    const uid  = u.searchParams.get("uid");
-    const mode = (u.searchParams.get("mode") || "info").toLowerCase();
-    if (!uid) return corsJson({ ok:false, error:"Missing uid" }, 400);
-
-    if (mode === "probe") {
-      const from = Number(u.searchParams.get("from") || 24);
-      const to   = Number(u.searchParams.get("to")   || 60);
-      const counts = await probeValidPageCounts(env, uid, { from, to });
-      return corsJson({ ok:true, mode, uid, validPageCounts: counts });
-    }
-
-    // mode = info (default) → hämta produkt och extrahera sidregler
-    const url = `${GELATO_BASE_V3.product}/products/${encodeURIComponent(uid)}`;
-    const raw = await gelatoFetchV3(url, env);
-    const pageInfo = extractPageInfoFromProductV3(raw);
-    return corsJson({ ok:true, mode:"info", uid, pageInfo, raw });
-  } catch (e) {
-    const status = e?.status || 500;
-    return corsJson({ ok:false, error:String(e?.message||e), details:e?.data||null }, status);
-  }
-}
-
-
-
 async function handleGelatoOrderStatus(req, env) {
   try {
     const url = new URL(req.url);
@@ -2836,7 +2751,7 @@ async function handleGelatoOrderStatus(req, env) {
     if (!gelatoId) return err("Missing gelato_id (and order had none)", 400);
 
     const data = await gelatoGetOrder(env, gelatoId);
-    const status = mapGelatoStatus(data); // <— FIX
+    const status = mapGelatoStatus(data);
 
     if (ord?.id) {
       await kvAttachFiles(env, ord.id, {
@@ -2851,7 +2766,58 @@ async function handleGelatoOrderStatus(req, env) {
   }
 }
 
+async function handleGelatoStatus(req, env) {
+  const { searchParams } = new URL(req.url);
+  const order_id = searchParams.get("order_id");
+  if (!order_id) return err("Missing order_id", 400);
 
+  const ord = await kvGetOrder(env, order_id);
+  if (!ord) return err("Order not found", 404);
+
+  const gelatoId = ord?.files?.gelato_order_id;
+  if (!gelatoId) return err("No gelato_order_id on this order", 404);
+
+  const g = await gelatoGetOrder(env, gelatoId);
+  const status = mapGelatoStatus(g);
+  const hist   = Array.isArray(g.statusHistory) ? g.statusHistory : [];
+  const lastHist = hist.length ? (hist[hist.length - 1]?.status || hist[hist.length - 1]) : null;
+
+  return ok({
+    order: ord,
+    gelato: g,
+    derived: {
+      status,
+      lastHistory: lastHist,
+      pageCount: g?.items?.[0]?.pageCount ?? ord?.files?.page_count ?? null,
+      productUid: g?.items?.[0]?.productUid ?? null,
+      shippingAddress: g?.shippingAddress ?? null
+    }
+  });
+}
+
+async function handleGelatoProductInfo(req, env) {
+  try {
+    const u = new URL(req.url);
+    const uid  = u.searchParams.get("uid");
+    const mode = (u.searchParams.get("mode") || "info").toLowerCase();
+    if (!uid) return ok({ ok:false, error:"Missing uid" }, 400);
+
+    if (mode === "probe") {
+      const from = Number(u.searchParams.get("from") || 24);
+      const to   = Number(u.searchParams.get("to")   || 60);
+      const counts = await probeValidPageCounts(env, uid, { from, to });
+      return ok({ ok:true, mode, uid, validPageCounts: counts });
+    }
+
+    const url = `${GELATO_BASE_V3.product}/products/${encodeURIComponent(uid)}`;
+    const raw = await gelatoFetchV3(url, env);
+    const pageInfo = extractPageInfoFromProductV3(raw);
+    return ok({ ok:true, mode:"info", uid, pageInfo, raw });
+  } catch (e) {
+    const status = e?.status || 500;
+    return ok({ ok:false, error:String(e?.message||e), details:e?.data||null }, status);
+  }
+}
 
 async function handleGelatoDebugStatus(req, env) {
   try {
@@ -2867,9 +2833,6 @@ async function handleGelatoDebugStatus(req, env) {
     return err(e?.message || "gelato debug-status failed", 500);
   }
 }
-
-
-
 export default {
   async fetch(req, env, ctx) {
     // 1) Alltid svara på preflight
@@ -2897,6 +2860,9 @@ export default {
       if (req.method === "GET" && pathname === "/api/orders/status") {
         return await handleOrdersStatus(req, env);
       }
+      if (req.method === "GET" && pathname === "/api/order/get") {
+        return await handleOrderGet(req, env);
+      }
 
       // 5) Checkout (Stripe)
       if (req.method === "GET" && pathname === "/api/checkout/ping") {
@@ -2919,8 +2885,7 @@ export default {
         return await handleCheckoutOrderId(req, env);
       }
 
-      // Viktigt: Stripe-webhook kan kräva rå body — låt handlern sköta det,
-      // men se till att vi ändå alltid skickar CORS tillbaka.
+      // Stripe-webhook (rå body etc)
       if (req.method === "POST" && pathname === "/api/stripe/webhook") {
         return await handleStripeWebhook(req, env);
       }
@@ -2949,11 +2914,17 @@ export default {
       if (req.method === "POST" && pathname === "/api/images/upload") {
         return await handleUploadRequest(req, env);
       }
-      // preview/final i en fil
       if (req.method === "POST" && pathname === "/api/pdf") {
         return await handlePdfRequest(req, env);
       }
-      // 8) Gelato
+      if (req.method === "POST" && pathname === "/api/pdf/count-by-url") {
+        return await handlePdfCountByUrl(req, env);
+      }
+      if (req.method === "POST" && pathname === "/api/pdf/single-url") {
+        return await handlePdfSingleUrl(req, env);
+      }
+
+      // 8) Gelato (shipment/prices/create/status/debug/product-info)
       if (req.method === "GET" && pathname === "/api/gelato/shipment-methods") {
         return await handleGelatoShipmentMethods(req, env);
       }
@@ -2963,40 +2934,21 @@ export default {
       if (req.method === "POST" && pathname === "/api/gelato/create") {
         return await handleGelatoCreate(req, env);
       }
-      // Webhook (rå body) – låt handlern sköta parsing/signatur
       if (req.method === "POST" && pathname === "/api/gelato/webhook") {
         return await handleGelatoWebhook(req, env);
+      }
+      if (req.method === "GET" && pathname === "/api/gelato/status") {
+        return await handleGelatoStatus(req, env);
       }
       if (req.method === "GET" && pathname === "/api/gelato/order-status") {
         return await handleGelatoOrderStatus(req, env);
       }
-      // --- ROUTES ---
-if (req.method === "GET" && url.pathname === "/api/order/get") {
-  return handleOrderGet(req, env);
-}
-if (req.method === "GET" && url.pathname === "/api/gelato/status") {
-  return handleGelatoStatus(req, env);
-}
-
-if (url.pathname === "/api/gelato/product-info" && req.method === "GET") {
-  return handleGelatoProductInfo(req, env);
-}
-if (req.method === "POST" && pathname === "/api/pdf/count-by-url") {
-  return await handlePdfCountByUrl(req, env);
-}
-
-if (req.method === "POST" && pathname === "/api/pdf/single-url") {
-  return await handlePdfSingleUrl(req, env);
-  return withCORS(r);
-}
-if (req.method === "GET" && pathname === "/api/gelato/debug-status") {
-  return await handleGelatoDebugStatus(req, env);
-}
-
-if (req.method === "POST" && pathname === "/api/gelato/debug-validate") {
-  return await handleGelatoDebugValidate(req, env);
-}
-
+      if (req.method === "GET" && pathname === "/api/gelato/product-info") {
+        return await handleGelatoProductInfo(req, env);
+      }
+      if (req.method === "GET" && pathname === "/api/gelato/debug-status") {
+        return await handleGelatoDebugStatus(req, env);
+      }
 
       // 9) 404
       return err("Not found", 404);
