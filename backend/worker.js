@@ -565,21 +565,15 @@ function styleGuard(style = "cartoon") {
 }
 
 const OUTLINE_SYS = `
-Du hjälper till att skapa en disposition ("outline") för en svensk bilderbok.
+Du är en barnboksförfattare, som hjälper till att skapa en disposition ("outline") för en svensk bilderbok.
 
 Du får i user-meddelandet:
 - Hjältens typ (barn eller husdjur)
-- Namn, ålder (om barn), ev. önskat tema
-- Kategori: "kids" eller "pets"
+- Namn, ålder (om barn), och det övergripande temat för boken.
+
 
 DIN UPPGIFT:
-Skapa en engagerande, fantasifull outline för en bilderbok där hjältens typ är helt konsekvent:
-
-- Om kategorin är "kids":
-  - Huvudpersonen är ett mänskligt barn.
-- Om kategorin är "pets":
-  - Huvudpersonen är ett djur (husdjur), t.ex. katt, hund, kanin.
-  - Hjälten ska inte bli människa senare i storyn.
+Skapa en engagerande outline för en bilderbok.
 
 RETURNERA EXAKT:
 {
@@ -615,9 +609,8 @@ REGLER:
   - hero.kind = "pet"
   - hero.species = ett enkelt engelskt ord, t.ex. "cat", "dog", "rabbit"
   - hero.age kan vara null eller uppskattad (om det passar).
-- Storyn ska ha tydlig början, mitt och slut med naturliga vändpunkter.
-- Lärdomen ska komma fram genom handling, inte moraliskt pekfinger.
-- Dispositionen ska gå att utveckla till ca 14 sidor i en bilderbok.
+- Storyn ska vara engagerande, händelserik och utgå ifrån det önskade temat.
+- Dispositionen ska gå att utveckla till ca 16 sidor i en bilderbok.
 - Endast giltig JSON, inga kommentarer eller extra text.
 `;
 
@@ -661,7 +654,7 @@ Skriv en intressant, engagerande och varm bilderbok enligt följande JSON-strukt
         "text": string,        // SVENSKA: 2–4 meningar berättande text
         "scene": string,       // SVENSKA: kort visuell scenbeskrivning (miljö + vad som händer)
         "scene_en": string,    // ENGELSKA: 2–3 meningar, visuell beskrivning för bild-AI
-        "location": string,    // t.ex. "gata", "sovrum", "park", "kök"
+        "location": string,    // ENGELSKA: t.ex. "street", "bedroom", "park", "yard"
         "time_of_day": "day" | "golden_hour" | "evening" | "night",
         "weather": "clear" | "cloudy" | "rain" | "snow"
       }
@@ -674,22 +667,18 @@ HÅRDA FORMATREGLER:
 - 2–4 meningar i "text" på svenska per sida.
 - "scene_en" ska vara kort, filmisk, levande och konkret (inte dialog).
 - Varje sida ska vara visuellt distinkt (ny vinkel, ny detalj, ny mikrohändelse).
-- Berättelsen ska ha en tydlig progression (början → mitt → slut).
+- Berättelsen ska vara engagerande och bygga på det övergripande temat. 
 
 KATEGORI-REGLER (VIKTIGT FÖR BILDERNA):
 
 1) Om category = "kids":
    - Huvudpersonen är ett mänskligt barn genom hela berättelsen.
-   - Skriv "physique" och "identity_keys" så det är glasklart att det är ett barn
-     (t.ex. längd, hårfärg, frisyr, klädstil, glasögon etc).
    - I "scene" och "scene_en" ska hjälten konsekvent refereras som ett barn
      (t.ex. "det lilla barnet Nova", "the little child Nova").
    - Hjälten får inte förvandlas till djur eller vuxen. Ingen tonåring/vuxen gestalt.
 
 2) Om category = "pets":
    - Huvudpersonen är ett djur (husdjur) genom hela berättelsen.
-   - Skriv "physique" och "identity_keys" så det tydligt framgår art och utseende:
-     t.ex. "small grey cat with green eyes", "golden retriever with fluffy tail".
    - I "scene" och "scene_en" ska hjälten konsekvent refereras som ett djur:
      t.ex. "katten Lina", "the cat Lina", "the little dog Max".
    - Hjälten får aldrig bli människa senare i storyn. Ingen förvandling till barn/vuxen.
@@ -700,8 +689,7 @@ ALLMÄNNA REGLER FÖR BÅDA:
 - "scene_en" ska alltid innehålla hjälten tydligt (särskilt viktigt för djur),
   t.ex. "The little grey cat Lina sits on the windowsill..." i början av meningen.
 - Undvik dialog i "scene_en" (det är en ren bildbeskrivning).
-- Miljöer och situationer ska vara begripliga och trygga för barn i angiven läsålder.
-- Lärdomen/temat ska växa fram organiskt ur händelserna.
+- Boken ska kunna upppskattas av barn som vuxna, hela familjen.
 
 TEKNISKA REGLER:
 - Endast giltig JSON i exakt format som ovan.
@@ -718,44 +706,7 @@ function heroDescriptor({ category, name, age, traits }) {
   return `HJÄLTE: ett barn vid namn ${name || "Nova"} (${a} år), egenskaper: ${traits || "modig, omtänksam"}.`;
 }
 
-async function getCameraHints(env, story) {
-  const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
-  if (!pages.length) return { shots: [] };
 
-  const prompt = `
-Du får en lista av sidors scener i en svensk bilderbok. Föreslå en kamera-/bildhint per sida
-som hjälper en bild-AI variera kompositionen utan att byta stil/identitet.
-
-Tillåtna hints (välj 1 per sida): "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
-
-Returnera EXAKT:
-{ "shots": [ { "page": number, "shot": string } ] }
-
-SCENER (sv + ev. eng):
-${JSON.stringify(pages.map(p => ({
-  page: p.page,
-  scene: p.scene || "",
-  scene_en: p.scene_en || "",
-  location: p.location || "",
-  time_of_day: p.time_of_day || "",
-  weather: p.weather || ""
-})))}
-`.trim();
-
-  // Svarar som JSON (vi har redan openaiJSON helper)
-  try {
-    const j = await openaiJSON(env,
-      "Du är en filmspråkscoach. Returnera ENDAST giltig JSON i exakt efterfrågat format.",
-      prompt
-    );
-    const shots = Array.isArray(j?.shots) ? j.shots : [];
-    // Liten sanering
-    const allowed = new Set(["wide","medium","close-up","low-angle","high-angle","over-the-shoulder"]);
-    return { shots: shots.filter(x => Number.isFinite(x?.page) && allowed.has(String(x?.shot || "").toLowerCase())) };
-  } catch {
-    return { shots: [] };
-  }
-}
 
 function normalizePlan(pages, shotsHints = []) {
   const out = [];
@@ -870,15 +821,25 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
       ].join(" ");
 
   const consistency = [
-    `This is page ${page.page} of ${pageCount} in the same continuous story.`,
-    `Keep STYLE and lighting consistent.`,
-    `Maintain identical identity and outfit.`,
+   "You receive TWO images before this text:",
+  "IMAGE A (first image) is the strict identity reference for the main hero.",
+  "IMAGE B (second image) is the previous scene from the same story.",
+
+  // Vad ska hända nu
+  "Depict the *next moment* that happens AFTER IMAGE B.",
+  "Keep the hero's identity 100% consistent with IMAGE A.",
+
+  // Variation
+  "Do NOT recreate IMAGE B. Change the camera angle, pose and composition.",
+  "Use IMAGE B only as a guide for global style, lighting, and environment continuity.",
+
+  // Lite extra för att undvika statiska frames
+  "If IMAGE B is wide and distant, move a bit closer. If it was a frontal shot, try a slightly higher or lower angle, or over-the-shoulder.",
     `Do not include logos or text.`,
   ].join(" ");
 
   const cinematicContext = [
     `Each image is a *film frame* from the same movie.`,
-    `Depict the *next moment* of the previous scene.`,
     `Background and lighting should evolve naturally with the story.`,
     `NEVER make an identical image, NEVER use the same exact angle.`
   ].join(" ");
@@ -2132,7 +2093,7 @@ Returnera enbart JSON i exakt formatet.
         const t = await openaiJSON(
           env,
           "Du är en saklig översättare. Returnera endast giltig JSON.",
-          `Översätt följande scenangivelser till kort engelsk, visuell beskrivning (1–2 meningar, inga repliker).
+          `Översätt följande scenangivelser till kort engelsk, visuell beskrivning (2–3 meningar, inga repliker).
 Returnera exakt: { "items":[{"page":number,"scene_en":string}, ...] } och inget mer.
 SVENSKA:
 ${JSON.stringify(toTranslate)}`
