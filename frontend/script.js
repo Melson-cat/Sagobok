@@ -1129,31 +1129,31 @@ function bindEvents() {
     });
   });
 
-  // Extra karaktärer
-  if (els.extraCharsToggle && els.extraCharsContainer) {
-    els.extraCharsToggle.addEventListener("change", () => {
-      const on = els.extraCharsToggle.checked;
-      els.extraCharsContainer.classList.toggle("hidden", !on);
+ if (els.extraCharsToggle && els.extraCharsContainer) {
+  els.extraCharsToggle.addEventListener("change", () => {
+    const on = els.extraCharsToggle.checked;
+    els.extraCharsContainer.classList.toggle("hidden", !on);
 
-      if (!on) {
-        state.form.extraCharacters = [];
-        els.extraCharRows?.forEach((row) => {
-          row.querySelector("[data-extra-name]")?.value = "";
-          row.querySelector("[data-extra-role]")?.value = "";
-        });
-        saveForm();
-      } else {
-        applyExtraCharactersToUI();
-      }
-    });
-
-    // Om det fanns sparade extra-karaktärer – slå på togglen
-    if (state.form.extraCharacters && state.form.extraCharacters.length > 0) {
-      els.extraCharsToggle.checked = true;
-      els.extraCharsContainer.classList.remove("hidden");
+    if (!on) {
+      state.form.extraCharacters = [];
+      els.extraCharRows?.forEach((row) => {
+        const nameInput = row.querySelector("[data-extra-name]");
+        const roleInput = row.querySelector("[data-extra-role]");
+        if (nameInput) nameInput.value = "";
+        if (roleInput) roleInput.value = "";
+      });
+      saveForm();
+    } else {
       applyExtraCharactersToUI();
     }
+  });
+
+  if (state.form.extraCharacters && state.form.extraCharacters.length > 0) {
+    els.extraCharsToggle.checked = true;
+    els.extraCharsContainer.classList.remove("hidden");
+    applyExtraCharactersToUI();
   }
+}
 
   els.charPhoto?.addEventListener("change", async () => {
     const f = els.charPhoto.files?.[0];
