@@ -55,11 +55,19 @@ const els = {
   mobileMenu: document.getElementById("mobileMenu"),
   pdfBtn: document.getElementById("pdfBtn"),
   buyPrintBtn: document.getElementById("buyPrintBtn"),
+  ageLabel: document.querySelector('label[for="age"]'),
+  extraCharsToggle: document.getElementById("extraCharsToggle"),
+  extraCharsContainer: document.getElementById("extraCharsContainer"),
+  extraCharRows: Array.from(document.querySelectorAll("[data-extra-char-row]")),
+};
+
 };
 const readingAgeSeg = Array.from(document.querySelectorAll("[data-readage]"));
 
 
 els.buyPdfBtn = document.getElementById("buyPdfBtn");
+
+
 
 /* --------------------------- State --------------------------- */
 const STORAGE_KEY = "bokpiloten_form_v6";
@@ -78,6 +86,8 @@ const state = {
     refMode: "photo", // "photo" | "desc"
     traits: "",
     photoDataUrl: null,
+     petSpecies: "",
+     extraCharacters: [],
   },
   visibleCount: 4,
 
@@ -216,6 +226,59 @@ function buildImagesPayload() {
   return images.filter(Boolean);
 }
 
+function updateHeroFieldForCategory() {
+  const cat = state.form.category || "kids";
+  if (!els.age) return;
+
+  if (cat === "kids") {
+    // Barnläge: numerisk ålder
+    if (els.ageLabel) els.ageLabel.textContent = "Barnets ålder";
+    els.age.type = "number";
+    els.age.min = String(MIN_AGE);
+    els.age.max = String(MAX_AGE);
+    els.age.placeholder = "t.ex. 6";
+    els.age.value = state.form.age ?? 6;
+  } else {
+    // Djur-läge: djurslag
+    if (els.ageLabel) els.ageLabel.textContent = "Djurslag";
+    els.age.type = "text";
+    els.age.removeAttribute("min");
+    els.age.removeAttribute("max");
+    els.age.placeholder = "t.ex. katt, hund, kanin";
+    els.age.value = state.form.petSpecies || "";
+  }
+}
+
+
+function readExtraCharactersFromUI() {
+  const chars = [];
+  if (!els.extraCharRows) return chars;
+
+  els.extraCharRows.forEach((row) => {
+    const nameEl = row.querySelector("[data-extra-name]");
+    const roleEl = row.querySelector("[data-extra-role]");
+    const name = (nameEl?.value || "").trim();
+    const role = (roleEl?.value || "").trim();
+    if (name || role) chars.push({ name, role });
+  });
+
+  state.form.extraCharacters = chars;
+}
+
+function applyExtraCharactersToUI() {
+  const chars = state.form.extraCharacters || [];
+  if (!els.extraCharRows) return;
+
+  els.extraCharRows.forEach((row, idx) => {
+    const nameEl = row.querySelector("[data-extra-name]");
+    const roleEl = row.querySelector("[data-extra-role]");
+    const item = chars[idx] || { name: "", role: "" };
+    if (nameEl) nameEl.value = item.name || "";
+    if (roleEl) roleEl.value = item.role || "";
+  });
+}
+
+
 /* --------------------------- Status/Progress --------------------------- */
 const STATUS_QUIPS = [
   "puffar kuddar…",
@@ -285,8 +348,36 @@ function setCategory(cat, save = true) {
   document.body.dataset.theme = val;
   els.catKidsBtn?.classList.toggle("active", val === "kids");
   els.catPetsBtn?.classList.toggle("active", val === "pets");
+
+  // 🔁 Byt label + input-typ + hint
+  const ageLabel = document.getElementById("ageLabel");
+  const ageHint  = document.getElementById("ageHint");
+
+  if (val === "kids") {
+    els.age.type = "number";
+    els.age.min = "1";
+    els.age.max = String(MAX_AGE);
+    els.age.inputMode = "numeric";
+    els.age.placeholder = "Ex: 6";
+    els.age.value = state.form.age ?? 6;
+
+    if (ageLabel) ageLabel.textContent = "Ålder (hjälte)";
+    if (ageHint)  ageHint.textContent  = "Barnets ålder för bibeln (valfritt men hjälper tonen).";
+  } else {
+    els.age.type = "text";
+    els.age.removeAttribute("min");
+    els.age.removeAttribute("max");
+    els.age.removeAttribute("inputmode");
+    els.age.placeholder = "Ex: katt, hund, kanin";
+    els.age.value = state.form.petSpecies || "";
+
+    if (ageLabel) ageLabel.textContent = "Djurslag";
+    if (ageHint)  ageHint.textContent  = "Ange djurslag, t.ex. katt, hund eller kanin.";
+  }
+
   if (save) saveForm();
 }
+
 function setRefMode(mode, focus = true) {
   const m = mode === "photo" ? "photo" : "desc";
   state.form.refMode = m;
@@ -310,40 +401,88 @@ function setReadingAgeByChip(range) {
 
 function readForm() {
   const f = state.form;
-  f.name = (els.name.value || "Nova").trim();
-  f.age = clamp(toInt(els.age.value, 6), MIN_AGE, MAX_AGE);
+  f.category = f.category || "kids";
+
+  f.name  = (els.name.value || "Nova").trim();
   f.style = els.style.value || "cartoon";
   f.theme = (els.theme.value || "").trim();
   f.traits = (els.traits.value || "").trim();
+
+  // Läsålder
   f.reading_age = clamp(
     toInt(els.readingAgeNumber?.value ?? f.reading_age, f.reading_age),
     3,
     12
   );
-}
-function writeForm() {
-  els.name.value = state.form.name;
-  els.age.value = state.form.age;
-  els.style.value = state.form.style;
-  els.theme.value = state.form.theme;
-  els.traits.value = state.form.traits;
-  if (els.readingAgeNumber) els.readingAgeNumber.value = state.form.reading_age;
-  const target =
-    state.form.reading_age <= 5
-      ? "4-5"
-      : state.form.reading_age <= 8
-      ? "6-8"
-      : state.form.reading_age <= 12
-      ? "9-12"
-      : "familj";
-  setReadingAgeByChip(target);
-  setCategory(state.form.category, false);
-  setRefMode(state.form.refMode, false);
-  if (state.form.photoDataUrl) {
-    els.photoPreview.src = state.form.photoDataUrl;
-    els.photoPreview.classList.remove("hidden");
+
+  if (f.category === "kids") {
+    f.age = clamp(toInt(els.age.value, 6), MIN_AGE, MAX_AGE);
+    f.petSpecies = "";
+  } else {
+    f.petSpecies = (els.age.value || "").trim().toLowerCase();
+    f.age = null; // backend bryr sig ändå inte om ålder för pets
+  }
+
+  if (els.extraCharsToggle?.checked) {
+    readExtraCharactersFromUI();
+  } else {
+    state.form.extraCharacters = [];
   }
 }
+
+
+function writeForm() {
+  const f = state.form;
+  f.category = f.category || "kids";
+
+  els.name.value  = f.name || "";
+  els.style.value = f.style || "cartoon";
+  els.theme.value = f.theme || "";
+  els.traits.value = f.traits || "";
+
+  if (els.readingAgeNumber) {
+    els.readingAgeNumber.value = f.reading_age ?? 6;
+  }
+
+  const target =
+    f.reading_age <= 5 ? "4-5" :
+    f.reading_age <= 8 ? "6-8" :
+    f.reading_age <= 12 ? "9-12" : "familj";
+  setReadingAgeByChip(target);
+
+  // Sätt kategori (styling + state)
+  setCategory(f.category, false);
+
+  // Skriv rätt sak in i ålder/species-fältet
+  if (f.category === "kids") {
+    els.age.value = f.age ?? 6;
+  } else {
+    els.age.value = f.petSpecies || "";
+  }
+
+  updateHeroFieldForCategory(); // uppdaterar label + hint
+
+  if (f.refMode !== "photo" && f.refMode !== "desc")
+    f.refMode = "photo";
+  setRefMode(f.refMode, false);
+
+  if (f.photoDataUrl) {
+    els.photoPreview.src = f.photoDataUrl;
+    els.photoPreview.classList.remove("hidden");
+  } else {
+    els.photoPreview.classList.add("hidden");
+    els.photoPreview.src = "";
+  }
+
+  // Extra karaktärer – startläge
+  if (els.extraCharsToggle && els.extraCharsContainer) {
+    const hasExtras = Array.isArray(f.extraCharacters) && f.extraCharacters.length > 0;
+    els.extraCharsToggle.checked = hasExtras;
+    els.extraCharsContainer.classList.toggle("hidden", !hasExtras);
+    if (hasExtras) applyExtraCharactersToUI();
+  }
+}
+
 
 /* --------------------------- Preview rendering --------------------------- */
 function renderSkeleton(count = 4) {
@@ -627,8 +766,23 @@ async function onSubmit(e) {
   readForm();
   const problems = [];
   if (!state.form.name) problems.push("Ange ett namn.");
-  if (state.form.age < MIN_AGE || state.form.age > MAX_AGE) problems.push("Hjältens ålder verkar orimlig.");
-  if (state.form.reading_age < 3 || state.form.reading_age > 12) problems.push("Läsålder bör vara 3–12 (eller välj Familj).");
+
+  if (state.form.category === "kids") {
+    if (state.form.age < MIN_AGE || state.form.age > MAX_AGE) {
+      problems.push("Barnets ålder verkar orimlig.");
+    }
+  } else {
+  const species = (state.form.petSpecies || "").trim();
+  if (species.length < 2) {
+    problems.push("Ange djurslag, t.ex. katt eller hund.");
+  }
+}
+
+
+  if (state.form.reading_age < 3 || state.form.reading_age > 12) {
+    problems.push("Läsålder bör vara 3–12 (eller välj Familj).");
+  }
+
   if (state.form.refMode === "desc") {
     if (!state.form.traits || state.form.traits.length < 6) problems.push("Beskriv gärna kännetecken – eller ladda upp foto för bäst resultat.");
   } else if (state.form.refMode === "photo") {
@@ -968,15 +1122,39 @@ function bindEvents() {
     });
   });
 
-  ["name", "age", "style", "theme", "traits", "readingAge"].forEach(
-    (id) => {
-      const el = document.getElementById(id);
-      el?.addEventListener("input", () => {
-        readForm();
+  ["name", "age", "style", "theme", "traits", "readingAge"].forEach((id) => {
+    const el = document.getElementById(id);
+    el?.addEventListener("input", () => {
+      readForm();
+      saveForm();
+    });
+  });
+
+  // Extra karaktärer
+  if (els.extraCharsToggle && els.extraCharsContainer) {
+    els.extraCharsToggle.addEventListener("change", () => {
+      const on = els.extraCharsToggle.checked;
+      els.extraCharsContainer.classList.toggle("hidden", !on);
+
+      if (!on) {
+        state.form.extraCharacters = [];
+        els.extraCharRows?.forEach((row) => {
+          row.querySelector("[data-extra-name]")?.value = "";
+          row.querySelector("[data-extra-role]")?.value = "";
+        });
         saveForm();
-      });
+      } else {
+        applyExtraCharactersToUI();
+      }
+    });
+
+    // Om det fanns sparade extra-karaktärer – slå på togglen
+    if (state.form.extraCharacters && state.form.extraCharacters.length > 0) {
+      els.extraCharsToggle.checked = true;
+      els.extraCharsContainer.classList.remove("hidden");
+      applyExtraCharactersToUI();
     }
-  );
+  }
 
   els.charPhoto?.addEventListener("change", async () => {
     const f = els.charPhoto.files?.[0];
@@ -1017,10 +1195,9 @@ function bindEvents() {
   els.buyPdfBtn?.addEventListener("click", onBuyPdf);
 
   els.buyPrintBtn = document.getElementById("buyPrintBtn");
-els.buyPrintBtn?.addEventListener("click", onBuyPrint);
-
-
+  els.buyPrintBtn?.addEventListener("click", onBuyPrint);
 }
+
 
 (function init() {
   loadForm();

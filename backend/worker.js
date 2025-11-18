@@ -524,10 +524,10 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
 function styleHint(style = "cartoon") {
   const s = (style || "cartoon").toLowerCase();
   if (s === "storybook") return "storybook watercolor, soft edges, paper texture, warm and cozy";
-  if (s === "pixar") return "stylized 3D animated film still (not photographic): enlarged eyes, simplified forms, clean gradients";
+  if (s === "pixar") return "stylized 3D animated pixar film still (not photographic)";
   if (s === "comic") return "bold comic style, inked lines, flat colors";
   if (s === "painting") return "soft painterly illustration, visible brushwork";
-  return "expressive 2D cartoon: thick-and-thin outlines, cel shading, vibrant palette";
+  return "expressive 2D cartoon: thick-and-thin outlines, cel shading, vibrant palette, happy and expressive";
 }
 
 function styleGuard(style = "cartoon") {
@@ -535,7 +535,7 @@ function styleGuard(style = "cartoon") {
   switch (s) {
     case "pixar":
       return [
-        "STYLE: stylized 3D animated film still (clean gradients, soft global illumination).",
+        "STYLE: stylized 3D animated pixar film still.",
         "Do NOT use watercolor, inked lines, flat 2D shading, or comic outlines.",
         "Not photorealistic, not live-action."
       ].join(" ");
@@ -557,7 +557,7 @@ function styleGuard(style = "cartoon") {
       ].join(" ");
     default:
       return [
-        "STYLE: expressive 2D cartoon with cel shading.",
+        "STYLE: expressive 2D cartoon with cel shading, vibrant colors, happy and expressive characters.",
         
       ].join(" ");
         
@@ -691,6 +691,7 @@ ALLMÄNNA REGLER FÖR BÅDA:
   t.ex. "The little grey cat Lina sits on the windowsill..." i början av meningen.
 - Undvik dialog i "scene_en" (det är en ren bildbeskrivning).
 - Boken ska kunna upppskattas av barn som vuxna, hela familjen.
+- ALLA 16 sidor måste innehålla story, INGA meta-kommentarer, eller kommentarer om boken!
 
 TEKNISKA REGLER:
 - Endast giltig JSON i exakt format som ovan.
