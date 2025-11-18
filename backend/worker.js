@@ -666,8 +666,9 @@ HÅRDA FORMATREGLER:
 - Exakt 16 sidor: pages 1...16.
 - 2–4 meningar i "text" på svenska per sida.
 - "scene_en" ska vara kort, filmisk, levande och konkret (inte dialog).
-- Varje sida ska vara visuellt distinkt (ny vinkel, ny detalj, ny mikrohändelse).
-- Berättelsen ska vara engagerande och bygga på det övergripande temat. 
+- Varje sida ska vara visuellt distinkt (ny vinkel, ny miljö, ny händelse).
+- Berättelsen ska vara engagerande och bygga på det övergripande temat.
+- Undvik att stå stilla i samma scen, max 2 sidor i samma scenografi.  
 
 KATEGORI-REGLER (VIKTIGT FÖR BILDERNA):
 
@@ -867,7 +868,7 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
   "Keep the hero's identity 100% consistent with IMAGE A.",
 
   // Variation
-  "Do NOT recreate IMAGE B. Change the camera angle, pose and composition.",
+  "Do NOT recreate IMAGE B. Make visable changes for this scene.",
   "Use IMAGE B only as a guide for global style, lighting, and environment continuity.",
 
   // Lite extra för att undvika statiska frames
@@ -2280,8 +2281,8 @@ async function handleImagesNext(req, env) {
       "This illustration continues directly from the previous scene in the same story.",
       prevSceneEn ? `PREVIOUS_SCENE_EN: ${prevSceneEn}` : "",
       "Use the previous image only as a visual guide for style, lighting and character identity.",
-      "Do NOT copy it. Imagine this as a new camera angle or a slightly later moment in the same world.",
-      "The main hero must remain 100% consistent with the reference image and previous pages.",
+      "Do NOT copy it. Imagine this as new scene in the same story.",
+      "The main hero must remain 100% consistent with the reference image(image A) and previous image(image B).",
     ].filter(Boolean).join("\n");
 
     const prompt = [
