@@ -697,7 +697,44 @@ TEKNISKA REGLER:
 `;
 
 
+async function getCameraHints(env, story) {
+  const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
+  if (!pages.length) return { shots: [] };
 
+  const prompt = `
+Du får en lista av sidors scener i en svensk bilderbok. Föreslå en kamera-/bildhint per sida
+som hjälper en bild-AI variera kompositionen utan att byta stil/identitet.
+
+Tillåtna hints (välj 1 per sida): "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
+
+Returnera EXAKT:
+{ "shots": [ { "page": number, "shot": string } ] }
+
+SCENER (sv + ev. eng):
+${JSON.stringify(pages.map(p => ({
+  page: p.page,
+  scene: p.scene || "",
+  scene_en: p.scene_en || "",
+  location: p.location || "",
+  time_of_day: p.time_of_day || "",
+  weather: p.weather || ""
+})))}
+`.trim();
+
+  // Svarar som JSON (vi har redan openaiJSON helper)
+  try {
+    const j = await openaiJSON(env,
+      "Du är en filmspråkscoach. Returnera ENDAST giltig JSON i exakt efterfrågat format.",
+      prompt
+    );
+    const shots = Array.isArray(j?.shots) ? j.shots : [];
+    // Liten sanering
+    const allowed = new Set(["wide","medium","close-up","low-angle","high-angle","over-the-shoulder"]);
+    return { shots: shots.filter(x => Number.isFinite(x?.page) && allowed.has(String(x?.shot || "").toLowerCase())) };
+  } catch {
+    return { shots: [] };
+  }
+}
 
 function heroDescriptor({ category, name, age, traits }) {
   if ((category || "kids") === "pets")
