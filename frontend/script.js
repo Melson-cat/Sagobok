@@ -61,7 +61,6 @@ const els = {
   extraCharRows: Array.from(document.querySelectorAll("[data-extra-char-row]")),
 };
 
-};
 const readingAgeSeg = Array.from(document.querySelectorAll("[data-readage]"));
 
 
