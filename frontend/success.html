@@ -76,7 +76,7 @@
       <!-- PRINT FORM -->
       <form id="printForm" class="form-card hidden" novalidate>
         <h3>Leveransuppgifter för tryckt bok</h3>
-        <p class="muted">Fyll i adress och välj frakt. I testläge skapas en simulerad order.</p>
+        <p class="muted">Fyll i adress och namn för frakt.</p>
 
         <div class="form-row">
           <div class="field">
@@ -132,11 +132,16 @@
               <option value="US">USA (US)</option>
             </select>
           </div>
-          <div class="field">
-            <label for="shipmentMethod">Fraktmetod</label>
-            <select id="shipmentMethod" aria-live="polite"></select>
-          </div>
-        </div>
+         <div class="field">
+  <label>Frakt</label>
+  <div id="shippingSummary" class="shipping-summary">
+    Fraktpris: 87kr.
+  </div>
+  <p class="hint">
+    Vi skickar alltid med standardfrakt (ca 4–6 dagar).
+  </p>
+</div>
+
 
         <div class="actions">
           <button class="btn btn-primary" id="btnSubmitPrint" type="submit">Skicka till tryck</button>
@@ -368,26 +373,79 @@ async function ensureSingle(order_id, deliverable){
 }
 
 
-  async function fillShipMethods(country){
-    try{
-      el.f.shipMeth.innerHTML = `<option disabled>Hämtar fraktmetoder…</option>`;
-      const data = await api.getShipMethods(country);
-      const list = data?.shipmentMethods || [];
-      el.f.shipMeth.innerHTML = "";
-      if (!list.length){
-        el.f.shipMeth.innerHTML = `<option value="">Inga fraktmetoder</option>`;
-        return;
+async function fillShipMethods(country) {
+  try {
+    // Visa tillfälligt meddelande (men det kommer ändå döljas/disable:as)
+    el.f.shipMeth.innerHTML = `<option disabled>Hämtar frakt…</option>`;
+
+    const data = await api.getShipMethods(country);
+    const list = data?.shipmentMethods || [];
+
+    el.f.shipMeth.innerHTML = "";
+
+    if (!list.length) {
+      // Inga metoder – lämna tomt men logga
+      el.f.shipMeth.innerHTML = `<option value="">Ingen fraktmetod hittades</option>`;
+      el.f.shipMeth.disabled = true;
+      if (el.f.shipSummary) {
+        el.f.shipSummary.textContent = "Frakt: okänd – försök igen senare.";
       }
-      for (const m of list){
-        const opt = document.createElement("option");
-        opt.value = m.shipmentMethodUid;
-        opt.textContent = `${m.displayName || m.name || m.type}`;
-        el.f.shipMeth.appendChild(opt);
+      return;
+    }
+
+    // 1) Försök hitta "normal"
+    let normal = list.find(
+      (m) =>
+        String(m.shipmentMethodUid || "").toLowerCase() === "normal" ||
+        String(m.type || "").toLowerCase() === "normal"
+    );
+
+    // 2) Fallback: ta billigaste
+    if (!normal) {
+      normal = [...list].sort((a, b) => {
+        const pa = Number(a.price || a.totalPrice || a.totalPriceInMinorUnits || 0);
+        const pb = Number(b.price || b.totalPrice || b.totalPriceInMinorUnits || 0);
+        return pa - pb;
+      })[0];
+    }
+
+    // Sätt ENDA alternativet i selecten
+    const opt = document.createElement("option");
+    opt.value = normal.shipmentMethodUid || "normal";
+    opt.textContent = normal.displayName || normal.name || normal.type || "Standardfrakt";
+    el.f.shipMeth.appendChild(opt);
+
+    // Lås ner selecten – användaren kan inte ändra
+    el.f.shipMeth.disabled = true;
+
+    // Visa sammanfattning i text (lägg till <p id="shipSummary">Frakt…</p> i HTML)
+    if (el.f.shipSummary) {
+      // försök plocka pris snyggt, annars hårdkoda "från 89 kr"
+      let priceText = "från 89 kr";
+      const rawPrice =
+        normal.price || normal.totalPrice || normal.totalPriceInMinorUnits || null;
+
+      if (rawPrice != null) {
+        const val = Number(rawPrice);
+        // Om Gelato skickar ören (minor units), dela med 100
+        const sek = val > 1000 ? Math.round(val / 100) : val;
+        priceText = `${sek} kr`;
       }
-    }catch{
-      el.f.shipMeth.innerHTML = `<option value="">Kunde inte hämta fraktmetoder</option>`;
+
+      el.f.shipSummary.textContent =
+        `Frakt: ${priceText} (standardleverans, ca 4–7 arbetsdagar).`;
+    }
+  } catch (e) {
+    console.error("fillShipMethods error", e);
+    el.f.shipMeth.innerHTML = `<option value="">Kunde inte hämta frakt</option>`;
+    el.f.shipMeth.disabled = true;
+    if (el.f.shipSummary) {
+      el.f.shipSummary.textContent = "Frakt: kunde inte hämtas just nu.";
     }
   }
+}
+
+
 
   function normalizePostcode(country, value){
     const v = (value || "").trim();

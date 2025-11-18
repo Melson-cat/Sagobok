@@ -20,10 +20,11 @@
       <a href="/index.html#bookForm" data-nav="create">Skapa bok</a>
       <a href="/index.html#examples" data-nav="examples">Exempel</a>
       <a href="/index.html#about" data-nav="about">Om oss</a>
-      <a href="/status.html" data-nav="status">Status</a>
+      <a href="/status.html" data-nav="status" class="active">Status</a>
     </nav>
     <button id="navToggle" class="hamburger" aria-label="Meny" aria-expanded="false" aria-controls="mobileMenu">☰</button>
   </header>
+
   <div class="mobile-menu" id="mobileMenu" aria-hidden="true">
     <nav>
       <a href="/index.html">Hem</a>
@@ -37,34 +38,53 @@
   <main class="container">
     <section class="panel" aria-labelledby="statusTitle">
       <h1 id="statusTitle" style="margin:0 0 8px">Orderstatus</h1>
-      <div id="statusBar" class="status-bar" aria-live="polite">Ange order-id eller session-id för att visa status.</div>
+      <div id="statusBar" class="status-bar" aria-live="polite">
+        Ange ditt order-ID för att se status på din bok.
+      </div>
 
+      <!-- Endast Order-ID -->
       <form id="statusForm" class="form-card" style="margin-top:12px">
         <div class="form-row">
           <div class="field">
             <label for="orderIdInput">Order-ID</label>
-            <input id="orderIdInput" placeholder="t.ex. 996a9557-...." />
-            <p class="hint">Om du har ett order-id kan du använda det direkt.</p>
-          </div>
-          <div class="field">
-            <label for="sessionIdInput">Stripe Session-ID</label>
-            <input id="sessionIdInput" placeholder="cs_test_..." />
-            <p class="hint">Alternativt: ange checkout session-id så slår vi upp din order.</p>
+            <input id="orderIdInput" placeholder="t.ex. 996a9557-..." />
+            <p class="hint">
+              Order-ID hittar du i bekräftelsemejlet från Sagostugan/BokPiloten.
+            </p>
           </div>
         </div>
         <div class="actions">
           <button type="submit" class="btn btn-primary">Visa status</button>
-          <button id="pollBtn" type="button" class="btn btn-secondary">Starta auto-uppdatering</button>
         </div>
       </form>
 
-      <div id="orderBox" class="box hidden" style="margin-top:12px">
-        <div class="stack">
-          <span class="pill" id="pillKind">—</span>
-          <span>Order-ID: <strong id="orderId">—</strong></span>
-          <span>Status: <strong id="orderState">—</strong></span>
+      <!-- Resultatkort -->
+      <div id="orderBox" class="box hidden" style="margin-top:16px">
+        <div class="order-status-header">
+          <div class="order-status-meta">
+            <span class="pill" id="pillKind">—</span>
+            <span>Order-ID: <strong id="orderId">—</strong></span>
+            <span>Status: <strong id="orderState">—</strong></span>
+          </div>
+          <div class="order-status-time">
+            <small id="lastUpdated" class="muted">—</small>
+          </div>
         </div>
-        <div class="links" id="downloadLinks"></div>
+
+        <div class="order-status-body">
+          <div class="order-cover-thumb">
+            <!-- miniomslag -->
+            <img id="coverThumb" alt="Omslag för din bok" class="hidden"
+                 style="max-width:120px;border-radius:12px;box-shadow:0 4px 10px rgba(0,0,0,0.15);" />
+          </div>
+          <div class="order-book-info">
+            <h2 id="bookTitle" style="margin:0 0 6px;font-size:1.1rem;">—</h2>
+            <p id="bookInfo" class="muted" style="margin:0 0 8px;font-size:0.9rem;">
+              När status ändras hos tryckeriet uppdateras den här automatiskt när du laddar om sidan.
+            </p>
+            <div class="links" id="downloadLinks"></div>
+          </div>
+        </div>
       </div>
 
       <div class="spinner-lg hidden" id="spinner" aria-hidden="true"></div>
@@ -76,29 +96,33 @@
     <p>© 2025 BokPiloten</p>
   </footer>
 
+  <!-- Header controller (delad) -->
   <script>
-  // Header controller (delad)
   (function () {
     const toggle = document.getElementById("navToggle");
     const menu = document.getElementById("mobileMenu");
-    if (toggle && menu) {
-      const setOpen = (open) => {
-        toggle.setAttribute("aria-expanded", String(open));
-        menu.setAttribute("aria-hidden", String(!open));
-        menu.classList.toggle("open", open);
-      };
-      setOpen(false);
-      toggle.addEventListener("click", () => {
-        const isOpen = toggle.getAttribute("aria-expanded") === "true";
-        setOpen(!isOpen);
-      });
-      menu.addEventListener("click", (e) => {
-        if (e.target && e.target.tagName === "A") setOpen(false);
-      });
-    }
+    if (!toggle || !menu) return;
+
+    const setOpen = (open) => {
+      toggle.setAttribute("aria-expanded", String(open));
+      menu.setAttribute("aria-hidden", String(!open));
+      menu.classList.toggle("open", open);
+    };
+
+    setOpen(false);
+
+    toggle.addEventListener("click", () => {
+      const isOpen = toggle.getAttribute("aria-expanded") === "true";
+      setOpen(!isOpen);
+    });
+
+    menu.addEventListener("click", (e) => {
+      if (e.target && e.target.tagName === "A") setOpen(false);
+    });
   })();
   </script>
 
+  <!-- Status-logik -->
   <script>
   (function () {
     const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
@@ -110,16 +134,18 @@
     const el = {
       form: $("statusForm"),
       orderInput: $("orderIdInput"),
-      sessionInput: $("sessionIdInput"),
-      pollBtn: $("pollBtn"),
       bar: $("statusBar"),
       box: $("orderBox"),
       pillKind: $("pillKind"),
       orderId: $("orderId"),
       orderState: $("orderState"),
+      lastUpdated: $("lastUpdated"),
       links: $("downloadLinks"),
       spinner: $("spinner"),
       err: $("err"),
+      coverThumb: $("coverThumb"),
+      bookTitle: $("bookTitle"),
+      bookInfo: $("bookInfo"),
     };
 
     async function fetchJSON(url) {
@@ -134,55 +160,116 @@
       return isJSON ? body : { text: body };
     }
 
-    const getOrder     = (id)  => fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(id)}`);
-    const getOrderId   = (sid) => fetchJSON(`${BACKEND}/api/checkout/order-id?session_id=${encodeURIComponent(sid)}`).then(j => j.order_id || null);
+    const getOrder = (id) =>
+      fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(id)}`);
 
-  // ...
-  function renderFiles(files) {
-    el.links.innerHTML = "";
+    function renderFiles(files) {
+      el.links.innerHTML = "";
 
-    if (files?.print_url) {
-      const a = document.createElement("a");
-      a.className = "btn";
-      a.href = files.print_url;
-      a.target = "_blank"; a.rel = "noopener";
-      a.textContent = "Ladda ner boken (PDF)";
-      el.links.appendChild(a);
-      return;
+      if (!files) return;
+
+      // Full print-PDF (om du behåller det)
+      if (files.print_url) {
+        const a = document.createElement("a");
+        a.className = "btn";
+        a.href = files.print_url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = "Ladda ner boken (PDF)";
+        el.links.appendChild(a);
+        return; // om du vill att denna ersätter inlaga/cover-länkarna
+      }
+
+      if (files.interior_url) {
+        const a = document.createElement("a");
+        a.className = "btn";
+        a.href = files.interior_url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = "Ladda ner inlagan (PDF)";
+        el.links.appendChild(a);
+      }
+
+      if (files.cover_url) {
+        const a = document.createElement("a");
+        a.className = "btn";
+        a.href = files.cover_url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = "Ladda ner omslaget (PDF)";
+        el.links.appendChild(a);
+      }
     }
-
-    if (files?.interior_url) {
-      const a = document.createElement("a");
-      a.className = "btn";
-      a.href = files.interior_url;
-      a.target = "_blank"; a.rel="noopener";
-      a.textContent = "Ladda ner inlagan (PDF)";
-      el.links.appendChild(a);
-    }
-    if (files?.cover_url) {
-      const a = document.createElement("a");
-      a.className = "btn";
-      a.href = files.cover_url;
-      a.target = "_blank"; a.rel="noopener";
-      a.textContent = "Ladda ner omslaget (PDF)";
-      el.links.appendChild(a);
-    }
-  }
-  
-
 
     function setBar(msg) { setText(el.bar, msg); }
     function showErr(msg) { setText(el.err, msg); show(el.err); }
     function clearErr() { setText(el.err, ""); hide(el.err); }
 
-    async function resolveOrderId() {
-      const url = new URL(location.href);
-      const q = url.searchParams;
-      const id = q.get("id");
-      const sid = q.get("session_id");
-      if (id) return id;
-      if (sid) return await getOrderId(sid);
-      return null;
+    // 🔁 Huvudrendering av orderstatus
+    function renderOrder(order, orderId) {
+      show(el.box);
+
+      setText(el.orderId, orderId);
+
+      // status: försök använda Gelatos/leverantörens status direkt
+      const statusRaw =
+        order?.provider_status ||
+        order?.gelato_status ||
+        order?.status ||
+        "okänd";
+
+      setText(el.orderState, statusRaw);
+
+      // Typ av order
+      const kind = (order?.kind || order?.draft?.kind || "pdf");
+      const isPrinted = kind === "printed" || kind === "print";
+      setText(el.pillKind, isPrinted ? "Tryckt bok" : "Digital PDF");
+
+      // Titel + liten text
+      const title =
+        order?.book?.title ||
+        order?.story?.book?.title ||
+        "Din bok";
+
+      setText(el.bookTitle, title);
+
+      // Här kan du lägga in mer detaljer om du börjar returnera dem från backend
+      const pages = order?.book?.pages ?? order?.story?.book?.pages;
+      const pageCount = Array.isArray(pages) ? pages.length : null;
+      const statusBlurb = isPrinted
+        ? "Statusen speglar vad tryckeriet rapporterar (t.ex. paid, printing, shipped)."
+        : "För digitala böcker kan du ladda ner din PDF direkt här nedan.";
+
+      setText(
+        el.bookInfo,
+        pageCount
+          ? `${pageCount} inlagesidor. ${statusBlurb}`
+          : statusBlurb
+      );
+
+      // Thumb för omslag – backend bör returnera antingen:
+      //   order.book.cover_thumb_url
+      //   eller order.cover_thumb_url
+      const thumbUrl =
+        order?.book?.cover_thumb_url ||
+        order?.cover_thumb_url ||
+        null;
+
+      if (thumbUrl) {
+        el.coverThumb.src = thumbUrl;
+        show(el.coverThumb);
+      } else {
+        el.coverThumb.src = "";
+        hide(el.coverThumb);
+      }
+
+      renderFiles(order.files || {});
+      const now = new Date();
+      setText(
+        el.lastUpdated,
+        `Senast uppdaterad: ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`
+      );
+      setBar("Status hämtad. Ladda om sidan senare om du vill se nästa steg.");
     }
 
     async function loadStatus(orderId) {
@@ -190,59 +277,45 @@
       show(el.spinner);
       try {
         const o = await getOrder(orderId);
-        show(el.box);
-        setText(el.orderId, orderId);
-        setText(el.orderState, o?.status || "okänd");
-        setText(el.pillKind, (o?.kind || o?.draft?.kind || "pdf") === "printed" ? "Tryckt bok" : "Digital PDF");
-        renderFiles(o.files || {});
-        setBar(`Senast uppdaterad: ${new Date().toLocaleString()}`);
+        renderOrder(o, orderId);
       } catch (e) {
         showErr(e?.message || "Kunde inte hämta order.");
+        hide(el.box);
       } finally {
         hide(el.spinner);
       }
     }
 
-    let pollTimer = null;
-    function startPolling(orderId, ms=3000) {
-      if (pollTimer) clearInterval(pollTimer);
-      pollTimer = setInterval(() => loadStatus(orderId), ms);
-      setBar(`Auto-uppdatering var ${ms/1000}s – pågår…`);
-    }
+    // Om ?id= finns i URL: auto-ladda
+    (async () => {
+      try {
+        const url = new URL(location.href);
+        const id = url.searchParams.get("id");
+        if (id) {
+          el.orderInput.value = id;
+          await loadStatus(id);
+        }
+      } catch {
+        // ignore
+      }
+    })();
 
-    // Init
+    // Submit: endast order-id
     el.form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const id = el.orderInput.value.trim();
-      const sid = el.sessionInput.value.trim();
+      if (!id) {
+        showErr("Ange ett order-ID.");
+        return;
+      }
+      await loadStatus(id);
+      // Uppdatera URL så man kan dela/återkomma
       try {
-        const orderId = id || (sid ? await getOrderId(sid) : null);
-        if (!orderId) throw new Error("Ange order-id eller session-id.");
-        await loadStatus(orderId);
-        history.replaceState({}, "", `?id=${encodeURIComponent(orderId)}`);
-      } catch (e) {
-        showErr(e?.message || "Felaktiga uppgifter.");
+        history.replaceState({}, "", `?id=${encodeURIComponent(id)}`);
+      } catch {
+        // no-op
       }
     });
-
-    el.pollBtn.addEventListener("click", async () => {
-      const idInUrl = new URL(location.href).searchParams.get("id");
-      let orderId = (el.orderInput.value.trim() || idInUrl);
-      if (!orderId && el.sessionInput.value.trim()) {
-        orderId = await getOrderId(el.sessionInput.value.trim());
-      }
-      if (!orderId) return showErr("Ange order-id eller session-id innan auto-uppdatering.");
-      await loadStatus(orderId);
-      startPolling(orderId);
-    });
-
-    // Auto-ladda om ?id= eller ?session_id= finns
-    (async () => {
-      const orderId = await resolveOrderId();
-      if (orderId) {
-        await loadStatus(orderId);
-      }
-    })();
   })();
   </script>
 </body>

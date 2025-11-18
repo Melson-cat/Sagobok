@@ -1372,27 +1372,25 @@ async function renderFrontCover(page, halfX, halfY, boxW, boxH) {
     page.drawRectangle({ x: halfX, y: halfY, width: boxW, height: boxH, color: bgLight });
   }
 
-  // Title + subtitle badge (computed from the half box)
+    // Title badge (endast titel, ingen undertitel)
   const tw = boxW - safeInset * 2;
   const cx = halfX + boxW / 2;
-  const topCenterY0 = halfY + boxH - mmToPt(GRID.outer_mm + 16);
+
+  // Flytta ner lite mer än tidigare för att undvika kapning i tryck
+  const topCenterY0 = halfY + boxH - mmToPt(GRID.outer_mm + 28);
 
   const titleM = measureBlock(
     title,
     nunitoSemi,
-    Math.min(boxW, boxH) * 0.16,
+    Math.min(boxW, boxH) * 0.14, // lite mindre för mer marginal
     1.08,
     22,
     tw,
     mmToPt(32)
   );
-  const subtitleSize = Math.max(14, (titleM.size * 0.48) | 0);
-  const subM = subtitle
-    ? measureBlock(subtitle, nunito, subtitleSize, 1.12, 12, tw, mmToPt(18))
-    : { blockH: 0 };
 
-  const padY = mmToPt(4), padX = mmToPt(6), gap = mmToPt(4);
-  const badgeH = titleM.blockH + (subtitle ? gap + subM.blockH : 0) + padY * 2;
+  const padY = mmToPt(4), padX = mmToPt(6);
+  const badgeH = titleM.blockH + padY * 2;
   const badgeY = topCenterY0 - badgeH / 2;
 
   page.drawRectangle({
@@ -1404,27 +1402,23 @@ async function renderFrontCover(page, halfX, halfY, boxW, boxH) {
     opacity: 0.25,
   });
 
-  // Title lines
+  // Titelrader
   {
     let y = badgeY + badgeH - padY - titleM.lineH / 2;
     for (const ln of titleM.lines) {
       const w = nunitoSemi.widthOfTextAtSize(ln, titleM.size);
-      page.drawText(ln, { x: cx - w / 2, y, size: titleM.size, font: nunitoSemi, color: rgb(0.05,0.05,0.05) });
+      page.drawText(ln, {
+        x: cx - w / 2,
+        y,
+        size: titleM.size,
+        font: nunitoSemi,
+        color: rgb(0.05, 0.05, 0.05),
+      });
       y -= titleM.lineH;
     }
   }
-
-  // Subtitle
-  if (subtitle) {
-    const subCenterY = badgeY + padY + subM.blockH / 2;
-    let y = subCenterY + subM.blockH / 2 - subM.lineH;
-    for (const ln of subM.lines) {
-      const w = nunito.widthOfTextAtSize(ln, subtitleSize);
-      page.drawText(ln, { x: cx - w / 2, y, size: subtitleSize, font: nunito, color: rgb(0.12,0.12,0.12) });
-      y -= subM.lineH;
-    }
-  }
 }
+
 
 async function renderBackCover(page, halfX, halfY, boxW, boxH) {
   // Full-bleed solid back in your purple
@@ -1494,57 +1488,56 @@ try {
   }
 
   /* -------- TITELSIDA (efter omslag) -------- */
-  try {
-    const titlePage = pdfDoc.addPage([pageW, pageH]);
-    titlePage.drawRectangle({
-      x: contentX,
-      y: contentY,
-      width: trimWpt,
-      height: trimHpt,
-      color: rgb(0.98, 0.99, 1),
-    });
-    const cx = contentX + trimWpt / 2;
-    const cy = contentY + trimHpt / 2 + mmToPt(4);
+try {
+  const titlePage = pdfDoc.addPage([pageW, pageH]);
+  titlePage.drawRectangle({
+    x: contentX,
+    y: contentY,
+    width: trimWpt,
+    height: trimHpt,
+    color: rgb(0.98, 0.99, 1),
+  });
 
-    const mainTitle = String(story?.book?.title || "Min Sagobok");
-    const subLine = String(
-      story?.book?.bible?.main_character?.name
-        ? `av ${story.book.bible.main_character.name}`
-        : "Skapad med BokPiloten"
-    );
+  const cx = contentX + trimWpt / 2;
+  const cy = contentY + trimHpt / 2 + mmToPt(4);
 
-    const mainSize = Math.min(trimWpt, trimHpt) * 0.08;
-    const subSize = mainSize * 0.45;
+  const mainTitle = String(story?.book?.title || "Min Sagobok");
 
-    // Titel
-    const titleW = nunitoSemi.widthOfTextAtSize(mainTitle, mainSize);
-    titlePage.drawText(mainTitle, {
-      x: cx - titleW / 2,
-      y: cy + mainSize * 0.4,
-      size: mainSize,
-      font: nunitoSemi,
-      color: rgb(0.15, 0.15, 0.25),
-    });
+  // 🔄 Ny rad – fix texten
+  const subLine = "Skapad av Sagostugan, med kärlek";
 
-    // Underrad
-    const subW = nunito.widthOfTextAtSize(subLine, subSize);
-    const subY = cy - subSize * 1.4;
-    titlePage.drawText(subLine, {
-      x: cx - subW / 2,
-      y: subY,
-      size: subSize,
-      font: nunito,
-      color: rgb(0.35, 0.35, 0.45),
-    });
+  const mainSize = Math.min(trimWpt, trimHpt) * 0.08;
+  const subSize  = mainSize * 0.45;
 
-    // 💜 HJÄRTA (matchar slut-sidan)
-    const gap = mmToPt(6);
-    const heartSize = mmToPt(14);
-    const heartY = subY - heartSize - gap;
-    drawHeart(titlePage, cx, heartY, heartSize, rgb(0.5, 0.36, 0.82));
-  } catch (e) {
-    tr(trace, "titlepage:error", { error: String(e?.message || e) });
-  }
+  // Titel
+  const titleW = nunitoSemi.widthOfTextAtSize(mainTitle, mainSize);
+  titlePage.drawText(mainTitle, {
+    x: cx - titleW / 2,
+    y: cy + mainSize * 0.4,
+    size: mainSize,
+    font: nunitoSemi,
+    color: rgb(0.15, 0.15, 0.25),
+  });
+
+  // Ny underrad
+  const subW = nunito.widthOfTextAtSize(subLine, subSize);
+  const subY = cy - subSize * 1.4;
+  titlePage.drawText(subLine, {
+    x: cx - subW / 2,
+    y: subY,
+    size: subSize,
+    font: nunito,
+    color: rgb(0.4, 0.3, 0.55),
+  });
+
+  // 💜 HJÄRTA (behåller, matchar slutsida)
+  const gap = mmToPt(6);
+  const heartSize = mmToPt(14);
+  const heartY = subY - heartSize - gap;
+  drawHeart(titlePage, cx, heartY, heartSize, rgb(0.5, 0.36, 0.82));
+} catch (e) {
+  tr(trace, "titlepage:error", { error: String(e?.message || e) });
+}
 
   /* -------- 16 uppslag: bild vänster, text höger + vine -------- */
   const outer = mmToPt(GRID.outer_mm);
@@ -2513,24 +2506,24 @@ async function gelatoCreateOrder(env, { order, shipment = {}, customer = {}, cur
     files: [{ type: "default", url: contentUrl }],
   };
 
-  const shipmentMethodUid = shipment.shipmentMethodUid || undefined;
+const shipmentMethodUid = "normal";
 
   const payload = {
-    orderType: DRY_RUN ? "draft" : "order",
-    orderReferenceId: order.id,
-    customerReferenceId: custEmail || `cust-${order.id}`,
-    currency: CURR,
+  orderType: DRY_RUN ? "draft" : "order",
+  orderReferenceId: order.id,
+  customerReferenceId: custEmail || `cust-${order.id}`,
+  currency: CURR,
 
-    shippingAddress,           // 👈 inga recipients – enbart shippingAddress
-    items: [item],
-    ...(shipmentMethodUid ? { shipmentMethodUid } : {}),
+  shippingAddress,
+  items: [item],
+ shipmentMethodUid,
 
-    metadata: [
-      { key: "bp_kind",         value: String(order.kind || order?.draft?.kind || "printed") },
-      { key: "bp_pages_pdf",    value: String(order?.files?.pdf_page_count ?? kvPageCount) },
-      { key: "bp_pages_gelato", value: String(pageCount) },
-    ],
-  };
+  metadata: [
+    { key: "bp_kind",         value: String(order.kind || order?.draft?.kind || "printed") },
+    { key: "bp_pages_pdf",    value: String(order?.files?.pdf_page_count ?? kvPageCount) },
+    { key: "bp_pages_gelato", value: String(pageCount) },
+  ],
+};
 
   console.log("📦 Payload to Gelato (order):", JSON.stringify(payload, null, 2));
 
