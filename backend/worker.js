@@ -224,6 +224,100 @@ async function verifyStripeSignature(rawPayload, sigHeader, secret, toleranceSec
   return ok === 0;
 }
 
+// Hjälpare: formatera belopp från Stripe (öre) till "49,00 SEK"
+function formatAmount(amount_total, currency) {
+  if (amount_total == null) return "-";
+  const v = (amount_total / 100).toFixed(2).replace(".", ",");
+  return `${v} ${(currency || "SEK").toUpperCase()}`;
+}
+
+// Hjälpare: bygg HTML-kvitto beroende på kind
+function buildReceiptHtml({ name, kind, amountLabel, orderId, successUrl }) {
+  const safeName = name || "vän";
+  const kindLabel = kind === "print" ? "Tryckt bok" : "PDF-bok";
+
+  const downloadParagraph =
+    kind === "print"
+      ? `
+        <p>
+          Vi har tagit emot din beställning av en tryckt bok.<br/>
+          Du kan följa din beställning och fylla i/uppdatera leveransuppgifter via kvittosidan:
+          <br/>
+          <a href="${successUrl}">${successUrl}</a>
+        </p>
+      `
+      : `
+        <p>
+          Vi skapar nu din digitala bok. Du kan ladda ner den direkt via kvittosidan:
+          <br/>
+          <a href="${successUrl}">${successUrl}</a>
+        </p>
+      `;
+
+  return `
+    <p>Hej ${safeName}!</p>
+
+    <p>Tack för att du beställde en bok från Sagostugan.</p>
+
+    <p>
+      <strong>Typ av beställning:</strong> ${kindLabel}<br/>
+      <strong>Belopp:</strong> ${amountLabel}<br/>
+      <strong>Order-ID:</strong> ${orderId}
+    </p>
+
+    ${downloadParagraph}
+
+    <p>Varma hälsningar,<br/>Sagostugan</p>
+  `;
+}
+
+// Hjälpare: skicka kvitto-mail via Resend
+async function sendReceiptEmail(env, { email, name, kind, amount_total, currency, orderId, successUrl }) {
+  if (!email) {
+    console.log("sendReceiptEmail: ingen e-post, skippar.");
+    return;
+  }
+
+  const amountLabel = formatAmount(amount_total, currency);
+  const html = buildReceiptHtml({
+    name,
+    kind,
+    amountLabel,
+    orderId,
+    successUrl
+  });
+
+  const subject =
+    kind === "print"
+      ? "Kvitto – din tryckta bok från Sagostugan"
+      : "Kvitto – din digitala bok från Sagostugan";
+
+  const from = env.EMAIL_FROM || "Sagostugan <no-reply@sagostugan.se>";
+
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from,
+        to: email,
+        subject,
+        html,
+      }),
+    });
+
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      console.error("Resend error:", res.status, t);
+    }
+  } catch (err) {
+    console.error("sendReceiptEmail exception:", err);
+  }
+}
+
 async function handleStripeWebhook(req, env) {
   // 1) Läs rå payload (måste vara text) och verifiera signatur
   const sig = req.headers.get("stripe-signature");
@@ -233,49 +327,48 @@ async function handleStripeWebhook(req, env) {
   try {
     const valid = await verifyStripeSignature(raw, sig, env.STRIPE_WEBHOOK_SECRET);
     if (!valid) {
-      return new Response(
-        JSON.stringify({ ok: false, error: "Invalid signature", reqId }),
-        { status: 400, headers: { ...CORS, "content-type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ ok: false, error: "Invalid signature", reqId }), {
+        status: 400,
+        headers: { ...CORS, "content-type": "application/json" }
+      });
     }
   } catch (e) {
-    return new Response(
-      JSON.stringify({
-        ok: false,
-        error: "Signature check failed",
-        detail: String(e?.message || e),
-        reqId,
-      }),
-      { status: 400, headers: { ...CORS, "content-type": "application/json" } }
-    );
+    return new Response(JSON.stringify({
+      ok: false,
+      error: "Signature check failed",
+      detail: String(e?.message || e),
+      reqId
+    }), {
+      status: 400,
+      headers: { ...CORS, "content-type": "application/json" }
+    });
   }
 
   // 2) Parsning
   let event;
-  try {
-    event = JSON.parse(raw);
-  } catch {
-    return new Response(
-      JSON.stringify({ ok: false, error: "Bad JSON", reqId }),
-      { status: 400, headers: { ...CORS, "content-type": "application/json" } }
-    );
+  try { event = JSON.parse(raw); }
+  catch {
+    return new Response(JSON.stringify({ ok: false, error: "Bad JSON", reqId }), {
+      status: 400,
+      headers: { ...CORS, "content-type": "application/json" }
+    });
   }
 
   // 3) Idempotens: undvik dubbelbearbetning av samma event
   const evtId = event?.id || "";
   if (!evtId) {
-    return new Response(
-      JSON.stringify({ ok: false, error: "Missing event id", reqId }),
-      { status: 400, headers: { ...CORS, "content-type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ ok: false, error: "Missing event id", reqId }), {
+      status: 400,
+      headers: { ...CORS, "content-type": "application/json" }
+    });
   }
   const idemKey = `stripe_evt:${evtId}`;
   const already = await env.ORDERS.get(idemKey);
   if (already) {
-    return new Response(
-      JSON.stringify({ ok: true, dedup: true, reqId }),
-      { status: 200, headers: { ...CORS, "content-type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ ok: true, dedup: true, reqId }), {
+      status: 200,
+      headers: { ...CORS, "content-type": "application/json" }
+    });
   }
   await env.ORDERS.put(idemKey, "1", { expirationTtl: 3600 });
 
@@ -288,76 +381,86 @@ async function handleStripeWebhook(req, env) {
         const orderId = session?.metadata?.order_id || session?.id;
         if (!orderId) throw new Error("No order_id on session");
 
-        const exist = (await kvGetOrder(env, orderId)) || null;
+        const exist = await kvGetOrder(env, orderId);
 
         const email =
           session?.customer_details?.email ||
           exist?.customer_email ||
-          exist?.email ||
+          session?.metadata?.customer_email ||
           null;
+
+        const name =
+          session?.customer_details?.name ||
+          exist?.customer_name ||
+          session?.metadata?.customer_name ||
+          null;
+
+        const kind =
+          (session?.metadata?.kind || exist?.kind || "pdf"); // "pdf" eller "print" t.ex.
 
         const patch = {
           status: "paid",
           paid_at: Date.now(),
           stripe_session_id: session?.id,
           amount_total: session?.amount_total ?? exist?.amount_total ?? null,
-          currency: session?.currency ?? exist?.currency ?? null,
+          currency: session?.currency ?? exist?.currency ?? "SEK",
           email,
-          kind: session?.metadata?.kind || exist?.kind || null,
+          customer_email: email, // om du använder detta fält i KV
+          customer_name: name,
+          kind,
         };
 
-        let saved;
         if (exist) {
-          saved = await kvUpdateStatus(env, orderId, "paid", patch);
+          await kvUpdateStatus(env, orderId, "paid", patch);
         } else {
-          saved = {
+          await kvPutOrder(env, {
             id: orderId,
             created_at: Date.now(),
             updated_at: Date.now(),
-            ...patch,
-          };
-          await kvPutOrder(env, saved);
+            ...patch
+          });
         }
 
-        // 💌 Skicka kvitto-mail om vi har e-post och inte redan skickat
-        try {
-          if (saved?.email && !saved?.email_receipt_sent_at) {
-            await sendReceiptEmail(env, { order: saved, session });
-            await kvUpdateStatus(env, saved.id, saved.status || "paid", {
-              email_receipt_sent_at: Date.now(),
-            });
-          }
-        } catch (mailErr) {
-          // Viktigt: logga men faila inte webhooken
-          console.log("Misslyckades skicka kvitto-mail:", String(mailErr?.message || mailErr));
-        }
+        // 🔔 Skicka kvitto-mail (PDF eller tryckt beroende på kind)
+        const successUrl = `${env.SUCCESS_URL}?session_id=${encodeURIComponent(session.id)}`;
+
+        await sendReceiptEmail(env, {
+          email,
+          name,
+          kind,
+          amount_total: patch.amount_total,
+          currency: patch.currency,
+          orderId,
+          successUrl
+        });
 
         break;
       }
 
       default:
-        // tyst logik – men svara 200 så Stripe inte spammar
+        // Tyst loggik – men svara 200 så Stripe inte spammar
         break;
     }
 
-    return new Response(
-      JSON.stringify({ ok: true, type: event.type, reqId }),
-      { status: 200, headers: { ...CORS, "content-type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ ok: true, type: event.type, reqId }), {
+      status: 200,
+      headers: { ...CORS, "content-type": "application/json" }
+    });
   } catch (e) {
     // Viktigt: returnera 200 vid icke-kritiska fel så Stripe inte loopar.
-    return new Response(
-      JSON.stringify({
-        ok: false,
-        error: "Webhook handler error",
-        detail: String(e?.message || e),
-        type: event?.type,
-        reqId,
-      }),
-      { status: 200, headers: { ...CORS, "content-type": "application/json" } }
-    );
+    return new Response(JSON.stringify({
+      ok: false,
+      error: "Webhook handler error",
+      detail: String(e?.message || e),
+      type: event?.type,
+      reqId
+    }), {
+      status: 200,
+      headers: { ...CORS, "content-type": "application/json" }
+    });
   }
 }
+
 
 
 function addBlankPages(pdfDoc, howMany, pageW, pageH) {
@@ -683,7 +786,7 @@ function styleHint(style = "cartoon") {
   if (s === "pixar") return "stylized 3D animated pixar film still (not photographic)";
   if (s === "comic") return "bold comic style, inked lines, flat colors";
   if (s === "painting") return "soft painterly illustration, visible brushwork";
-  return "expressive 2D cartoon: thick-and-thin outlines, cel shading, vibrant palette, happy and expressive";
+  return "expressive 2D cartoon: thick-and-thin outlines, cel shading, vibrant palette, happy and expressive, NO 3D!";
 }
 
 function styleGuard(style = "cartoon") {
@@ -693,7 +796,7 @@ function styleGuard(style = "cartoon") {
       return [
         "STYLE: stylized 3D animated pixar film still.",
         "Do NOT use watercolor, inked lines, flat 2D shading, or comic outlines.",
-        "Not photorealistic, not live-action."
+        "Not photorealistic, not live-action, NOT 3D."
       ].join(" ");
     case "storybook":
       return [
@@ -1009,8 +1112,8 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
       ].join(" ")
     : [
         `Use the same child hero as in the reference (${characterName}).`,
-        `Age ≈ ${age}. Depict clear *child* anatomy.`,
-        `Never depict the hero as a teen or adult. No makeup. Keep same hairstyle, color and length.`,
+        `Age ≈ ${age}. Depict clear *child* anatomy, never depict the hero as a teen or adult.`,
+        `DO NOT add extra limbs, never make two identical heroes in the same image.`,
         `If the written description and the reference image disagree,  follow the reference image for identity and body type.`,
         `Hero must appear visibly in frame unless the SCENE_EN explicitly excludes them.`,
       ].join(" ");
