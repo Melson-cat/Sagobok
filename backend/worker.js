@@ -233,38 +233,49 @@ async function handleStripeWebhook(req, env) {
   try {
     const valid = await verifyStripeSignature(raw, sig, env.STRIPE_WEBHOOK_SECRET);
     if (!valid) {
-      return new Response(JSON.stringify({ ok:false, error:"Invalid signature", reqId }), {
-        status: 400, headers: { ...CORS, "content-type":"application/json" }
-      });
+      return new Response(
+        JSON.stringify({ ok: false, error: "Invalid signature", reqId }),
+        { status: 400, headers: { ...CORS, "content-type": "application/json" } }
+      );
     }
   } catch (e) {
-    return new Response(JSON.stringify({ ok:false, error:"Signature check failed", detail:String(e?.message||e), reqId }), {
-      status: 400, headers: { ...CORS, "content-type":"application/json" }
-    });
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: "Signature check failed",
+        detail: String(e?.message || e),
+        reqId,
+      }),
+      { status: 400, headers: { ...CORS, "content-type": "application/json" } }
+    );
   }
 
   // 2) Parsning
   let event;
-  try { event = JSON.parse(raw); }
-  catch {
-    return new Response(JSON.stringify({ ok:false, error:"Bad JSON", reqId }), {
-      status: 400, headers: { ...CORS, "content-type":"application/json" }
-    });
+  try {
+    event = JSON.parse(raw);
+  } catch {
+    return new Response(
+      JSON.stringify({ ok: false, error: "Bad JSON", reqId }),
+      { status: 400, headers: { ...CORS, "content-type": "application/json" } }
+    );
   }
 
   // 3) Idempotens: undvik dubbelbearbetning av samma event
   const evtId = event?.id || "";
   if (!evtId) {
-    return new Response(JSON.stringify({ ok:false, error:"Missing event id", reqId }), {
-      status: 400, headers: { ...CORS, "content-type":"application/json" }
-    });
+    return new Response(
+      JSON.stringify({ ok: false, error: "Missing event id", reqId }),
+      { status: 400, headers: { ...CORS, "content-type": "application/json" } }
+    );
   }
   const idemKey = `stripe_evt:${evtId}`;
   const already = await env.ORDERS.get(idemKey);
   if (already) {
-    return new Response(JSON.stringify({ ok:true, dedup:true, reqId }), {
-      status: 200, headers: { ...CORS, "content-type":"application/json" }
-    });
+    return new Response(
+      JSON.stringify({ ok: true, dedup: true, reqId }),
+      { status: 200, headers: { ...CORS, "content-type": "application/json" } }
+    );
   }
   await env.ORDERS.put(idemKey, "1", { expirationTtl: 3600 });
 
@@ -277,24 +288,50 @@ async function handleStripeWebhook(req, env) {
         const orderId = session?.metadata?.order_id || session?.id;
         if (!orderId) throw new Error("No order_id on session");
 
-        // ✅ Endast markera betald + spara basinfo
-        const exist = await kvGetOrder(env, orderId);
+        const exist = (await kvGetOrder(env, orderId)) || null;
+
+        const email =
+          session?.customer_details?.email ||
+          exist?.customer_email ||
+          exist?.email ||
+          null;
+
         const patch = {
           status: "paid",
           paid_at: Date.now(),
           stripe_session_id: session?.id,
-          amount_total: session?.amount_total ?? null,
-          currency: session?.currency ?? null,
-          email: session?.customer_details?.email ?? exist?.customer_email ?? null,
-          kind: (session?.metadata?.kind || exist?.kind || null),
+          amount_total: session?.amount_total ?? exist?.amount_total ?? null,
+          currency: session?.currency ?? exist?.currency ?? null,
+          email,
+          kind: session?.metadata?.kind || exist?.kind || null,
         };
+
+        let saved;
         if (exist) {
-          await kvUpdateStatus(env, orderId, "paid", patch);
+          saved = await kvUpdateStatus(env, orderId, "paid", patch);
         } else {
-          await kvPutOrder(env, { id: orderId, created_at: Date.now(), updated_at: Date.now(), ...patch });
+          saved = {
+            id: orderId,
+            created_at: Date.now(),
+            updated_at: Date.now(),
+            ...patch,
+          };
+          await kvPutOrder(env, saved);
         }
 
-      
+        // 💌 Skicka kvitto-mail om vi har e-post och inte redan skickat
+        try {
+          if (saved?.email && !saved?.email_receipt_sent_at) {
+            await sendReceiptEmail(env, { order: saved, session });
+            await kvUpdateStatus(env, saved.id, saved.status || "paid", {
+              email_receipt_sent_at: Date.now(),
+            });
+          }
+        } catch (mailErr) {
+          // Viktigt: logga men faila inte webhooken
+          console.log("Misslyckades skicka kvitto-mail:", String(mailErr?.message || mailErr));
+        }
+
         break;
       }
 
@@ -303,22 +340,141 @@ async function handleStripeWebhook(req, env) {
         break;
     }
 
-    return new Response(JSON.stringify({ ok:true, type:event.type, reqId }), {
-      status: 200, headers: { ...CORS, "content-type":"application/json" }
-    });
+    return new Response(
+      JSON.stringify({ ok: true, type: event.type, reqId }),
+      { status: 200, headers: { ...CORS, "content-type": "application/json" } }
+    );
   } catch (e) {
     // Viktigt: returnera 200 vid icke-kritiska fel så Stripe inte loopar.
-    return new Response(JSON.stringify({
-      ok:false, error:"Webhook handler error", detail:String(e?.message || e), type:event?.type, reqId
-    }), {
-      status: 200, headers: { ...CORS, "content-type":"application/json" }
-    });
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: "Webhook handler error",
+        detail: String(e?.message || e),
+        type: event?.type,
+        reqId,
+      }),
+      { status: 200, headers: { ...CORS, "content-type": "application/json" } }
+    );
   }
 }
+
 
 function addBlankPages(pdfDoc, howMany, pageW, pageH) {
   for (let i = 0; i < howMany; i++) pdfDoc.addPage([pageW, pageH]);
 }
+
+
+
+
+// ---------------------- Resend email helper ----------------------
+async function sendReceiptEmail(env, { order, session }) {
+  const apiKey = env.RESEND_API_KEY;
+  if (!apiKey) {
+    console.log("RESEND_API_KEY saknas – hoppar över mail.");
+    return;
+  }
+
+  const to =
+    order?.email ||
+    session?.customer_details?.email ||
+    order?.customer_email ||
+    null;
+
+  if (!to) {
+    console.log("Ingen e-postadress på order – hoppar över mail.", { orderId: order?.id });
+    return;
+  }
+
+  const from = env.EMAIL_FROM || "Sagostugan <no-reply@sagostugan.se>";
+
+  const amountTotal = order?.amount_total ?? session?.amount_total ?? null;
+  const currencyRaw = (order?.currency || session?.currency || "SEK").toUpperCase();
+  const amountHuman = Number.isFinite(amountTotal)
+    ? (amountTotal / 100).toFixed(2).replace(".", ",") + " " + currencyRaw
+    : "okänt belopp";
+
+  const kind = (order?.kind || session?.metadata?.kind || "pdf").toLowerCase();
+  const kindLabel = kind === "printed" ? "Tryckt bok" : "PDF-bok";
+
+  const name = session?.customer_details?.name || null;
+
+  const subject = "Tack för din beställning hos Sagostugan ✨";
+
+  const plainText = [
+    name ? `Hej ${name}!` : "Hej vän!",
+    "",
+    "Tack för att du beställde en bok från Sagostugan.",
+    "",
+    `Typ av beställning: ${kindLabel}`,
+    `Belopp: ${amountHuman}`,
+    `Order-ID: ${order?.id || session?.id || "saknas"}`,
+    "",
+    kind === "printed"
+      ? "Vi förbereder nu din bok för tryck. Du får ett nytt mail när den har skickats."
+      : "Vi skapar nu din digitala bok. Du kan ladda ner den via kvittosidan på Sagostugan.",
+    "",
+    "Varma hälsningar,",
+    "Sagostugan"
+  ].join("\n");
+
+  const html = `
+    <div style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 15px; color: #111;">
+      <p>${name ? `Hej ${name}!` : "Hej vän!"}</p>
+      <p>Tack för att du beställde en bok från <strong>Sagostugan</strong>.</p>
+
+      <table cellpadding="0" cellspacing="0" border="0" style="margin:16px 0; border-collapse: collapse;">
+        <tr>
+          <td style="padding:4px 8px; font-weight:600;">Typ av beställning:</td>
+          <td style="padding:4px 8px;">${kindLabel}</td>
+        </tr>
+        <tr>
+          <td style="padding:4px 8px; font-weight:600;">Belopp:</td>
+          <td style="padding:4px 8px;">${amountHuman}</td>
+        </tr>
+        <tr>
+          <td style="padding:4px 8px; font-weight:600;">Order-ID:</td>
+          <td style="padding:4px 8px;">${order?.id || session?.id || "saknas"}</td>
+        </tr>
+      </table>
+
+      <p>
+        ${
+          kind === "printed"
+            ? "Vi förbereder nu din bok för tryck. Du får ett nytt mail när den har skickats."
+            : "Vi skapar nu din digitala bok. Du kan ladda ner den via kvittosidan på Sagostugan."
+        }
+      </p>
+
+      <p>Varma hälsningar,<br/>Sagostugan</p>
+    </div>
+  `.trim();
+
+  const payload = {
+    from,
+    to,
+    subject,
+    html,
+    text: plainText,
+  };
+
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(`Resend ${res.status}: ${JSON.stringify(data)}`);
+  }
+
+  console.log("Kvitto-mail skickat via Resend", { to, id: data?.id || null });
+}
+
 
 
 // ---------- R2 helpers (PDF) ----------
@@ -841,13 +997,13 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
   const age    = story?.book?.bible?.main_character?.age || 5;
 
   const wardrobeLine = (!isPet && wardrobe_signature)
-    ? `Wardrobe: ${wardrobe_signature}. The hero always wears the same outfit and colors. Do NOT change garment type, color family, or pattern.`
+    ? `Wardrobe: ${wardrobe_signature}. The hero always looks the same. Do NOT change garment type, color family, or pattern.`
     : "";
 
   const identityLines = isPet
     ? [
         `Use the exact same animal as in the reference (${characterName}).`,
-        `Match the same species, breed, fur color, markings, and proportions.`,
+        `Match the same species, breed, fur color, markings, and proportions. DO NOT add extra limbs.`,
         `Never turn the hero into a human. Keep it clearly an animal on every page.`,
         `If the written description and the reference image disagree, follow the appearance in the reference image.`,
       ].join(" ")
