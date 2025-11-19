@@ -271,6 +271,126 @@ function buildReceiptHtml({ name, kind, amountLabel, orderId, successUrl }) {
   `;
 }
 
+function buildReceiptEmail({ kind, amount, currency, orderId, customerName, successUrl }) {
+  const niceKind = kind === "print" ? "Tryckt bok" : "PDF-bok";
+  const amountStr = amount != null ? (amount / 100).toFixed(2).replace(".", ",") : "";
+  const currencyStr = (currency || "SEK").toUpperCase();
+  const name = customerName || "vän";
+
+  const subject =
+    kind === "print"
+      ? "Tack för din bokbeställning – Sagostugan"
+      : "Din digitala sagobok är på väg – Sagostugan";
+
+  const text = [
+    `Hej ${name}!`,
+    "",
+    `Tack för att du beställde en bok från Sagostugan.`,
+    "",
+    `Typ av beställning: ${niceKind}`,
+    amountStr ? `Belopp: ${amountStr} ${currencyStr}` : "",
+    `Order-ID: ${orderId}`,
+    "",
+    kind === "print"
+      ? "Vi skapar nu din tryckta bok. Du kan följa din beställning via kvittosidan:"
+      : "Vi skapar nu din digitala bok. Du kan ladda ner den direkt via kvittosidan:",
+    successUrl,
+    "",
+    "Varma hälsningar,",
+    "Sagostugan"
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const html = `<!DOCTYPE html>
+<html lang="sv">
+  <head>
+    <meta charset="UTF-8" />
+    <title>${subject}</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f7f5ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background:#f7f5ff;padding:24px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:560px;background:#ffffff;border-radius:16px;padding:24px 20px;box-shadow:0 8px 24px rgba(0,0,0,0.06);">
+            <tr>
+              <td align="center" style="padding-bottom:12px;">
+                <div style="font-size:28px;font-weight:700;color:#4b3c88;">Sagostugan</div>
+                <div style="font-size:13px;color:#8a7fb8;margin-top:4px;">små sagor, stora minnen</div>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:8px 4px 16px 4px;font-size:15px;color:#1e1730;line-height:1.6;">
+                <p style="margin:0 0 12px 0;">Hej ${name}!</p>
+                <p style="margin:0 0 12px 0;">
+                  Tack för att du beställde en bok från <strong>Sagostugan</strong>.
+                </p>
+
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width:100%;margin:12px 0 16px 0;background:#f6f3ff;border-radius:12px;padding:12px 14px;font-size:14px;">
+                  <tr>
+                    <td style="padding:4px 0;"><strong>Typ av beställning:</strong></td>
+                    <td style="padding:4px 0;">${niceKind}</td>
+                  </tr>
+                  ${
+                    amountStr
+                      ? `<tr>
+                    <td style="padding:4px 0;"><strong>Belopp:</strong></td>
+                    <td style="padding:4px 0;">${amountStr} ${currencyStr}</td>
+                  </tr>`
+                      : ""
+                  }
+                  <tr>
+                    <td style="padding:4px 0;"><strong>Order-ID:</strong></td>
+                    <td style="padding:4px 0;">${orderId}</td>
+                  </tr>
+                </table>
+
+                ${
+                  kind === "print"
+                    ? `<p style="margin:0 0 10px 0;">
+                      Vi börjar nu skapa din <strong>tryckta bok</strong>. När den är klar skickar vi ett nytt mejl med uppdaterad status.
+                    </p>`
+                    : `<p style="margin:0 0 10px 0;">
+                      Vi skapar nu din <strong>digitala bok</strong>. Du kan ladda ner den direkt via kvittosidan.
+                    </p>`
+                }
+
+                <p style="margin:0 0 18px 0;">
+                  <a href="${successUrl}" style="display:inline-block;padding:10px 18px;background:#4b3c88;color:#ffffff;text-decoration:none;border-radius:999px;font-size:14px;font-weight:600;">
+                    Öppna kvittosida
+                  </a>
+                </p>
+
+                <p style="margin:0 0 12px 0;font-size:13px;color:#6c658a;">
+                  Om knappen inte fungerar kan du kopiera och klistra in länken i din webbläsare:<br />
+                  <span style="word-break:break-all;font-size:12px;color:#4b3c88;">${successUrl}</span>
+                </p>
+
+                <p style="margin:14px 0 0 0;font-size:14px;">
+                  Varma hälsningar,<br/>
+                  <strong>Sagostugan</strong>
+                </p>
+              </td>
+            </tr>
+
+            <tr>
+              <td align="center" style="padding-top:10px;font-size:11px;color:#a39ac7;">
+                Detta mejl skickades automatiskt. Svara gärna om du har några frågor.
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+
+  return { subject, text, html };
+}
+
+
+
 // Hjälpare: skicka kvitto-mail via Resend
 async function sendReceiptEmail(env, { email, name, kind, amount_total, currency, orderId, successUrl }) {
   if (!email) {
@@ -278,19 +398,15 @@ async function sendReceiptEmail(env, { email, name, kind, amount_total, currency
     return;
   }
 
-  const amountLabel = formatAmount(amount_total, currency);
-  const html = buildReceiptHtml({
-    name,
+  // Bygg subject + text + html via vår helper
+  const { subject, text, html } = buildReceiptEmail({
     kind,
-    amountLabel,
+    amount: amount_total,
+    currency,
     orderId,
-    successUrl
+    customerName: name,
+    successUrl,
   });
-
-  const subject =
-    kind === "print"
-      ? "Kvitto – din tryckta bok från Sagostugan"
-      : "Kvitto – din digitala bok från Sagostugan";
 
   const from = env.EMAIL_FROM || "Sagostugan <no-reply@sagostugan.se>";
 
@@ -306,6 +422,7 @@ async function sendReceiptEmail(env, { email, name, kind, amount_total, currency
         to: email,
         subject,
         html,
+        text, // bra att skicka med plain text också
       }),
     });
 
@@ -317,6 +434,7 @@ async function sendReceiptEmail(env, { email, name, kind, amount_total, currency
     console.error("sendReceiptEmail exception:", err);
   }
 }
+
 
 async function handleStripeWebhook(req, env) {
   // 1) Läs rå payload (måste vara text) och verifiera signatur
@@ -1021,11 +1139,11 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
   "Keep the hero's identity 100% consistent with IMAGE A.",
 
   // Variation
-  "Do NOT recreate IMAGE B. Make visable changes for this scene.",
+  "Do NOT recreate IMAGE B. Make visable changes in enviroment AND characters for this scene.",
   "Use IMAGE B only as a guide for global style, lighting, and environment continuity.",
 
   // Lite extra för att undvika statiska frames
-  "If IMAGE B is wide and distant, move a bit closer. If it was a frontal shot, try a slightly higher or lower angle, or over-the-shoulder.",
+  "The Hero in image A is NEVER in the same pose as in image B.",
     `Do not include logos or text.`,
   ].join(" ");
 
@@ -1529,7 +1647,7 @@ async function renderFrontCover(page, halfX, halfY, boxW, boxH) {
   const cx = halfX + boxW / 2;
 
   // Flytta ner lite mer än tidigare för att undvika kapning i tryck
-  const topCenterY0 = halfY + boxH - mmToPt(GRID.outer_mm + 28);
+  const topCenterY0 = halfY + boxH - mmToPt(GRID.outer_mm + 12);
 
   const titleM = measureBlock(
     title,
@@ -1551,7 +1669,7 @@ async function renderFrontCover(page, halfX, halfY, boxW, boxH) {
     width: tw + padX * 2,
     height: badgeH,
     color: rgb(1, 1, 1),
-    opacity: 0.25,
+    opacity: 0.15,
   });
 
   // Titelrader
@@ -1639,7 +1757,7 @@ try {
     pdfDoc.addPage([pageW, pageH]);
   }
 
-  /* -------- TITELSIDA (efter omslag) -------- */
+ /* -------- TITELSIDA (efter omslag) -------- */
 try {
   const titlePage = pdfDoc.addPage([pageW, pageH]);
   titlePage.drawRectangle({
@@ -1653,43 +1771,29 @@ try {
   const cx = contentX + trimWpt / 2;
   const cy = contentY + trimHpt / 2 + mmToPt(4);
 
-  const mainTitle = String(story?.book?.title || "Min Sagobok");
+  // 🔁 Endast denna rad används som "titel"
+  const mainTitle = "Skapad av Sagostugan, med kärlek";
 
-  // 🔄 Ny rad – fix texten
-  const subLine = "Skapad av Sagostugan, med kärlek";
+  const mainSize = Math.min(trimWpt, trimHpt) * 0.06; // lite mindre så det känns mjukt
 
-  const mainSize = Math.min(trimWpt, trimHpt) * 0.08;
-  const subSize  = mainSize * 0.45;
-
-  // Titel
   const titleW = nunitoSemi.widthOfTextAtSize(mainTitle, mainSize);
   titlePage.drawText(mainTitle, {
     x: cx - titleW / 2,
-    y: cy + mainSize * 0.4,
+    y: cy,                // mitt i
     size: mainSize,
     font: nunitoSemi,
     color: rgb(0.15, 0.15, 0.25),
   });
 
-  // Ny underrad
-  const subW = nunito.widthOfTextAtSize(subLine, subSize);
-  const subY = cy - subSize * 1.4;
-  titlePage.drawText(subLine, {
-    x: cx - subW / 2,
-    y: subY,
-    size: subSize,
-    font: nunito,
-    color: rgb(0.4, 0.3, 0.55),
-  });
-
-  // 💜 HJÄRTA (behåller, matchar slutsida)
-  const gap = mmToPt(6);
+  // 💜 HJÄRTA (behåller)
+  const gap = mmToPt(10);
   const heartSize = mmToPt(14);
-  const heartY = subY - heartSize - gap;
+  const heartY = cy - heartSize - gap;
   drawHeart(titlePage, cx, heartY, heartSize, rgb(0.5, 0.36, 0.82));
 } catch (e) {
   tr(trace, "titlepage:error", { error: String(e?.message || e) });
 }
+
 
   /* -------- 16 uppslag: bild vänster, text höger + vine -------- */
   const outer = mmToPt(GRID.outer_mm);
