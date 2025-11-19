@@ -528,9 +528,14 @@ function buildCards(pages, visibleCount) {
       </div>`;
     els.previewGrid.appendChild(card);
   });
+
   els.previewSection.classList.remove("hidden");
   smoothScrollTo(els.previewSection);
+
+  // 🔓 Aktivera "Generera igen" på upplåsta sidor
+  enablePerPageRegenerate();
 }
+
 
 // Stabil slot-updaterare (cover=0, interiör=1..16)
 async function fillCard(page, imgUrl, providerLabel = "") {
@@ -969,16 +974,26 @@ if (items.length) {
   }
 }
 
+function enablePerPageRegenerate() {
+  if (!els.previewGrid) return;
+
+  // Visa "🔄 Generera igen" på alla upplåsta sidor
+  els.previewGrid
+    .querySelectorAll(".thumb:not(.locked) .retry-wrap")
+    .forEach((el) => el.classList.remove("hidden"));
+}
 
 /* --------------------------- Single regenerate --------------------------- */
+
 async function regenerateOne(page) {
-  if (!state.ref_b64) return;
-  const pg = state.story?.book?.pages?.find((p) => p.page === page);
-  const frame = state.plan?.plan?.find((f) => f.page === page);
+  if (!state.ref_b64 || !state.story) return;
 
   const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${page}"]`);
   if (!wrap) return;
+
+  // Rensa ev. tidigare felbox
   wrap.querySelector(".img-fallback")?.remove();
+
   const sk = document.createElement("div");
   sk.className = "skeleton";
   wrap.prepend(sk);
@@ -988,21 +1003,29 @@ async function regenerateOne(page) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        style: state.form.style,
-        ref_image_b64: state.ref_b64,
-        page_text: pg?.text || "",
-        scene_text: (pg?.scene || "").replace(/“.+?”|".+?"/g, "").trim(),
-        frame,
+        page,
         story: state.story,
+        ref_image_b64: state.ref_b64,
+        style: state.form.style,
+        // om du vill i framtiden kan du även skicka:
+        // coherence_code: state.coherence_code,
+        // style_refs_b64: state.style_refs_b64,
       }),
     });
+
     const j = await res.json().catch(() => ({}));
-    if (!res.ok || j?.error) throw new Error(j?.error || `HTTP ${res.status}`);
+    if (!res.ok || j?.error || !j.image_url) {
+      throw new Error(j?.error || `HTTP ${res.status}`);
+    }
 
     sk.remove();
-    await fillCard(page, j.image_url, "Gemini");
+    await fillCard(page, j.image_url, j.provider || "Gemini");
+
     // uppdatera state
-    state.images_by_page.set(page, { image_url: j.image_url });
+    state.images_by_page.set(page, {
+      image_url: j.image_url,
+      provider: j.provider || "Gemini",
+    });
   } catch (e) {
     sk.remove();
     const fb = document.createElement("div");
@@ -1014,6 +1037,7 @@ async function regenerateOne(page) {
     wrap.appendChild(fb);
   }
 }
+
 
 async function generateCoverAsync() {
   try {

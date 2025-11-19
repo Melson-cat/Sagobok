@@ -2565,35 +2565,68 @@ async function handleImagesNext(req, env) {
 
 async function handleImageRegenerate(req, env) {
   try {
-    const { story, page, character_ref_b64 } = await req.json().catch(() => ({}));
+    const {
+      story,
+      page,
+      ref_image_b64,
+      style,
+      coherence_code,
+      style_refs_b64
+    } = await req.json().catch(() => ({}));
+
     if (!story?.book?.pages) return err("Missing story.pages", 400);
-    const target = story.book.pages.find((p) => p.page === page);
+    if (page === undefined || page === null) return err("Missing page", 400);
+    if (!ref_image_b64) return err("Missing ref_image_b64", 400);
+
+    const pages = story.book.pages;
+    const target = pages.find((p) => p.page === page);
     if (!target) return err(`Page ${page} not found`, 404);
 
-    const frame = normalizePlan(story.book.pages).plan.find((f) => f.page === page);
-    const coherence_code = makeCoherenceCode(story);
+    // Gör en enkel plan bara för att få rätt frame
+    const plan = normalizePlan(pages, []); // beroende på din signatur, ev. normalizePlan(pages)
+    const frame = plan?.plan?.find((f) => f.page === page) || null;
+
+    const effectiveStyle = style || story.book.style || "cartoon";
+    const cc = coherence_code || makeCoherenceCode(story);
     const wardrobe_signature = deriveWardrobeSignature(story);
+    const heroName = story.book.bible?.main_character?.name || "Hero";
 
     const prompt = buildFramePrompt({
-      style: story.book.style,
+      style: effectiveStyle,
       story,
       page: target,
-      pageCount: story.book.pages.length,
+      pageCount: pages.length,
       frame,
-      characterName: story.book.bible.main_character.name,
+      characterName: heroName,
       wardrobe_signature,
-      coherence_code,
+      coherence_code: cc,
     });
 
-    const img = await geminiImage(env, {
+    const payload = {
       prompt,
-      character_ref_b64,
-      guidance: styleHint(story.book.style),
-      coherence_code,
+      character_ref_b64: ref_image_b64,
+      coherence_code: cc,
+      guidance: styleHint(effectiveStyle),
+    };
+
+    if (Array.isArray(style_refs_b64) && style_refs_b64.length) {
+      payload.style_refs_b64 = style_refs_b64;
+    }
+
+    const img = await geminiImage(env, payload, 75000, 3);
+    if (!img?.image_url) return err("No image from Gemini", 502);
+
+    return ok({
+      page,
+      prompt,
+      image_url: img.image_url,
+      provider: img.provider || "google",
     });
-    return ok({ page, prompt, ...img });
-  } catch (e) { return err(e?.message || "Image regeneration failed"); }
+  } catch (e) {
+    return err(e?.message || "Image regeneration failed", 500);
+  }
 }
+
 async function handleCover(req, env) {
   try {
     const { story, style = "storybook", character_ref_b64, prev_image_b64 } = await req.json().catch(() => ({}));
