@@ -834,6 +834,7 @@ function styleGuard(style = "cartoon") {
   }
 }
 
+
 const STORY_SYS = `
 Du är en expert på att strukturera bilderböcker för AI-generering.
 
