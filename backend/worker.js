@@ -1027,13 +1027,12 @@ function buildFramePrompt({ style, story, page, characterName, wardrobe_signatur
   const sGuard = styleGuard(style);
   const coh    = coherence_code || makeCoherenceCode(story);
   
-  // Hämta info från Bibeln
   const bible = story?.book?.bible || {};
   const locId = page.location_id;
   const locationObj = bible.locations?.find(l => l.id === locId);
+  // Vi skickar med textbeskrivningen också som backup!
   const locationDesc = locationObj ? locationObj.scenography_prompt : "Generic background";
 
-  // Hämta bi-roller
   const castList = bible.secondary_characters || [];
   const charsInScene = Array.isArray(page.characters_in_scene) ? page.characters_in_scene : [];
   
@@ -1041,42 +1040,36 @@ function buildFramePrompt({ style, story, page, characterName, wardrobe_signatur
   if (charsInScene.length > 0) {
      const extras = castList.filter(c => charsInScene.some(name => name.toLowerCase().includes(c.name.toLowerCase())));
      if (extras.length > 0) {
-        secondaryPrompts = "SUPPORTING CAST IN SCENE: " + extras.map(c => `${c.name} (${c.visual_strict})`).join(", ") + ".";
+        secondaryPrompts = "SUPPORTING CAST: " + extras.map(c => `${c.name} (${c.visual_strict})`).join(", ") + ".";
      }
   }
 
-  // Huvudprompten för "Trinity"-mixen
   return [
-    `*** COMPOSITE ILLUSTRATION TASK ***`,
-    `STYLE: ${sGuard}`,
+    `*** ILLUSTRATION TASK ***`,
+    `STYLE TARGET: ${sGuard}`,
     `---`,
-    `INPUT REFERENCES PROVIDED:`,
-    `1. IMAGE A: Main Character Reference (Hero).`,
-    `2. IMAGE B: Background/Location Reference (The Set).`,
-    `3. IMAGE C: Style Reference.`,
+    `INPUTS:`,
+    `1. IMAGE A: Character Ref (Art).`,
+    `2. IMAGE B: Background Ref (Art).`,
+    `3. IMAGE C: Style Ref.`,
     `---`,
-    `SCENE INSTRUCTION:`,
-    `Create a new illustration combining these elements.`,
-    `LOCATION: The scene takes place in the room shown in IMAGE B. Use the colors, furniture, and atmosphere of Image B.`,
-    `BUT: Adapt the angle to suit the action. Do not strictly copy the empty room's perspective if the action needs a different view.`,
+    `INSTRUCTION:`,
+    `You are creating a new scene for a storybook.`,
+    `DO NOT just paste Image A onto Image B. That is forbidden.`,
+    `INSTEAD: Redraw the entire scene from scratch using the provided references as guides.`,
+    `1. ENVIRONMENT: Use Image B as a loose guide for furniture and colors, but adapt the perspective to the action.`,
+    `2. CHARACTER: Use Image A as a reference for identity, but draw them interacting with the environment (e.g. sitting ON the chair, not floating in front of it).`,
     `---`,
-    `CHARACTERS:`,
-    `MAIN HERO: ${characterName}. Look EXACTLY like Image A. ${wardrobe_signature || ""}`,
+    `SCENE DETAILS:`,
+    `SETTING DESCRIPTION: ${locationDesc}`,
+    `ACTION: ${page.action_en}`,
+    `CAMERA: ${page.camera || "Medium shot"}.`,
+    `MAIN HERO: ${characterName}. ${wardrobe_signature || ""}`,
     `${secondaryPrompts}`,
     `---`,
-    `ACTION:`,
-    `${page.action_en}`,
-    `CAMERA: ${page.camera || "Medium shot"}. ${page.time_of_day || "Day"}.`,
-    `---`,
-    `COHERENCE RULES:`,
-    `- Hero must look 100% like Image A.`,
-    `- Environment must look like it belongs in Image B.`,
-    `- Render style must match Image C.`,
-    `- NO TEXT.`,
     `COHERENCE_ID: ${coh}`
   ].filter(Boolean).join("\n");
 }
-
 
 
 
@@ -2293,21 +2286,61 @@ async function handleStory(req, env) {
 async function handleRefImage(req, env) {
   try {
     const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
+    const sGuard = styleGuard(style);
+    const is3D = style.toLowerCase() === "pixar"; // <-- Kollar om det är 3D
 
-    // 1) Om klienten skickar ett foto (dataURL/base64) – använd det rakt av
+    // 1) Analysera input
+    let imageInput = null;
     if (photo_b64) {
-      const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
-      if (b64 && b64.length > 64) return ok({ ref_image_b64: b64, provider: "client" });
-      return err("Provided photo_b64 looked invalid", 400);
+      imageInput = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
     }
 
-    // 2) Annars generera en neutral referensbild via Gemini
+    // 2) Om vi har ett foto -> TVÄTTA DET (Style Transfer)
+    if (imageInput) {
+       // Anpassa instruktionen beroende på om det är 2D eller 3D
+       const techSpecs = is3D 
+         ? [
+             `- Stylized 3D character render (CGI/Pixar style).`,
+             `- Soft volumetric lighting (3D shading).`,
+             `- Plastic/skin textures suitable for animation.`,
+             `- NOT photorealistic (do not look like a real human photo, look like a 3D movie character).`
+           ]
+         : [
+             `- Flat lighting (2D).`,
+             `- Hand-drawn/painted illustration look.`,
+             `- Clearly defined outlines (if comic/cartoon).`,
+             `- NOT photorealistic (look like a drawing).`
+           ];
+
+       const stylePrompt = [
+         sGuard,
+         `TASK: Create a Character Reference Sheet based on the attached photo.`,
+         `CRITICAL: Convert the person in the photo into a ${is3D ? "3D CHARACTER RENDER" : "DRAWING/ILLUSTRATION"} in the requested style.`,
+         ...techSpecs, // <-- Här lägger vi in rätt lista
+         `- White background.`,
+         `- Full body, standing neutral.`,
+         `- Keep key features (hair color, glasses) but simplify details for the style.`
+       ].join("\n");
+       
+       const g = await geminiImage(env, { 
+          prompt: stylePrompt, 
+          character_ref_b64: imageInput, 
+          guidance: is3D ? "Transform photo to 3D character." : "Transform photo to illustration."
+       }, 80000, 2);
+
+       if (g?.b64) return ok({ ref_image_b64: g.b64, provider: "google-style-transfer" });
+    }
+
+    // 3) Fallback (Om inget foto fanns)
     const prompt = characterCardPrompt({ style, bible, traits });
     const g = await geminiImage(env, { prompt }, 70000, 2);
 
-    if (g?.b64) return ok({ ref_image_b64: g.b64, provider: g.provider || "google" });
-    // Om svaret bara innehåller URL (utan b64) skickar vi tillbaka null för att signalera att klienten kan hämta själv
-    return ok({ ref_image_b64: null, provider: g?.provider || "google", image_url: g?.image_url || null });
+    return ok({ 
+       ref_image_b64: g?.b64 || null, 
+       image_url: g?.image_url || null,
+       provider: g?.provider || "google" 
+    });
+
   } catch (e) {
     return err(e?.message || "Ref generation failed", 500);
   }
@@ -2322,30 +2355,28 @@ async function handleAssets(req, env) {
     const locations = story.book.bible.locations || [];
     if (!locations.length) return err("No locations found", 400);
 
-    // 1. Generera STIL-REFERENS (En generell bild för att låsa stilen)
-    // Vi ber om en neutral scen i vald stil.
-    const stylePrompt = `STYLE REFERENCE SHEET. A masterpiece illustration in style: ${styleGuard(style)}. Subject: A generic landscape with a tree and a cloud. High quality, perfect technique. No text.`;
+    const sGuard = styleGuard(style);
+
+    // 1. Generera STIL-REFERENS
+    const stylePrompt = `${sGuard} Subject: A generic landscape with a tree and clouds. High quality art reference. No text.`;
     
-    // 2. Förbered Location-jobb
-    // Vi skapar en array av promises för att generera allt parallellt
     const tasks = [];
 
-    // A. Stil-bilden
     tasks.push(
       geminiImage(env, { prompt: stylePrompt }, 60000, 2)
         .then(res => ({ type: "style", b64: res.b64 }))
         .catch(e => ({ type: "style", error: String(e) }))
     );
 
-    // B. Miljö-bilderna (Background Plates)
+    // 2. Generera MILJÖER (Tvinga dem att vara illustrationer)
     for (const loc of locations) {
       const locPrompt = [
-        styleGuard(style),
-        `SCENOGRAPHY / BACKGROUND PLATE.`,
+        sGuard,
+        `TASK: Create a BACKGROUND ILLUSTRATION (Scenography).`,
         `Subject: ${loc.scenography_prompt}`,
-        `Rule: EMPTY SCENE. NO PEOPLE. NO ANIMALS.`,
-        `Perspective: Wide angle, establishing shot.`,
-        `Purpose: This image will be used as a background reference.`
+        `IMPORTANT: This must be a painting/drawing. NOT A PHOTO.`,
+        `Perspective: Wide angle. Empty scene. No people.`,
+        `Style: Flat, consistent with children's book art.`
       ].join(" ");
 
       tasks.push(
@@ -2355,10 +2386,8 @@ async function handleAssets(req, env) {
       );
     }
 
-    // Kör allt parallellt (Trinity-style)
     const results = await Promise.all(tasks);
 
-    // Sortera resultaten
     const assets = {
       style_ref_b64: results.find(r => r.type === "style")?.b64 || null,
       locations: {}
