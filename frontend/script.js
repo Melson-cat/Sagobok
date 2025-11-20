@@ -807,7 +807,7 @@ async function onSubmit(e) {
   state.cover_image_id = null;
 
   try {
-  // 1) STORY & CASTING (GPT-4o)
+    // 1) STORY
     const storyRes = await fetch(`${API}/api/story`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -815,7 +815,7 @@ async function onSubmit(e) {
         name: state.form.name,
         age: state.form.age,
         reading_age: state.form.reading_age,
-        pages: STORY_PAGES,
+        pages: STORY_PAGES, // <- låst
         category: state.form.category,
         style: state.form.style,
         theme: state.form.theme,
@@ -825,14 +825,14 @@ async function onSubmit(e) {
     const storyData = await storyRes.json().catch(() => ({}));
     if (!storyRes.ok || storyData?.error) throw new Error(storyData?.error || `HTTP ${storyRes.status}`);
     state.story = storyData.story;
-    // state.plan behövs inte längre, storyn styr allt
+    state.plan = storyData.plan || { plan: [] };
 
     const pages = state.story?.book?.pages || [];
     if (!pages.length) throw new Error("Berättelsen saknar sidor.");
     buildCards(pages, state.visibleCount);
-    
-    // 2) KARAKTÄRS-REFERENS (Hero Asset)
-    setStatus("🎨 Skapar karaktärsprofil...", 20);
+    setStatus("🖼️ Låser hjälten (referens)…", 22);
+
+    // 2) REF IMAGE
     const refRes = await fetch(`${API}/api/ref-image`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -848,94 +848,87 @@ async function onSubmit(e) {
     state.ref_b64 = refData.ref_image_b64 || null;
     if (!state.ref_b64) throw new Error("Ingen referensbild kunde skapas.");
 
-    // 3) PRE-PRODUCTION (Miljöer & Stil) - NYTT STEG!
-    setStatus("🏗️ Bygger scenografi (3-5 miljöer)...", 30);
-    const assetRes = await fetch(`${API}/api/assets`, {
+    // 3) INTERIOR IMAGES — SEKVENSIELLT (sida för sida, med föregående bild som stil-ankare)
+setStatus("🎥 Lägger kameror & ljus…", 38);
+
+let received = 0;
+let prevBareB64 = null; // för nästa sida
+
+for (const pg of pages) {
+  // visa skeleton om tom
+  const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${pg.page}"]`);
+  if (wrap && !wrap.querySelector("img")?.src) {
+    const sk = wrap.querySelector(".skeleton") || document.createElement("div");
+    sk.className = "skeleton";
+    if (!wrap.querySelector(".skeleton")) wrap.prepend(sk);
+  }
+
+  try {
+    const res = await fetch(`${API}/api/images/next`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        style: state.form.style,
         story: state.story,
-        style: state.form.style
+        plan: state.plan,
+        page: pg.page,
+        ref_image_b64: state.ref_b64,
+        prev_b64: prevBareB64, // ← nyckeln som ger koherens
       }),
     });
-    const assetData = await assetRes.json().catch(() => ({}));
-    if (!assetRes.ok) throw new Error(assetData?.error || "Kunde inte bygga miljöer.");
-    
-    const styleRef = assetData.assets?.style_ref_b64;
-    const locationRefs = assetData.assets?.locations || {}; // { "loc_kitchen": "b64..." }
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || j?.error || !j?.image_url) throw new Error(j?.error || `HTTP ${res.status}`);
 
-    // 4) BILD-PRODUKTION (TRINITY LOOP)
-    setStatus("🎬 Startar inspelning...", 40);
+    // visa direkt
+    fillCard(pg.page, j.image_url, "Gemini");
+    state.images_by_page.set(pg.page, { image_url: j.image_url });
 
-    let received = 0;
-    
-    // Vi kör alla sidor parallellt-ish (i batcher om du vill, men loopen funkar bra med din backend)
-    // Notera: Ingen sekvensiell väntan på "prev_b64"!
-    for (const pg of pages) {
-      const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${pg.page}"]`);
-      if (wrap && !wrap.querySelector("img")?.src) {
-        const sk = wrap.querySelector(".skeleton") || document.createElement("div");
-        sk.className = "skeleton";
-        if (!wrap.querySelector(".skeleton")) wrap.prepend(sk);
+    // för nästa sida: gör om till bare b64
+    const du = await urlToDataURL(j.image_url);
+    const bare = dataUrlToBareB64(du);
+    prevBareB64 = bare || null;
+
+    // ladda upp till CF direkt (ersätter batch senare)
+    if (du) {
+      const uploads = await uploadToCF([{ page: pg.page, data_url: du }]).catch(() => []);
+      const u = uploads?.find(x => x.page === pg.page);
+      if (u?.image_id) {
+        state.images_by_page.set(pg.page, { image_id: u.image_id, image_url: u.url });
+        fillCard(pg.page, u.url || j.image_url, "CF");
       }
-
-      // Hämta rätt miljöbild för denna sida
-      const locId = pg.location_id;
-      const myLocationRef = locationRefs[locId] || null;
-
-      try {
-        const res = await fetch(`${API}/api/images/next`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            style: state.form.style,
-            story: state.story,
-            page: pg.page,
-            ref_image_b64: state.ref_b64,    // A: Hero
-            location_ref_b64: myLocationRef, // B: Location
-            style_ref_b64: styleRef,         // C: Style
-            // Inget prev_b64!
-          }),
-        });
-        
-        const j = await res.json().catch(() => ({}));
-        if (!res.ok || j?.error || !j?.image_url) throw new Error(j?.error || `HTTP ${res.status}`);
-
-        fillCard(pg.page, j.image_url, "Gemini");
-        state.images_by_page.set(pg.page, { image_url: j.image_url });
-
-        // Ladda upp till CF
-        const du = await urlToDataURL(j.image_url);
-        if (du) {
-          const uploads = await uploadToCF([{ page: pg.page, data_url: du }]).catch(() => []);
-          const u = uploads?.find(x => x.page === pg.page);
-          if (u?.image_id) {
-            state.images_by_page.set(pg.page, { image_id: u.image_id, image_url: u.url });
-            fillCard(pg.page, u.url || j.image_url, "CF");
-          }
-        }
-
-      } catch (err) {
-        console.error("page", pg.page, err);
-        if (wrap) {
-          const fb = document.createElement("div");
-          fb.className = "img-fallback";
-          fb.textContent = "Fel vid generering";
-          wrap.appendChild(fb);
-          wrap.parentElement.querySelector(".retry-wrap")?.classList.remove("hidden");
-        }
-      }
-
-      received++;
-      setStatus(`🎨 Målar sida ${received}/${pages.length}…`, 40 + (received / pages.length) * 50);
     }
 
-    // 5) OMSLAG (Som vanligt)
-    if (COVER_STRATEGY === "async") {
-      generateCoverAsync().catch(() => {});
-    } else if (COVER_STRATEGY === "sync") {
-      await generateCoverAsync();
+  } catch (err) {
+    console.error("page", pg.page, err);
+    if (wrap) {
+      wrap.querySelector(".skeleton")?.remove();
+      const fb = document.createElement("div");
+      fb.className = "img-fallback";
+      fb.textContent = "Kunde inte generera bild";
+      wrap.appendChild(fb);
+      wrap.parentElement.querySelector(".retry-wrap")?.classList.remove("hidden");
     }
+  }
+
+  received++;
+  setStatus(`🎨 Målar sida ${received}/${pages.length}…`, 38 + (received / Math.max(1, pages.length)) * 32);
+}
+
+
+   // 4) COVER (icke-blockerande eller hoppa över)
+if (COVER_STRATEGY === "async") {
+  // Fire-and-forget – UI visar omslag när/om det hinner
+  generateCoverAsync().catch(() => {});
+  setStatus("☁️ Laddar upp illustrationer…", 86);
+} else if (COVER_STRATEGY === "sync") {
+  // Vill du blocka tills omslaget är klart:
+  setStatus("🎨 Skapar omslag…", 84);
+  await generateCoverAsync();
+  setStatus("☁️ Laddar upp illustrationer…", 86);
+} else {
+  // "skip": låt workern använda sida 1 som omslag
+  setStatus("☁️ Laddar upp illustrationer…", 86);
+}
 
 // 5) CLOUDFLARE IMAGES (alla sidor; omslaget läggs till separat)
 const items = [];

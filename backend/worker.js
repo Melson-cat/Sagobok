@@ -38,7 +38,7 @@ export const DEFAULT_BLEED_MM = 3;
 
 
 /* ------------------------------ Globals ------------------------------ */
-const OPENAI_MODEL = "gpt-4o";
+const OPENAI_MODEL = "gpt-4o-mini";
 
 /* ------------------------------- CORS -------------------------------- */
 const CORS = {
@@ -834,58 +834,138 @@ function styleGuard(style = "cartoon") {
   }
 }
 
+const OUTLINE_SYS = `
+Du är en barnboksförfattare, som hjälper till att skapa en disposition ("outline") för en svensk bilderbok.
 
-const STORY_SYS = `
-Du är en expert på att strukturera bilderböcker för AI-generering.
+Du får i user-meddelandet:
+- Hjältens typ (barn eller husdjur)
+- Namn, ålder (om barn), och det övergripande temat för boken.
+
 
 DIN UPPGIFT:
-Skapa en komplett "produktionsbibel" och manus.
+Skapa en engagerande outline för en bilderbok.
 
-PROCESS:
-1. CASTING: Definiera huvudpersonen. Definiera bi-roller (t.ex. Mamma, Katt) med FAST visuell beskrivning (kläder, hårfärg).
-2. LOCATION SCOUTING: Identifiera 3-5 unika miljöer (scener) som behövs för storyn. Ge varje miljö ett ID och en "scenography_prompt" (beskrivning av ett TOMT rum/plats).
-3. MANUS: Skriv 16 sidor. Koppla varje sida till ett LOCATION ID och ange vilka karaktärer som syns.
+RETURNERA EXAKT:
+{
+  "outline": {
+    "logline": string,
+    "theme": string,
+    "reading_age": number,
+    "tone": string,
+    "motif": string,
+    "category": "kids" | "pets",
+    "hero": {
+      "name": string,
+      "kind": "child" | "pet",
+      "species": string | null,        // t.ex. "cat", "dog" eller null för barn
+      "age": number | null
+    },
+    "chapters": [
+      {
+        "title": string,
+        "summary": string
+      }
+    ]
+  }
+}
 
-JSON FORMAT:
+REGLER:
+- "category" ska matcha den kategori du får i prompten ("kids" eller "pets").
+- Om category = "kids":
+  - hero.kind = "child"
+  - hero.species = null
+  - hero.age = barnets ungefärliga ålder (t.ex. 5, 6, 7)
+- Om category = "pets":
+  - hero.kind = "pet"
+  - hero.species = ett enkelt engelskt ord, t.ex. "cat", "dog", "rabbit"
+  - hero.age kan vara null eller uppskattad (om det passar).
+- Storyn ska vara engagerande, händelserik och utgå ifrån det önskade temat.
+- Dispositionen ska gå att utveckla till ca 16 sidor i en bilderbok.
+- Endast giltig JSON, inga kommentarer eller extra text.
+`;
+
+
+const STORY_SYS = `
+Du är en svensk barnboksförfattare som får en outline för en svensk bilderbok.
+Du ska skriva själva boken i JSON-form.
+
+Du får i user-meddelandet:
+- OUTLINE (med category = "kids" eller "pets" och hero-information)
+- Instruktioner om läsålder, stil m.m.
+
+DIN UPPGIFT:
+Skriv en intressant, engagerande och varm bilderbok enligt följande JSON-struktur:
+
 {
   "book": {
     "title": string,
     "tagline": string,
     "back_blurb": string,
     "reading_age": number,
-    "style": string,
+    "style": "cartoon" | "pixar" | "storybook" | "comic" | "painting",
     "category": "kids" | "pets",
     "bible": {
       "main_character": {
         "name": string,
-        "age": number,
-        "visual_summary": string
+        "age": number | null,          // barn: ålder i år, djur: gärna null eller ungefärligt
+        "physique": string,            // kort fysik/utseende (t.ex. "liten katt med mjuk, grå päls")
+        "identity_keys": string[]      // korta nycklar: hår/färg/kroppsform/art/breed
       },
-      "secondary_characters": [
-        { "name": string, "visual_strict": string }
-      ],
-      "locations": [
-        {
-          "id": string, // t.ex "loc_kitchen"
-          "name": string, // t.ex "Köket"
-          "scenography_prompt": string // T.ex: "Wide shot of a cozy empty kitchen. Yellow wallpaper, round wooden table, red fridge. No people."
-        }
-      ]
+      "wardrobe": string[],            // för barn: 1–3 meningar om kläder; för djur: oftast tom eller enkla accessoarer
+      "palette": string[],             // 3–5 färgord på engelska: t.ex. ["soft blue","warm yellow","cream"]
+      "world": string,                 // kort beskrivning av miljön (stad, skog, hemmet, etc)
+      "tone": string                   // stämning: "mysig", "äventyrlig", "lugn", etc
     },
+    "theme": string,
+    "lesson": string,
     "pages": [
       {
         "page": number,
-        "text": string, // Svensk text
-        "location_id": string, // Måste matcha ett id i bible.locations
-        "characters_in_scene": string[], // T.ex ["Leo", "Mamma"]
-        "action_en": string, // T.ex "Leo is eating a sandwich." (Ingen miljöinfo här)
-        "camera": string, // "Wide shot", "Close up"
-        "time_of_day": "day" | "night",
-        "weather": "sunny" | "rainy"
+        "text": string,        // SVENSKA: 2–4 meningar berättande text
+        "scene": string,       // SVENSKA: kort visuell scenbeskrivning (miljö + vad som händer)
+        "scene_en": string,    // ENGELSKA: 2–3 meningar, visuell beskrivning för bild-AI
+        "location": string,    // ENGELSKA: t.ex. "street", "bedroom", "park", "yard"
+        "time_of_day": "day" | "golden_hour" | "evening" | "night",
+        "weather": "clear" | "cloudy" | "rain" | "snow"
       }
     ]
   }
 }
+
+HÅRDA FORMATREGLER:
+- Exakt 16 sidor: pages 1...16.
+- 2–4 meningar i "text" på svenska per sida.
+- "scene_en" ska vara kort, filmisk, levande och konkret (inte dialog).
+- Varje sida ska vara visuellt distinkt (ny vinkel, ny miljö, ny händelse).
+- Berättelsen ska vara engagerande och bygga på det övergripande temat.
+- Undvik att stå stilla i samma scen, max 2 sidor i samma scenografi.  
+
+KATEGORI-REGLER (VIKTIGT FÖR BILDERNA):
+
+1) Om category = "kids":
+   - Huvudpersonen är ett mänskligt barn genom hela berättelsen.
+   - I "scene" och "scene_en" ska hjälten konsekvent refereras som ett barn
+     (t.ex. "det lilla barnet Nova", "the little child Nova").
+   - Hjälten får inte förvandlas till djur eller vuxen. Ingen tonåring/vuxen gestalt.
+
+2) Om category = "pets":
+   - Huvudpersonen är ett djur (husdjur) genom hela berättelsen.
+   - I "scene" och "scene_en" ska hjälten konsekvent refereras som ett djur:
+     t.ex. "katten Lina", "the cat Lina", "the little dog Max".
+   - Hjälten får aldrig bli människa senare i storyn. Ingen förvandling till barn/vuxen.
+
+ALLMÄNNA REGLER FÖR BÅDA:
+- "category" i book ska matcha den kategori som gavs (kids eller pets).
+- Hjälten ska vara närvarande på nästan alla sidor (några få etableringsbilder utan hjälten är okej).
+- "scene_en" ska alltid innehålla hjälten tydligt (särskilt viktigt för djur),
+  t.ex. "The little grey cat Lina sits on the windowsill..." i början av meningen.
+- Undvik dialog i "scene_en" (det är en ren bildbeskrivning).
+- Boken ska kunna upppskattas av barn som vuxna, hela familjen.
+- ALLA 16 sidor måste innehålla story, INGA meta-kommentarer, eller kommentarer om boken!
+
+TEKNISKA REGLER:
+- Endast giltig JSON i exakt format som ovan.
+- Inga kommentarer, inga extra fält utanför "book".
 `;
 
 
@@ -1023,53 +1103,74 @@ function deriveWardrobeSignature(story) {
 
 }
 
-function buildFramePrompt({ style, story, page, characterName, wardrobe_signature, coherence_code }) {
-  const sGuard = styleGuard(style);
-  const coh    = coherence_code || makeCoherenceCode(story);
-  
-  const bible = story?.book?.bible || {};
-  const locId = page.location_id;
-  const locationObj = bible.locations?.find(l => l.id === locId);
-  // Vi skickar med textbeskrivningen också som backup!
-  const locationDesc = locationObj ? locationObj.scenography_prompt : "Generic background";
 
-  const castList = bible.secondary_characters || [];
-  const charsInScene = Array.isArray(page.characters_in_scene) ? page.characters_in_scene : [];
-  
-  let secondaryPrompts = "";
-  if (charsInScene.length > 0) {
-     const extras = castList.filter(c => charsInScene.some(name => name.toLowerCase().includes(c.name.toLowerCase())));
-     if (extras.length > 0) {
-        secondaryPrompts = "SUPPORTING CAST: " + extras.map(c => `${c.name} (${c.visual_strict})`).join(", ") + ".";
-     }
-  }
+function buildFramePrompt({ style, story, page, pageCount, frame, characterName, wardrobe_signature, coherence_code }) {
+  const sGuard = styleGuard(style);
+  const isPet  = (story?.book?.category || "kids").toLowerCase() === "pets";
+  const coh    = coherence_code || makeCoherenceCode(story);
+  const age    = story?.book?.bible?.main_character?.age || 5;
+
+  const wardrobeLine = (!isPet && wardrobe_signature)
+    ? `Wardrobe: ${wardrobe_signature}. The hero always looks the same. Do NOT change garment type, color family, or pattern.`
+    : "";
+
+  const identityLines = isPet
+    ? [
+        `Use the exact same animal as in the reference (${characterName}).`,
+        `Match the same species, breed, fur color, markings, and proportions. DO NOT add extra limbs.`,
+        `Never turn the hero into a human. Keep it clearly an animal on every page.`,
+        `If the written description and the reference image disagree, follow the appearance in the reference image.`,
+      ].join(" ")
+    : [
+        `Use the same child hero as in the reference (${characterName}).`,
+        `Age ≈ ${age}. Depict clear *child* anatomy, never depict the hero as a teen or adult.`,
+        `DO NOT add extra limbs, never make two identical heroes in the same image.`,
+        `If the written description and the reference image disagree,  follow the reference image for identity and body type.`,
+        `Hero must appear visibly in frame unless the SCENE_EN explicitly excludes them.`,
+      ].join(" ");
+
+  const consistency = [
+   "You receive TWO images before this text:",
+  "IMAGE A (first image) is the strict identity reference for the main hero.",
+  "IMAGE B (second image) is the previous scene from the same story.",
+
+  // Vad ska hända nu
+  "Depict the *next moment* that happens AFTER IMAGE B.",
+  "Keep the hero's identity 100% consistent with IMAGE A.",
+
+  // Variation
+  "Do NOT recreate IMAGE B. Make visable changes in enviroment AND characters for this scene.",
+  "Use IMAGE B only as a guide for global style, lighting, and environment continuity.",
+
+  // Lite extra för att undvika statiska frames
+  "The Hero in image A is NEVER in the same pose as in image B.",
+    `Do not include logos or text.`,
+  ].join(" ");
+
+  const cinematicContext = [
+    `Each image is a *film frame* from the same movie.`,
+    `Background and lighting should evolve naturally with the story.`,
+    `NEVER make an identical image, NEVER use the same exact angle.`
+  ].join(" ");
+
+  const salt = "UNIQUE_PAGE:" + page.page + "-" + ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
 
   return [
-    `*** ILLUSTRATION TASK ***`,
-    `STYLE TARGET: ${sGuard}`,
-    `---`,
-    `INPUTS:`,
-    `1. IMAGE A: Character Ref (Art).`,
-    `2. IMAGE B: Background Ref (Art).`,
-    `3. IMAGE C: Style Ref.`,
-    `---`,
-    `INSTRUCTION:`,
-    `You are creating a new scene for a storybook.`,
-    `DO NOT just paste Image A onto Image B. That is forbidden.`,
-    `INSTEAD: Redraw the entire scene from scratch using the provided references as guides.`,
-    `1. ENVIRONMENT: Use Image B as a loose guide for furniture and colors, but adapt the perspective to the action.`,
-    `2. CHARACTER: Use Image A as a reference for identity, but draw them interacting with the environment (e.g. sitting ON the chair, not floating in front of it).`,
-    `---`,
-    `SCENE DETAILS:`,
-    `SETTING DESCRIPTION: ${locationDesc}`,
-    `ACTION: ${page.action_en}`,
-    `CAMERA: ${page.camera || "Medium shot"}.`,
-    `MAIN HERO: ${characterName}. ${wardrobe_signature || ""}`,
-    `${secondaryPrompts}`,
-    `---`,
-    `COHERENCE_ID: ${coh}`
+    sGuard,
+    identityLines,
+    wardrobeLine,
+    consistency,
+    cinematicContext,
+    `COHERENCE_CODE:${coh}`,
+    `Format: square (1:1).`,
+    page.time_of_day ? `Time of day: ${page.time_of_day}.` : "",
+    page.weather ? `Weather: ${page.weather}.` : "",
+    page.scene_en ? `SCENE_EN: ${page.scene_en}` : "",
+    salt
   ].filter(Boolean).join("\n");
 }
+
+
 
 
 
@@ -2241,42 +2342,66 @@ async function handleStory(req, env) {
       reading_age,
     } = body || {};
 
-    // Läsålder
+    // Läsålder: explicit reading_age > annars från barnets ålder > pets default 8
     const parsedRA = parseInt(reading_age, 10);
     const targetAge = Number.isFinite(parsedRA)
       ? parsedRA
       : ((category || "kids") === "pets" ? 8 : parseInt(age || 6, 10));
 
-    // 1. Generera Story + Bibel + Locations (GPT-4o)
-    // Vi använder den nya STORY_SYS som du uppdaterade
+    // 1) Outline
+    const outlineUser = `
+${heroDescriptor({ category, name, age, traits })}
+Kategori: ${category || "kids"}.
+Läsålder: ${targetAge}.
+Önskat tema/poäng (om angivet): ${theme || "vänskap"}.
+Antal sidor: ${pages || 12}.
+Returnera enbart json.`.trim();
+
+    const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
+
+    // 2) Story (tvingar exakt JSON-format enligt STORY_SYS)
     const storyUser = `
-    Hjälte: ${heroDescriptor({ category, name, age, traits })}
-    Kategori: ${category || "kids"}.
-    Tema: ${theme || "Vänskap"}.
-    Stil: ${style || "cartoon"}.
-    Läsålder: ${targetAge}.
-    Antal sidor: 16.
-    Returnera JSON enligt specifikation.
-    `.trim();
+OUTLINE:
+${JSON.stringify(outline)}
+Skriv en engagerande, händelserik saga som är rolig att läsa högt.
+Variera miljöer och visuella ögonblick mellan varje sida.
+${heroDescriptor({ category, name, age, traits })}
+Läsålder: ${targetAge}. **Sidor: 16**. Stil: ${style || "cartoon"}. Kategori: ${category || "kids"}.
+Returnera enbart JSON i exakt formatet.
+`.trim();
 
     const story = await openaiJSON(env, STORY_SYS, storyUser);
 
-    // 2. Fallback: Säkerställ att scene_en finns (om vi behöver det nånstans, men action_en används nu)
-    // Vi behöver inte 'getCameraHints' eller 'normalizePlan' längre eftersom
-    // GPT-4o sätter "camera" direkt på varje sida i story-objektet.
+    // 3) Fallback: fyll scene_en på sidor som saknar det (kort, visuell EN-beskrivning)
+    try {
+      const pgs = Array.isArray(story?.book?.pages) ? story.book.pages : [];
+      const needs = pgs.some(p => !p.scene_en || !String(p.scene_en).trim());
+      if (pgs.length && needs) {
+        const toTranslate = pgs.map(p => ({ page: p.page, sv: p.scene || p.text || "" }));
+        const t = await openaiJSON(
+          env,
+          "Du är en saklig översättare. Returnera endast giltig JSON.",
+          `Översätt följande scenangivelser till kort engelsk, visuell beskrivning (2–3 meningar, inga repliker).
+Returnera exakt: { "items":[{"page":number,"scene_en":string}, ...] } och inget mer.
+SVENSKA:
+${JSON.stringify(toTranslate)}`
+        );
+        const map = new Map((t?.items || []).map(x => [x.page, x.scene_en]));
+        story.book.pages = pgs.map(p => ({ ...p, scene_en: p.scene_en || map.get(p.page) || "" }));
+      }
+    } catch {
+      // Översättning är ”best effort”; fortsätt även om det fallerar
+    }
 
-    // 3. Koherens & garderob
+    // 4) Kamerahints → bildplan
+    const camHints = await getCameraHints(env, story);
+    const plan = normalizePlan(story?.book?.pages || [], camHints.shots);
+
+    // 5) Koherens & garderob
     const coherence_code = makeCoherenceCode(story);
     const wardrobe_signature = deriveWardrobeSignature(story);
 
-    // Vi returnerar en tom "plan" eftersom storyn nu styr kameran själv.
-    return ok({ 
-      story, 
-      plan: { plan: [] }, // Tom plan, frontend/backend använder story.pages[i].camera istället
-      coherence_code, 
-      wardrobe_signature 
-    });
-
+    return ok({ outline, story, plan, coherence_code, wardrobe_signature });
   } catch (e) {
     return err(e?.message || "Story generation failed", 500);
   }
@@ -2286,120 +2411,23 @@ async function handleStory(req, env) {
 async function handleRefImage(req, env) {
   try {
     const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
-    const sGuard = styleGuard(style);
-    const is3D = style.toLowerCase() === "pixar"; // <-- Kollar om det är 3D
 
-    // 1) Analysera input
-    let imageInput = null;
+    // 1) Om klienten skickar ett foto (dataURL/base64) – använd det rakt av
     if (photo_b64) {
-      imageInput = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
+      const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
+      if (b64 && b64.length > 64) return ok({ ref_image_b64: b64, provider: "client" });
+      return err("Provided photo_b64 looked invalid", 400);
     }
 
-    // 2) Om vi har ett foto -> TVÄTTA DET (Style Transfer)
-    if (imageInput) {
-       // Anpassa instruktionen beroende på om det är 2D eller 3D
-       const techSpecs = is3D 
-         ? [
-             `- Stylized 3D character render (CGI/Pixar style).`,
-             `- Soft volumetric lighting (3D shading).`,
-             `- Plastic/skin textures suitable for animation.`,
-             `- NOT photorealistic (do not look like a real human photo, look like a 3D movie character).`
-           ]
-         : [
-             `- Flat lighting (2D).`,
-             `- Hand-drawn/painted illustration look.`,
-             `- Clearly defined outlines (if comic/cartoon).`,
-             `- NOT photorealistic (look like a drawing).`
-           ];
-
-       const stylePrompt = [
-         sGuard,
-         `TASK: Create a Character Reference Sheet based on the attached photo.`,
-         `CRITICAL: Convert the person in the photo into a ${is3D ? "3D CHARACTER RENDER" : "DRAWING/ILLUSTRATION"} in the requested style.`,
-         ...techSpecs, // <-- Här lägger vi in rätt lista
-         `- White background.`,
-         `- Full body, standing neutral.`,
-         `- Keep key features (hair color, glasses) but simplify details for the style.`
-       ].join("\n");
-       
-       const g = await geminiImage(env, { 
-          prompt: stylePrompt, 
-          character_ref_b64: imageInput, 
-          guidance: is3D ? "Transform photo to 3D character." : "Transform photo to illustration."
-       }, 80000, 2);
-
-       if (g?.b64) return ok({ ref_image_b64: g.b64, provider: "google-style-transfer" });
-    }
-
-    // 3) Fallback (Om inget foto fanns)
+    // 2) Annars generera en neutral referensbild via Gemini
     const prompt = characterCardPrompt({ style, bible, traits });
     const g = await geminiImage(env, { prompt }, 70000, 2);
 
-    return ok({ 
-       ref_image_b64: g?.b64 || null, 
-       image_url: g?.image_url || null,
-       provider: g?.provider || "google" 
-    });
-
+    if (g?.b64) return ok({ ref_image_b64: g.b64, provider: g.provider || "google" });
+    // Om svaret bara innehåller URL (utan b64) skickar vi tillbaka null för att signalera att klienten kan hämta själv
+    return ok({ ref_image_b64: null, provider: g?.provider || "google", image_url: g?.image_url || null });
   } catch (e) {
     return err(e?.message || "Ref generation failed", 500);
-  }
-}
-
-/* ---------------- NEW: Asset Generation (Pre-production) ---------------- */
-async function handleAssets(req, env) {
-  try {
-    const { story, style = "cartoon" } = await req.json().catch(() => ({}));
-    if (!story?.book?.bible) return err("Missing bible", 400);
-
-    const locations = story.book.bible.locations || [];
-    if (!locations.length) return err("No locations found", 400);
-
-    const sGuard = styleGuard(style);
-
-    // 1. Generera STIL-REFERENS
-    const stylePrompt = `${sGuard} Subject: A generic landscape with a tree and clouds. High quality art reference. No text.`;
-    
-    const tasks = [];
-
-    tasks.push(
-      geminiImage(env, { prompt: stylePrompt }, 60000, 2)
-        .then(res => ({ type: "style", b64: res.b64 }))
-        .catch(e => ({ type: "style", error: String(e) }))
-    );
-
-    // 2. Generera MILJÖER (Tvinga dem att vara illustrationer)
-    for (const loc of locations) {
-      const locPrompt = [
-        sGuard,
-        `TASK: Create a BACKGROUND ILLUSTRATION (Scenography).`,
-        `Subject: ${loc.scenography_prompt}`,
-        `IMPORTANT: This must be a painting/drawing. NOT A PHOTO.`,
-        `Perspective: Wide angle. Empty scene. No people.`,
-        `Style: Flat, consistent with children's book art.`
-      ].join(" ");
-
-      tasks.push(
-        geminiImage(env, { prompt: locPrompt }, 60000, 2)
-          .then(res => ({ type: "location", id: loc.id, b64: res.b64 }))
-          .catch(e => ({ type: "location", id: loc.id, error: String(e) }))
-      );
-    }
-
-    const results = await Promise.all(tasks);
-
-    const assets = {
-      style_ref_b64: results.find(r => r.type === "style")?.b64 || null,
-      locations: {}
-    };
-
-    results.filter(r => r.type === "location").forEach(r => {
-      if (r.b64) assets.locations[r.id] = r.b64;
-    });
-
-    return ok({ assets });
-  } catch (e) {
-    return err(e?.message || "Asset generation failed", 500);
   }
 }
 
@@ -2461,55 +2489,70 @@ async function handleImagesNext(req, env) {
     const {
       style = "cartoon",
       story,
+      plan,
       page,
-      ref_image_b64,     // IMAGE A (Hjälten)
-      location_ref_b64,  // IMAGE B (Miljön för just denna sida)
-      style_ref_b64,     // IMAGE C (Stilen)
+      ref_image_b64,
+      prev_b64,
       coherence_code,
+      style_refs_b64,
     } = await req.json().catch(() => ({}));
 
     if (!story?.book?.pages) return err("Missing story.pages", 400);
-    if (!ref_image_b64) return err("Missing ref_image_b64", 400);
+    if (!ref_image_b64)      return err("Missing ref_image_b64", 400);
 
-    const pages = story.book.pages;
-    const pg = pages.find(p => p.page === page);
+    const pages     = story.book.pages;
+    const pg        = pages.find(p => p.page === page);
     if (!pg) return err(`Page ${page} not found`, 404);
 
-    const heroName = story.book.bible?.main_character?.name || "Hero";
+    const frames    = plan?.plan || [];
+    const frame     = frames.find(f => f.page === page) || {};
+    const pageCount = pages.length;
+    const heroName  = story.book.bible?.main_character?.name || "Hero";
 
-    const prompt = buildFramePrompt({
+    // Föregående sida (för textuell kontext)
+    const idx          = pages.findIndex(p => p.page === page);
+    const prevPg       = idx > 0 ? pages[idx - 1] : null;
+    const prevSceneEn  = prevPg ? (prevPg.scene_en || prevPg.scene || prevPg.text || "") : "";
+
+    // Bas-prompt med all stil/identitet/wardrobe från din centrala helper:
+    const basePrompt = buildFramePrompt({
       style,
       story,
       page: pg,
+      pageCount,
+      frame,
       characterName: heroName,
       wardrobe_signature: deriveWardrobeSignature(story),
       coherence_code,
     });
 
-    // BYGG TRINITY-PAYLOAD
-    // Ordningen är viktig för prompten (A, B, C)
-    const imageParts = [];
-    
-    // A: Hjälten
-    imageParts.push(ref_image_b64);
-    
-    // B: Miljön (Om vi har en referens för denna plats, skicka den)
-    if (location_ref_b64) {
-       imageParts.push(location_ref_b64);
-    }
+    // Extra block som binder ihop med föregående bild/scen
+    const continuation = [
+      "This illustration continues directly from the previous scene in the same story.",
+      prevSceneEn ? `PREVIOUS_SCENE_EN: ${prevSceneEn}` : "",
+      "Use the previous image only as a visual guide for style, lighting and character identity.",
+      "Do NOT copy it. Imagine this as new scene in the same story.",
+      "The main hero must remain 100% consistent with the reference image(image A) and previous image(image B).",
+    ].filter(Boolean).join("\n");
 
-    // C: Stilen (Om den finns)
-    if (style_ref_b64) {
-       imageParts.push(style_ref_b64);
-    }
+    const prompt = [
+      basePrompt,        // ← all stil + SCENE_EN + anti-mutation
+      continuation,      // ← föregående scen + “fortsättning”-logik
+    ].join("\n\n");
 
-    // Skicka till Gemini
     const payload = {
       prompt,
-      character_ref_b64: ref_image_b64, // Behåller denna prop för bakåtkompatibilitet i din helper
-      style_refs_b64: imageParts, // Vi hijackar style_refs_b64 för att skicka alla våra bilder
+      character_ref_b64: ref_image_b64,                      // 1: referens
+      prev_b64,                                              // 2: föregående bild
       coherence_code: coherence_code || makeCoherenceCode(story),
     };
+
+    if (Array.isArray(style_refs_b64) && style_refs_b64.length) {
+      payload.style_refs_b64 = style_refs_b64;
+    }
+
+    // (Valfritt extra: ge modellen en mjuk style-hint också)
+    // payload.guidance = styleHint(style);
 
     const g = await geminiImage(env, payload, 75000, 3);
     if (!g?.image_url) return err("No image from Gemini", 502);
@@ -3157,9 +3200,6 @@ export default {
       }
       if (req.method === "POST" && pathname === "/api/cover") {
         return await handleCover(req, env);
-      }
-      if (req.method === "POST" && pathname === "/api/assets") {
-        return await handleAssets(req, env);
       }
 
       // 7) PDF build & storage
