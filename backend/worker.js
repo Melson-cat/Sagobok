@@ -1111,42 +1111,35 @@ function buildFramePrompt({
   const category = story?.book?.category || "kids";
   const isPet    = category.toLowerCase() === "pets";
 
-  const bible    = story?.book?.bible || {};
-  const hero     = bible.main_character || {};
-  const age      = hero?.age || 5;
-  const coh      = coherence_code || makeCoherenceCode(story);
+  const wardrobe = story?.book?.bible?.wardrobe
+    ? (Array.isArray(story.book.bible.wardrobe)
+        ? story.book.bible.wardrobe.join(", ")
+        : story.book.bible.wardrobe)
+    : wardrobe_signature || "consistent outfit";
 
-  // Wardrobe: ta från bible om det finns, annars signature
-  const wardrobe = bible?.wardrobe
-    ? (Array.isArray(bible.wardrobe)
-        ? bible.wardrobe.join(", ")
-        : bible.wardrobe)
-    : (wardrobe_signature || "consistent outfit");
+  const age = story?.book?.bible?.main_character?.age || 5;
+  const coh = coherence_code || makeCoherenceCode(story);
 
-  // Försök plocka hårfärg ur physique (om texten har det)
-  const hairMatch = (hero?.physique || "").match(/\b(blond|blonde|brown|black|dark|light|red|ginger)\b/i);
-  const hairCue   = hairMatch ? ` Hair color: ${hairMatch[0].toLowerCase()}.` : "";
-
-  // 1) IDENTITET – super-tydlig, som i cover
+  // 🔒 IDENTITET – SUPER TYDLIGT
   const identity = isPet
     ? [
-        `IDENTITY: The main hero is the SAME ANIMAL as in the reference image (${characterName}).`,
-        `Match species, breed, fur color, markings and proportions EXACTLY.`,
-        `Do NOT redesign the animal. No extra limbs. Never turn the hero into a human.`,
-        `If any written description disagrees with the reference image, ALWAYS FOLLOW the reference image for identity.`
+        `IDENTITY (IMAGE A): The main hero is the SAME ANIMAL as in the reference image (${characterName}).`,
+        `Match species, breed, fur color, markings, face shape and proportions EXACTLY.`,
+        `Do NOT change the animal's face, body type, or markings. No extra limbs. No human traits.`,
+        `If the written description and the reference image disagree, ALWAYS follow the reference image for identity.`
       ].join(" ")
     : [
-        `IDENTITY: The main hero is the SAME CHILD as in the reference image (${characterName}).`,
-        `Age ≈ ${age}. Use clear CHILD proportions only (no teen/adult anatomy).`,
-        `Follow the reference EXACTLY: same face structure, skin tone, hairstyle and hair length.${hairCue}`,
-        `Do NOT change hair color or length. Do NOT add makeup. No second copy of the hero in the same frame.`,
-        `If any written description disagrees with the reference image, ALWAYS FOLLOW the reference image for identity and body type.`
+        `IDENTITY (IMAGE A): The main hero is the SAME CHILD as in the reference image (${characterName}).`,
+        `Match face structure, eyes, nose, mouth, hairstyle and hair length EXACTLY.`,
+        `Age ≈ ${age}. Use clear CHILD proportions only – never teen or adult anatomy.`,
+        `Do NOT beautify with makeup or mature features. No duplicates. No extra limbs.`,
+        `If the written description and the reference image disagree, ALWAYS follow the reference image for identity and body type.`
       ].join(" ");
 
-  // 2) WARDROBE – identisk på alla sidor
-  const wardrobeLine = `WARDROBE: The hero MUST wear: ${wardrobe}. Keep the SAME outfit and base colors on every page. Do NOT redesign or recolor the clothes.`;
+  // 👕 WARDROBE – lika hårt här
+  const wardrobeLine = `WARDROBE: The hero MUST wear: ${wardrobe}. Do NOT change garment type, main colors, or patterns between pages.`;
 
-  // 3) SCENBLOCK – vad som faktiskt händer här
+  // 🎬 SCEN – håll den tydlig och tidig
   const sceneBlock = [
     page.scene_en ? `SCENE_EN: ${page.scene_en}` : "",
     page.camera    ? `CAMERA_HINT: ${page.camera}` : "",
@@ -1156,23 +1149,26 @@ function buildFramePrompt({
     page.weather   ? `WEATHER: ${page.weather}` : "",
   ].filter(Boolean).join("\n");
 
-  // 4) CINEMATIK / KONTINUITET
-  const cinematic = [
-    `This is an INTERIOR PAGE illustration for a children's picture book.`,
-    `Draw the NEXT moment in the story, not a copy of the previous frame.`,
-    `You will change pose, camera angle and background to match the scene,`,
-    `but the hero's FACE, HAIR, BODY TYPE and OUTFIT must stay 100% consistent with the reference image.`
+  // 📽️ KONTINUITET – säg tydligt vad IMAGE B får och inte får göra
+  const continuity = [
+    `CONTINUITY (IMAGE B): You also receive the previous page image as context.`,
+    `Use IMAGE B ONLY for global style, lighting and environment continuity.`,
+    `Do NOT copy the composition of IMAGE B. Do NOT let IMAGE B override the identity from IMAGE A.`,
+    `This frame is the NEXT moment in the same movie, not a redraw of the previous frame.`
   ].join(" ");
+
+  const cinematic = `GENERAL: This is a single film frame from a children's storybook movie. No text, no logos, no speech bubbles.`;
 
   return [
     `STYLE: ${styleGuard(style)}`,
     identity,
     wardrobeLine,
     sceneBlock,
+    continuity,
     cinematic,
-    `NO TEXT OR LOGOS in the image.`,
-    `COHERENCE_CODE:${coh}`,
-  ].join("\n");
+    `NO TEXT OR LETTERS.`,
+    `COHERENCE_CODE: ${coh}`,
+  ].join("\n\n");
 }
 
 
