@@ -684,7 +684,7 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
   const key = env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY missing");
   const url =
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key="+
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key="+
     encodeURIComponent(key);
 
   // Build the "full" parts once
@@ -759,7 +759,7 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts: partsForStage(i) }],
-          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.4, topP: 0.7 },
+          generationConfig: { temperature: 0.4, topP: 0.7 },
         }),
         signal: ctl.signal,
       });
@@ -1111,6 +1111,7 @@ function buildFramePrompt({
   const category = story?.book?.category || "kids";
   const isPet    = category.toLowerCase() === "pets";
 
+  // 1. Hämta garderob (prioritera "Bibeln")
   const wardrobe = story?.book?.bible?.wardrobe
     ? (Array.isArray(story.book.bible.wardrobe)
         ? story.book.bible.wardrobe.join(", ")
@@ -1120,57 +1121,89 @@ function buildFramePrompt({
   const age = story?.book?.bible?.main_character?.age || 5;
   const coh = coherence_code || makeCoherenceCode(story);
 
-  // 🔒 IDENTITET – SUPER TYDLIGT
-  const identity = isPet
+  // 2. DEFINIERA INPUTS (Meta-instruktion för modellen)
+  // Detta hjälper modellen att skilja på "Vem" och "Var".
+  const inputGuide = [
+    `*** INPUT GUIDE ***`,
+    `You have received TWO images and this text prompt.`,
+    `IMAGE 1 (First Image): The "Master Identity Reference" (Visual Truth).`,
+    `IMAGE 2 (Second Image): The "Previous Scene" (Context/Continuity).`,
+    `TEXT (Below): The script for the NEW scene you must create.`,
+  ].join("\n");
+
+  // 3. IDENTITET (Baserat på Bild 1)
+  const identitySection = isPet
     ? [
-        `IDENTITY (IMAGE A): The main hero is the SAME ANIMAL as in the reference image (${characterName}).`,
-        `Match species, breed, fur color, markings, face shape and proportions EXACTLY.`,
-        `Do NOT change the animal's face, body type, or markings. No extra limbs. No human traits.`,
-        `If the written description and the reference image disagree, ALWAYS follow the reference image for identity.`
-      ].join(" ")
+        `*** 1. IDENTITY (Source: IMAGE 1) ***`,
+        `Target: A pet animal named ${characterName}.`,
+        `CRITICAL: You must match the animal in IMAGE 1 exactly.`,
+        `- Same species, breed, and fur pattern.`,
+        `- Same distinct markings and eye color.`,
+        `- NO human traits. NO extra limbs.`,
+        `Rule: If IMAGE 1 and text differ, IMAGE 1 is the truth for physical appearance.`
+      ].join("\n")
     : [
-        `IDENTITY (IMAGE A): The main hero is the SAME CHILD as in the reference image (${characterName}).`,
-        `Match face structure, eyes, nose, mouth, hairstyle and hair length EXACTLY.`,
-        `Age ≈ ${age}. Use clear CHILD proportions only – never teen or adult anatomy.`,
-        `Do NOT beautify with makeup or mature features. No duplicates. No extra limbs.`,
-        `If the written description and the reference image disagree, ALWAYS follow the reference image for identity and body type.`
-      ].join(" ");
+        `*** 1. IDENTITY (Source: IMAGE 1) ***`,
+        `Target: A child named ${characterName}, age approx ${age}.`,
+        `CRITICAL: You must match the child in IMAGE 1 exactly.`,
+        `- Same face shape, eye shape/color, nose, and mouth.`,
+        `- Same hair color, length, and style.`,
+        `- Child proportions only. Do NOT make them look like a teen or adult.`,
+        `Rule: If IMAGE 1 and text differ, IMAGE 1 is the truth for physical appearance.`
+      ].join("\n");
 
-  // 👕 WARDROBE – lika hårt här
-  const wardrobeLine = `WARDROBE: The hero MUST wear: ${wardrobe}. Do NOT change garment type, main colors, or patterns between pages.`;
+  // 4. GARDEROB (Text-låsning)
+  const wardrobeSection = [
+    `*** 2. WARDROBE (Strict Text Rule) ***`,
+    `The hero MUST wear: ${wardrobe}.`,
+    `Do NOT change garment type, colors, or patterns unless the Scene Description explicitly says so (e.g. pajamas).`,
+    `Keep this outfit consistent with the character's identity.`
+  ].join("\n");
 
-  // 🎬 SCEN – håll den tydlig och tidig
-  const sceneBlock = [
-    page.scene_en ? `SCENE_EN: ${page.scene_en}` : "",
-    page.camera    ? `CAMERA_HINT: ${page.camera}` : "",
-    page.action_visual ? `ACTION: ${page.action_visual}` : "",
+  // 5. KONTINUITET (Baserat på Bild 2)
+  const continuitySection = [
+    `*** 3. CONTINUITY (Source: IMAGE 2) ***`,
+    `Use IMAGE 2 to understand the ongoing visual style, lighting atmosphere, and environment details.`,
+    `INSTRUCTION:`,
+    `- The story has moved forward.`,
+    `- The character has moved / changed pose.`,
+    `- The camera angle MUST be different from Image 2.`,
+    `Goal: A new frame that looks like it belongs in the same movie, just a few seconds/minutes later.`
+  ].join("\n");
+
+  // 6. SCEN (Det nya innehållet)
+  const sceneSection = [
+    `*** 4. NEW SCENE SPECIFICATION ***`,
+    page.scene_en ? `VISUAL DESCRIPTION: ${page.scene_en}` : "",
+    page.action_visual ? `ACTION: ${page.action_visual}` : "Standing in the scene.",
+    page.camera    ? `CAMERA ANGLE: ${page.camera}` : "Cinematic, dynamic angle.",
     page.location  ? `LOCATION: ${page.location}` : "",
-    page.time_of_day ? `TIME_OF_DAY: ${page.time_of_day}` : "",
+    page.time_of_day ? `LIGHTING/TIME: ${page.time_of_day}` : "",
     page.weather   ? `WEATHER: ${page.weather}` : "",
   ].filter(Boolean).join("\n");
 
-  // 📽️ KONTINUITET – säg tydligt vad IMAGE B får och inte får göra
-  const continuity = [
-    `CONTINUITY (IMAGE B): You also receive the previous page image as context.`,
-    `Use IMAGE B ONLY for global style, lighting and environment continuity.`,
-    `Do NOT copy the composition of IMAGE B. Do NOT let IMAGE B override the identity from IMAGE A.`,
-    `This frame is the NEXT moment in the same movie, not a redraw of the previous frame.`
-  ].join(" ");
-
-  const cinematic = `GENERAL: This is a single film frame from a children's storybook movie. No text, no logos, no speech bubbles.`;
+  // 7. STIL & SLUTKLÄM
+  const styleSection = [
+    `*** 5. STYLE & FORMAT ***`,
+    `Art Style: ${styleGuard(style)}`,
+    `Format: Square (1:1).`,
+    `No text, no speech bubbles, no blurred edges.`,
+    `Render a high-quality, finished illustration.`
+  ].join("\n");
 
   return [
-    `STYLE: ${styleGuard(style)}`,
-    identity,
-    wardrobeLine,
-    sceneBlock,
-    continuity,
-    cinematic,
-    `NO TEXT OR LETTERS.`,
-    `COHERENCE_CODE: ${coh}`,
+    inputGuide,
+    "---",
+    identitySection,
+    wardrobeSection,
+    continuitySection,
+    "---",
+    sceneSection,
+    "---",
+    styleSection,
+    `COHERENCE_ID: ${coh}`
   ].join("\n\n");
 }
-
 
 
 function buildCoverPrompt({ style, story, characterName, wardrobe_signature, coherence_code }) {
