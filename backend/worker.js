@@ -684,7 +684,7 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
   const key = env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY missing");
   const url =
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=" +
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key="+
     encodeURIComponent(key);
 
   // Build the "full" parts once
@@ -759,7 +759,7 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts: partsForStage(i) }],
-          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.4, topP: 0.7 },
+          generationConfig: {  temperature: 0.4, topP: 0.7 },
         }),
         signal: ctl.signal,
       });
