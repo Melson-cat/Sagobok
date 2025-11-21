@@ -883,7 +883,6 @@ REGLER:
 - Endast giltig JSON, inga kommentarer eller extra text.
 `;
 
-
 const STORY_SYS = `
 Du är ett kreativt team bestående av en FÖRFATTARE och en REGISSÖR som producerar en illustrerad barnbok.
 
@@ -897,7 +896,7 @@ INPUT: En outline (handling).
 • Exakt 16 sidor (pages 1–16).
 • Varje sida: 2–4 meningar i fältet "text".
 • Bygg berättelsen utifrån bokens tema och lärdom.
-• Max 2 sidor i samma miljö/scenografi, håll högt tempo igenom miljöer.
+• Max 2 sidor i samma miljö/scenografi.
 • Hjälten ska förekomma på nästan alla sidor (några få etableringsbilder är okej).
 
 
@@ -907,20 +906,35 @@ INPUT: En outline (handling).
 
 • Skapa en visuell plan (“bible”) och detaljerade bildinstruktioner för varje sida.
 • Se till att varje sida är visuellt distinkt (ny vinkel, tydlig rörelse i scenen).
+
+• "wardrobe" i bible MÅSTE vara en detaljerad, komma-separerad VISUELL beskrivning på engelska av hjälten:
+  - DÅLIGT: "Nice clothes suitable for winter."
+  - BRA: "Red wool knitted sweater, blue denim jeans, yellow rubber boots, red beanie hat."
+  - Denna sträng används direkt som prompt till bild-AI:n. Var konkret och konsekvent.
+
 • "scene_en" ska vara:
    – filmisk, konkret, levande  
-   – beskriva VISUELLA element (ingen dialog)  
-   – börja med hjälten i fokus (t.ex. "The little child Nova..." eller "The grey cat Lina...")
+   – beskriva VISUELLA element: miljö, ljus, stämning, handling, kroppsspråk  
+   – börja med hjälten i fokus (t.ex. "The little child Nova..." eller "The grey cat Lina...")  
+   – FÅR INTE beskriva hjältes ansikte, hårfärg, ögonfärg eller kroppstyp (det styrs av referensbilden).
+
+  Exempel (BRA):  
+  "The little child Nova runs along a narrow forest path, fallen leaves swirling around their boots as warm evening light filters through the trees."
+
+  Exempel (DÅLIGT – UNDVIK):  
+  "A blonde girl with blue eyes stands in the forest."  // Beskriver utseende → förbjudet
+
 • Fältet "camera" i varje sida ska vara EN enkel kamera-hint, vald ur denna lista:
    "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
   (Ingen annan text i "camera".)
-• En separat filmspråkscoach kommer senare att normalisera kameraval, så REGISSÖREN ska bara välja EN hint per sida.
-• "wardrobe" i bible måste vara en specifik outfit som används identiskt på alla sidor för hjälten.
+
+• "action_visual" ska kort beskriva vad hjälten GÖR fysiskt i bilden (t.ex. "running fast", "hugging the dog", "looking up at the stars").
+
 • Om en birolls-karaktär förekommer på 3 eller fler sidor:
    – Lägg in den i "bible.secondary_characters" med namn, roll, relation till hjälten,
-     fysik, igenkänningstecken (identity_keys) och typisk klädsel.
+     fysik, igenkänningstecken (identity_keys) och typisk klädsel (wardrobe).
    – Se till att samma visuella detaljer (ansikte, kroppstyp, hår, färger, kläder) upprepas konsekvent i alla scener där karaktären förekommer.
-• I varje sida där en birolls-karaktär är med ska "scene" och "scene_en" nämna dem vid namn och tydligt beskriva hur de ser ut och vad de gör,
+• I varje sida där en birolls-karaktär är med ska "scene" och "scene_en" nämna dem vid namn och tydligt beskriva vad de GÖR och hur de syns i scenen,
   utan att ta bort fokus från hjälten.
 
 
@@ -947,7 +961,7 @@ INPUT: En outline (handling).
 
 • Varje sida ska innehålla:
    - "scene" (svenska, kort scenbeskrivning med hjälten först)
-   - "scene_en" (engelsk, filmisk prompt med hjälten först)
+   - "scene_en" (engelsk, filmisk prompt med hjälten först – UTAN fysiskt utseende)
    - "camera" (EN av: "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder")
    - "action_visual" (vad hjälten gör fysiskt i bilden)
    - "location"
@@ -981,15 +995,15 @@ INPUT: En outline (handling).
       "secondary_characters": [
         {
           "name": string,
-          "role": string,               // t.ex. "bästa vän", "mamma", "granne"
-          "relation_to_hero": string,   // kort relation, t.ex. "storebror", "lärare"
-          "physique": string,           // kroppstyp, längd, kroppsform
-          "identity_keys": string[],    // detaljer för igenkänning: hår, glasögon, ärr, etc.
-          "wardrobe": string            // typisk outfit som ska vara konsekvent
+          "role": string,
+          "relation_to_hero": string,
+          "physique": string,
+          "identity_keys": string[],
+          "wardrobe": string
         }
       ],
-      "wardrobe": string,               // Hjältens outfit – används på ALLA sidor.
-      "palette": string[],              // Färger/färgpalett för boken, t.ex. ["blue", "yellow", "soft green"].
+      "wardrobe": string,               // Hjältens outfit – komma-separerad engelsk beskrivning.
+      "palette": string[],
       "world": string,
       "tone": string
     },
@@ -1019,7 +1033,7 @@ INPUT: En outline (handling).
 • Exakt 16 sidor (pages 1–16).
 • 2–4 meningar i "text" per sida.
 • Varje sida ska vara visuellt unik (ny vinkel, ny eller utvecklad handling).
-• "scene_en" ska alltid börja med hjälten i fokus.
+• "scene_en" ska alltid börja med hjälten i fokus och får INTE beskriva hjältes ansikte/hår/kroppstyp.
 • "camera" måste vara en av: "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
 • Om en birolls-karaktär är återkommande (3+ sidor) måste den finnas i bible.secondary_characters och avbildas konsekvent.
 • Inga meta-kommentarer, inga instruktioner till läsaren.
@@ -1144,14 +1158,20 @@ function buildFramePrompt({
       ].join("\n")
     : [
         `*** 1. IDENTITY (Source: IMAGE 1) ***`,
-        `Target: A child named ${characterName}, age approx ${age}.`,
-        `CRITICAL: You must match the child in IMAGE 1 exactly.`,
-        `- Same face shape, eye shape/color, nose, and mouth.`,
-        `- Same hair color, length, and style.`,
-        `- Child proportions only. Do NOT make them look like a teen or adult.`,
-        `Rule: If IMAGE 1 and text differ, IMAGE 1 is the truth for physical appearance.`
-      ].join("\n");
-
+  `Target: A child named ${characterName}, approximately ${age} years old.`,
+  `CRITICAL: You must match the child in IMAGE 1 EXACTLY. Do NOT let the selected style ("${style}") override the child's real appearance!`,
+  `Match the following physical traits with perfect accuracy:`,
+  `- Face shape (same jaw, cheeks, chin).`,
+  `- Eyes (same shape, spacing, size, and color).`,
+  `- Nose (same form and proportions).`,
+  `- Mouth and lips (same shape, fullness, proportions).`,
+  `- Hair (same color, length, texture, parting, and style).`,
+  `- Skin tone (must match IMAGE 1 exactly).`,
+  `- Body type and proportions (clear CHILD proportions, never teen/adult).`,
+  ``,
+  `ABSOLUTE RULE: If IMAGE 1 and any text description conflict,`,
+  `→ IMAGE 1 is the ONLY source of truth for physical appearance.`,
+].join("\n");
   // 4. GARDEROB (Text-låsning)
   const wardrobeSection = [
     `*** 2. WARDROBE (Strict Text Rule) ***`,
@@ -1168,7 +1188,7 @@ function buildFramePrompt({
     `- The story has moved forward.`,
     `- The character has moved / changed pose.`,
     `- The camera angle MUST be different from Image 2.`,
-    `Goal: A new frame that looks like it belongs in the same movie, just a few seconds/minutes later.`
+    `Goal: A new frame that looks like it belongs in the same movie, but as a new scene, later.`
   ].join("\n");
 
   // 6. SCEN (Det nya innehållet)
