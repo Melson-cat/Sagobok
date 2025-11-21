@@ -38,7 +38,7 @@ export const DEFAULT_BLEED_MM = 3;
 
 
 /* ------------------------------ Globals ------------------------------ */
-const OPENAI_MODEL = "gpt-4o-mini";
+const OPENAI_MODEL = "gpt-4o";
 
 /* ------------------------------- CORS -------------------------------- */
 const CORS = {
@@ -841,7 +841,6 @@ Du får i user-meddelandet:
 - Hjältens typ (barn eller husdjur)
 - Namn, ålder (om barn), och det övergripande temat för boken.
 
-
 DIN UPPGIFT:
 Skapa en engagerande outline för en bilderbok.
 
@@ -874,10 +873,10 @@ REGLER:
 - Om category = "kids":
   - hero.kind = "child"
   - hero.species = null
-  - hero.age = barnets ungefärliga ålder (t.ex. 5, 6, 7)
+  - hero.age = barnets ungefärliga ålder (t.ex. 5, 6, 7).
 - Om category = "pets":
   - hero.kind = "pet"
-  - hero.species = ett enkelt engelskt ord, t.ex. "cat", "dog", "rabbit"
+  - hero.species = ett enkelt engelskt ord, t.ex. "cat", "dog", "rabbit".
   - hero.age kan vara null eller uppskattad (om det passar).
 - Storyn ska vara engagerande, händelserik och utgå ifrån det önskade temat.
 - Dispositionen ska gå att utveckla till ca 16 sidor i en bilderbok.
@@ -893,24 +892,37 @@ INPUT: En outline (handling).
 ===========================
  FÖRFATTAREN – DITT UPPDRAG
 ===========================
+
 • Skriv en engagerande saga på svenska.
 • Exakt 16 sidor (pages 1–16).
 • Varje sida: 2–4 meningar i fältet "text".
 • Bygg berättelsen utifrån bokens tema och lärdom.
 • Max 2 sidor i samma miljö/scenografi.
-• Hjälten ska förekomma på nästan alla sidor.
+• Hjälten ska förekomma på nästan alla sidor (några få etableringsbilder är okej).
+
 
 ===========================
  REGISSÖREN – DITT UPPDRAG
 ===========================
+
 • Skapa en visuell plan (“bible”) och detaljerade bildinstruktioner för varje sida.
-• Varje sida ska vara visuellt distinkt.
+• Se till att varje sida är visuellt distinkt (ny vinkel, tydlig rörelse i scenen).
 • "scene_en" ska vara:
-   – filmisk, konkret, levande
-   – beskriva VISUELLA element (ingen dialog)
-   – börja med hjälten i fokus
-• Variera kameravinklarna ofta ("Low angle", "Wide shot", "Close-up" etc).
-• "wardrobe" i bible måste vara en specifik outfit som används identiskt på alla sidor.
+   – filmisk, konkret, levande  
+   – beskriva VISUELLA element (ingen dialog)  
+   – börja med hjälten i fokus (t.ex. "The little child Nova..." eller "The grey cat Lina...")
+• Fältet "camera" i varje sida ska vara EN enkel kamera-hint, vald ur denna lista:
+   "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
+  (Ingen annan text i "camera".)
+• En separat filmspråkscoach kommer senare att normalisera kameraval, så REGISSÖREN ska bara välja EN hint per sida.
+• "wardrobe" i bible måste vara en specifik outfit som används identiskt på alla sidor för hjälten.
+• Om en birolls-karaktär förekommer på 3 eller fler sidor:
+   – Lägg in den i "bible.secondary_characters" med namn, roll, relation till hjälten,
+     fysik, igenkänningstecken (identity_keys) och typisk klädsel.
+   – Se till att samma visuella detaljer (ansikte, kroppstyp, hår, färger, kläder) upprepas konsekvent i alla scener där karaktären förekommer.
+• I varje sida där en birolls-karaktär är med ska "scene" och "scene_en" nämna dem vid namn och tydligt beskriva hur de ser ut och vad de gör,
+  utan att ta bort fokus från hjälten.
+
 
 ===========================
    KATEGORI-REGLER (KRITISKT)
@@ -918,34 +930,39 @@ INPUT: En outline (handling).
 
 1) category = "kids"
    • Hjälten är ett mänskligt barn genom hela berättelsen.
-   • I svenska scener: "det lilla barnet [Namn]".
-   • I scene_en: "the little child [Name]".
+   • I svenska scener: beskriv hjälten som "det lilla barnet [Namn]".
+   • I scene_en: använd "the little child [Name]".
    • Ingen förvandling till djur, tonåring eller vuxen.
 
 2) category = "pets"
    • Hjälten är ett husdjur genom hela berättelsen.
-   • I svenska scener: art + namn (t.ex. "katten Lina").
-   • I scene_en: art + namn (t.ex. "the cat Lina").
+   • I svenska scener: använd art + namn (t.ex. "katten Lina").
+   • I scene_en: använd art + namn (t.ex. "the cat Lina", "the little dog Max").
    • Ingen förvandling till människa.
+
 
 ===========================
    VISUELLA REGLER (ALLMÄNT)
 ===========================
+
 • Varje sida ska innehålla:
-   - "scene" (svenska)
-   - "scene_en" (engelska, filmisk prompt)
-   - "camera"
-   - "action_visual"
+   - "scene" (svenska, kort scenbeskrivning med hjälten först)
+   - "scene_en" (engelsk, filmisk prompt med hjälten först)
+   - "camera" (EN av: "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder")
+   - "action_visual" (vad hjälten gör fysiskt i bilden)
    - "location"
    - "time_of_day" ("day" | "golden_hour" | "evening" | "night")
    - "weather" ("clear" | "cloudy" | "rain" | "snow")
-• Hjälten ska synas tydligt i scene_en.
-• Undvik dialog i prompts.
-• Scenerna och vinklarna ska skapa variation och rörelse.
+• Hjälten ska synas tydligt i "scene_en" (första meningen ska börja med hjälten).
+• Undvik dialog i prompts – beskriv endast det som syns.
+• Scenerna och vinklarna ska skapa variation och rörelse framåt i berättelsen.
+• Undvik att göra två helt identiska bildkompositioner; varje sida är ett nytt filmiskt ögonblick.
+
 
 ===========================
    JSON-STRUKTUR (OBLIGATORISKT)
 ===========================
+
 {
   "book": {
     "title": string,
@@ -961,7 +978,18 @@ INPUT: En outline (handling).
         "physique": string,
         "identity_keys": string[]
       },
-      "wardrobe": string,
+      "secondary_characters": [
+        {
+          "name": string,
+          "role": string,               // t.ex. "bästa vän", "mamma", "granne"
+          "relation_to_hero": string,   // kort relation, t.ex. "storebror", "lärare"
+          "physique": string,           // kroppstyp, längd, kroppsform
+          "identity_keys": string[],    // detaljer för igenkänning: hår, glasögon, ärr, etc.
+          "wardrobe": string            // typisk outfit som ska vara konsekvent
+        }
+      ],
+      "wardrobe": string,               // Hjältens outfit – används på ALLA sidor.
+      "palette": string[],              // Färger/färgpalett för boken, t.ex. ["blue", "yellow", "soft green"].
       "world": string,
       "tone": string
     },
@@ -983,19 +1011,23 @@ INPUT: En outline (handling).
   }
 }
 
+
 ===========================
    HÅRDA REGLER
 ===========================
-• Exakt 16 sidor.
+
+• Exakt 16 sidor (pages 1–16).
 • 2–4 meningar i "text" per sida.
-• Varje sida visuellt unik.
-• "scene_en" ska alltid beskriva hjälten först.
-• Inga meta-kommentarer.
-• Endast giltig JSON, inga extra fält.
+• Varje sida ska vara visuellt unik (ny vinkel, ny eller utvecklad handling).
+• "scene_en" ska alltid börja med hjälten i fokus.
+• "camera" måste vara en av: "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
+• Om en birolls-karaktär är återkommande (3+ sidor) måste den finnas i bible.secondary_characters och avbildas konsekvent.
+• Inga meta-kommentarer, inga instruktioner till läsaren.
+• Endast giltig JSON, inga extra fält utanför den specificerade strukturen.
 • "category" ska matcha användarens val.
 • Boken ska vara njutbar för både barn och vuxna.
-
 `;
+
 
 
 
@@ -2428,13 +2460,16 @@ async function handleRefImage(req, env) {
     // 1) Om kund bifogar ett foto – använd det rakt av som "golden reference"
     if (photo_b64) {
       const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
-      
+
       if (!b64 || b64.length < 64) {
         return err("Invalid photo_b64", 400);
       }
 
       // INGEN cleanup – maximal identitetsstabilitet
-      return ok({ ref_image_b64: b64, provider: "client" });
+      return ok({
+        ref_image_b64: b64,
+        provider: "client",
+      });
     }
 
     // 2) Om inget foto finns – generera en textbaserad referens via Gemini
@@ -2444,13 +2479,14 @@ async function handleRefImage(req, env) {
     return ok({
       ref_image_b64: g?.b64 || null,
       provider: g?.provider || "google",
-      image_url: g?.image_url || null
+      image_url: g?.image_url || null,
     });
 
   } catch (e) {
     return err(e?.message || "Ref generation failed", 500);
   }
 }
+
 
 
 
