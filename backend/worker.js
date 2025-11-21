@@ -2425,7 +2425,7 @@ async function handleRefImage(req, env) {
   try {
     const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
 
-    // 1) Om kund bifogar ett foto – validera det
+    // 1) Om kund bifogar ett foto – använd det rakt av som "golden reference"
     if (photo_b64) {
       const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
       
@@ -2433,34 +2433,11 @@ async function handleRefImage(req, env) {
         return err("Invalid photo_b64", 400);
       }
 
-      // 2) Kör en SAFE background-clean för maximal likhet
-      const cleanPrompt = [
-        `TASK: Clean the provided photo WITHOUT changing the person's identity.`,
-        `GOAL: Isolate the subject on a plain white or soft-neutral background.`,
-        `RULES:`,
-        `1. Preserve face, eyes, hair, skin tone, clothing EXACTLY.`,
-        `2. DO NOT redraw, stylize, or reinterpret anything.`,
-        `3. Use soft, neutral studio lighting.`,
-        `4. Keep pose and proportions identical.`,
-        `5. Only remove background and improve clarity.`,
-      ].join("\n");
-
-      const g = await geminiImage(env, {
-        prompt: cleanPrompt,
-        character_ref_b64: b64,
-        guidance: "Background cleanup only"
-      }, 80000, 2);
-
-      // If Gemini returns a cleaned version, use it; otherwise fallback to raw
-      if (g?.b64) {
-        return ok({ ref_image_b64: g.b64, provider: "google-cleanup" });
-      }
-
-      // Fallback: använd originalbilden
+      // INGEN cleanup – maximal identitetsstabilitet
       return ok({ ref_image_b64: b64, provider: "client" });
     }
 
-    // 3) Om inget foto finns – generera en textbaserad referens
+    // 2) Om inget foto finns – generera en textbaserad referens via Gemini
     const prompt = characterCardPrompt({ style, bible, traits });
     const g = await geminiImage(env, { prompt }, 70000, 2);
 
@@ -2474,6 +2451,7 @@ async function handleRefImage(req, env) {
     return err(e?.message || "Ref generation failed", 500);
   }
 }
+
 
 
 async function handleImagesBatch(req, env) {
