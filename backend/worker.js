@@ -38,7 +38,7 @@ export const DEFAULT_BLEED_MM = 3;
 
 
 /* ------------------------------ Globals ------------------------------ */
-const OPENAI_MODEL = "gpt-4o";
+const OPENAI_MODEL = "gpt-4o-mini";
 
 /* ------------------------------- CORS -------------------------------- */
 const CORS = {
@@ -897,7 +897,7 @@ INPUT: En outline (handling).
 • Exakt 16 sidor (pages 1–16).
 • Varje sida: 2–4 meningar i fältet "text".
 • Bygg berättelsen utifrån bokens tema och lärdom.
-• Max 2 sidor i samma miljö/scenografi.
+• Max 2 sidor i samma miljö/scenografi, håll högt tempo igenom miljöer.
 • Hjälten ska förekomma på nästan alla sidor (några få etableringsbilder är okej).
 
 
@@ -1100,7 +1100,6 @@ function deriveWardrobeSignature(story) {
   : `a ${base} sweater and ${accent} pants (keep the same outfit and base color on every page; do not redesign or recolor them)`;
 
 }
-
 function buildFramePrompt({
   style,
   story,
@@ -1112,35 +1111,58 @@ function buildFramePrompt({
   const category = story?.book?.category || "kids";
   const isPet    = category.toLowerCase() === "pets";
 
-  const wardrobe = story?.book?.bible?.wardrobe
-    ? (Array.isArray(story.book.bible.wardrobe)
-        ? story.book.bible.wardrobe.join(", ")
-        : story.book.bible.wardrobe)
-    : wardrobe_signature || "Consistent outfit";
+  const bible    = story?.book?.bible || {};
+  const hero     = bible.main_character || {};
+  const age      = hero?.age || 5;
+  const coh      = coherence_code || makeCoherenceCode(story);
 
-  const age = story?.book?.bible?.main_character?.age || 5;
-  const coh = coherence_code || makeCoherenceCode(story);
+  // Wardrobe: ta från bible om det finns, annars signature
+  const wardrobe = bible?.wardrobe
+    ? (Array.isArray(bible.wardrobe)
+        ? bible.wardrobe.join(", ")
+        : bible.wardrobe)
+    : (wardrobe_signature || "consistent outfit");
 
-  // IDENTITY — Gemini följer detta extremt bra om det är kort och rakt
+  // Försök plocka hårfärg ur physique (om texten har det)
+  const hairMatch = (hero?.physique || "").match(/\b(blond|blonde|brown|black|dark|light|red|ginger)\b/i);
+  const hairCue   = hairMatch ? ` Hair color: ${hairMatch[0].toLowerCase()}.` : "";
+
+  // 1) IDENTITET – super-tydlig, som i cover
   const identity = isPet
-    ? `IDENTITY: Same animal as reference (${characterName}). Keep species, breed, markings, fur color, and proportions EXACT. Never human-like. No extra limbs.`
-    : `IDENTITY: Same child as reference (${characterName}). Age ≈ ${age}. Child anatomy only. No teen/adult proportions. No duplicates. No extra limbs.`;
+    ? [
+        `IDENTITY: The main hero is the SAME ANIMAL as in the reference image (${characterName}).`,
+        `Match species, breed, fur color, markings and proportions EXACTLY.`,
+        `Do NOT redesign the animal. No extra limbs. Never turn the hero into a human.`,
+        `If any written description disagrees with the reference image, ALWAYS FOLLOW the reference image for identity.`
+      ].join(" ")
+    : [
+        `IDENTITY: The main hero is the SAME CHILD as in the reference image (${characterName}).`,
+        `Age ≈ ${age}. Use clear CHILD proportions only (no teen/adult anatomy).`,
+        `Follow the reference EXACTLY: same face structure, skin tone, hairstyle and hair length.${hairCue}`,
+        `Do NOT change hair color or length. Do NOT add makeup. No second copy of the hero in the same frame.`,
+        `If any written description disagrees with the reference image, ALWAYS FOLLOW the reference image for identity and body type.`
+      ].join(" ");
 
-  // WARDROBE — kort, klart, explicit
-  const wardrobeLine = `WARDROBE: The hero MUST wear: ${wardrobe}. Do NOT change garment type, colors, or patterns.`;
+  // 2) WARDROBE – identisk på alla sidor
+  const wardrobeLine = `WARDROBE: The hero MUST wear: ${wardrobe}. Keep the SAME outfit and base colors on every page. Do NOT redesign or recolor the clothes.`;
 
-  // SCENE — detta är extremt viktigt för Gemini, och ska ligga tidigt
+  // 3) SCENBLOCK – vad som faktiskt händer här
   const sceneBlock = [
     page.scene_en ? `SCENE_EN: ${page.scene_en}` : "",
-    page.camera    ? `CAMERA: ${page.camera}` : "",
+    page.camera    ? `CAMERA_HINT: ${page.camera}` : "",
     page.action_visual ? `ACTION: ${page.action_visual}` : "",
     page.location  ? `LOCATION: ${page.location}` : "",
-    page.time_of_day ? `TIME: ${page.time_of_day}` : "",
+    page.time_of_day ? `TIME_OF_DAY: ${page.time_of_day}` : "",
     page.weather   ? `WEATHER: ${page.weather}` : "",
   ].filter(Boolean).join("\n");
 
-  // CINEMATIC — Gemini är bra på detta, så vi håller den jättekort
-  const cinematic = `Do NOT replicate the previous frame. ALWAYS use a new camera angle. Natural progression to the next moment.`
+  // 4) CINEMATIK / KONTINUITET
+  const cinematic = [
+    `This is an INTERIOR PAGE illustration for a children's picture book.`,
+    `Draw the NEXT moment in the story, not a copy of the previous frame.`,
+    `You will change pose, camera angle and background to match the scene,`,
+    `but the hero's FACE, HAIR, BODY TYPE and OUTFIT must stay 100% consistent with the reference image.`
+  ].join(" ");
 
   return [
     `STYLE: ${styleGuard(style)}`,
@@ -1148,8 +1170,8 @@ function buildFramePrompt({
     wardrobeLine,
     sceneBlock,
     cinematic,
-    `NO TEXT.`,
-    `COHERENCE:${coh}`,
+    `NO TEXT OR LOGOS in the image.`,
+    `COHERENCE_CODE:${coh}`,
   ].join("\n");
 }
 
