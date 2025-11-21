@@ -1030,106 +1030,11 @@ INPUT: En outline (handling).
 
 
 
-
-async function getCameraHints(env, story) {
-  const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
-  if (!pages.length) return { shots: [] };
-
-  const prompt = `
-Du får en lista av sidors scener i en svensk bilderbok. Föreslå en kamera-/bildhint per sida
-som hjälper en bild-AI variera kompositionen utan att byta stil/identitet.
-
-Tillåtna hints (välj 1 per sida): "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
-
-Returnera EXAKT:
-{ "shots": [ { "page": number, "shot": string } ] }
-
-SCENER (sv + ev. eng):
-${JSON.stringify(pages.map(p => ({
-  page: p.page,
-  scene: p.scene || "",
-  scene_en: p.scene_en || "",
-  location: p.location || "",
-  time_of_day: p.time_of_day || "",
-  weather: p.weather || ""
-})))}
-`.trim();
-
-  // Svarar som JSON (vi har redan openaiJSON helper)
-  try {
-    const j = await openaiJSON(env,
-      "Du är en filmspråkscoach. Returnera ENDAST giltig JSON i exakt efterfrågat format.",
-      prompt
-    );
-    const shots = Array.isArray(j?.shots) ? j.shots : [];
-    // Liten sanering
-    const allowed = new Set(["wide","medium","close-up","low-angle","high-angle","over-the-shoulder"]);
-    return { shots: shots.filter(x => Number.isFinite(x?.page) && allowed.has(String(x?.shot || "").toLowerCase())) };
-  } catch {
-    return { shots: [] };
-  }
-}
-
 function heroDescriptor({ category, name, age, traits }) {
   if ((category || "kids") === "pets")
     return `HJÄLTE: ett husdjur vid namn ${name || "Nova"}; egenskaper: ${traits || "nyfiken, lekfull"}.`;
   const a = parseInt(age || 6, 10);
   return `HJÄLTE: ett barn vid namn ${name || "Nova"} (${a} år), egenskaper: ${traits || "modig, omtänksam"}.`;
-}
-
-
-
-function normalizePlan(pages, shotsHints = []) {
-  const out = [];
-  const fallbackOrder = ["EW", "M", "CU", "W"]; // om inga hints
-  const hintByPage = new Map(shotsHints.map(s => [s.page, String(s.shot).toLowerCase()]));
-
-  function mapHintToFrame(hint) {
-    switch (hint) {
-      case "wide":                return { shot_type: "W",  lens_mm: 35, subject_size_percent: 35, camera_hint: "wide" };
-      case "medium":              return { shot_type: "M",  lens_mm: 50, subject_size_percent: 60, camera_hint: "medium" };
-      case "close-up":            return { shot_type: "CU", lens_mm: 85, subject_size_percent: 80, camera_hint: "close-up" };
-      case "low-angle":           return { shot_type: "M",  lens_mm: 40, subject_size_percent: 60, camera_hint: "low-angle" };
-      case "high-angle":          return { shot_type: "M",  lens_mm: 40, subject_size_percent: 60, camera_hint: "high-angle" };
-      case "over-the-shoulder":   return { shot_type: "M",  lens_mm: 50, subject_size_percent: 55, camera_hint: "over-the-shoulder" };
-      default:                    return null;
-    }
-  }
-
-  pages.forEach((p, i) => {
-    const hint = hintByPage.get(p.page);
-    const mapped = hint ? mapHintToFrame(hint) : null;
-    if (mapped) {
-      out.push({ page: p.page, ...mapped });
-    } else {
-      const t = fallbackOrder[i % fallbackOrder.length];
-      const lens = { EW: 28, W: 35, M: 50, CU: 85 }[t] || 35;
-      const size = { EW: 30, W: 45, M: 60, CU: 80 }[t] || 60;
-      out.push({ page: p.page, shot_type: t, lens_mm: lens, subject_size_percent: size });
-    }
-  });
-  return { plan: out };
-}
-
-
-function buildSeriesContext(story) {
-  const pages = story?.book?.pages || [];
-  const locs = [];
-  const beats = pages.map((p) => {
-    const key = (p.scene || p.text || "").replace(/\s+/g, " ").trim();
-    const lkey = key.toLowerCase().match(/(strand|skog|kök|sovrum|park|hav|stad|skola|gård|sjö|berg)/)?.[1] || "plats";
-    if (!locs.includes(lkey)) locs.push(lkey);
-    return `p${p.page}: ${key}`;
-  });
-  return [
-    `SERIES CONTEXT — title: ${story?.book?.title || "Sagobok"}`,
-    `locations: ${locs.join(", ")}`,
-    `beats: ${beats.join(" | ")}`,
-  ].join("\n");
-}
-function shotLine(f = {}) {
-  const map = { EW: "extra wide", W: "wide", M: "medium", CU: "close-up" };
-  return `${map[f.shot_type || "M"]} shot, ~${f.subject_size_percent || 60}% subject, ≈${f.lens_mm || 35}mm`;
 }
 
 /* ---------------------- Coherence + Wardrobe helpers ---------------------- */
@@ -2373,119 +2278,118 @@ function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
 }
 
 /** Genererar outline + story och derivat (kamera-hints, plan, koherenskod, garderobssignatur). */
+/** Genererar outline + story (inkl. bible/regi). Inga kamera-hints längre. */
 async function handleStory(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
     const {
       name,
       age,
-      pages,
+      pages,        // kan ignoreras eller användas, men vi låser ändå till 16
       category,
       style,
       theme,
       traits,
       reading_age,
+      extraCharacters = [] // ← från frontend, t.ex. [{ name, role, traits }]
     } = body || {};
 
-    // Läsålder: explicit reading_age > annars från barnets ålder > pets default 8
+    // 1) Läsålder
     const parsedRA = parseInt(reading_age, 10);
     const targetAge = Number.isFinite(parsedRA)
       ? parsedRA
-      : ((category || "kids") === "pets" ? 8 : parseInt(age || 6, 10));
+      : ((category || "kids") === "pets"
+          ? 8
+          : parseInt(age || 6, 10));
 
-    // 1) Outline
+    // 2) Huvudkaraktär + biroller som text
+    const mainChar = heroDescriptor({ category, name, age, traits });
+
+    const extrasText = Array.isArray(extraCharacters) && extraCharacters.length > 0
+      ? [
+          "BI-ROLLER (återkommande karaktärer):",
+          ...extraCharacters.map(c => {
+            const role = c.role || "vän/familjemedlem";
+            const t   = c.traits || "";
+            return `- ${c.name} (${role})${t ? ` – egenskaper: ${t}` : ""}`;
+          })
+        ].join("\n")
+      : "Inga tydligt definierade biroller angivna.";
+
+    // 3) OUTLINE – enkel, men med info om hjälte + tema + extra karaktärer
     const outlineUser = `
-${heroDescriptor({ category, name, age, traits })}
+${mainChar}
+${extrasText}
 Kategori: ${category || "kids"}.
 Läsålder: ${targetAge}.
-Önskat tema/poäng (om angivet): ${theme || "vänskap"}.
-Antal sidor: ${pages || 12}.
-Returnera enbart json.`.trim();
+Önskat tema/poäng: ${theme || "vänskap"}.
+Antal sidor (mål): 16.
+
+Skapa en engagerande outline för en bilderbok.
+Returnera ENDAST giltig JSON enligt OUTLINE-strukturen.
+`.trim();
 
     const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
 
-    // 2) Story (tvingar exakt JSON-format enligt STORY_SYS)
+    // 4) STORY – här slår vi fast allt: 16 sidor, bible, regi, biroller
     const storyUser = `
 OUTLINE:
-${JSON.stringify(outline)}
-Skriv en engagerande, händelserik saga som är rolig att läsa högt.
-Variera miljöer och visuella ögonblick mellan varje sida.
-${heroDescriptor({ category, name, age, traits })}
-Läsålder: ${targetAge}. **Sidor: 16**. Stil: ${style || "cartoon"}. Kategori: ${category || "kids"}.
-Returnera enbart JSON i exakt formatet.
+${JSON.stringify(outline, null, 2)}
+
+INSTRUKTIONER FÖR BOKEN:
+
+1) Använd OUTLINE som grund, men gör berättelsen mer detaljerad, händelserik och filmisk.
+2) Boken ska ha EXAKT 16 sidor (pages 1–16).
+3) FÖRFATTAREN:
+   - Skriv 2–4 meningar i "text" (svenska) per sida.
+   - Bygg berättelsen utifrån OUTLINE.theme och den övergripande lärdomen.
+4) REGISSÖREN:
+   - Du MÅSTE definiera en "bible" i JSON-objektet.
+   - I "bible.wardrobe": skriv en EXAKT, konsekvent outfit för hjälten på engelska.
+   - Om biroller förekommer på flera sidor, beskriv dem tydligt i scenerna
+     (utseende, ungefärlig klädsel, relation till hjälten) så att de kan ritas konsekvent.
+   - Lägg INTE till nya JSON-fält – använd endast den givna JSON-strukturen.
+   - Varje sida måste ha ifyllda fält: scene, scene_en, camera, action_visual, location,
+     time_of_day, weather.
+   - Variera kameravinklar ofta, men skriv dem direkt i "camera"-fältet per sida.
+
+5) BI-ROLLER:
+${extrasText}
+
+6) KATEGORI:
+   - category: ${category || "kids"}
+   - Läsålder: ${targetAge}
+   - Stil: ${style || "cartoon"}
+
+Returnera ENDAST giltig JSON enligt STORY_SYS-strukturen (fält och typer).
+Inga extra fält, inga kommentarer, ingen text utanför JSON.
 `.trim();
 
     const story = await openaiJSON(env, STORY_SYS, storyUser);
 
-    // 3) Fallback: fyll scene_en på sidor som saknar det (kort, visuell EN-beskrivning)
-    try {
-      const pgs = Array.isArray(story?.book?.pages) ? story.book.pages : [];
-      const needs = pgs.some(p => !p.scene_en || !String(p.scene_en).trim());
-      if (pgs.length && needs) {
-        const toTranslate = pgs.map(p => ({ page: p.page, sv: p.scene || p.text || "" }));
-        const t = await openaiJSON(
-          env,
-          "Du är en saklig översättare. Returnera endast giltig JSON.",
-          `Översätt följande scenangivelser till kort engelsk, visuell beskrivning (2–3 meningar, inga repliker).
-Returnera exakt: { "items":[{"page":number,"scene_en":string}, ...] } och inget mer.
-SVENSKA:
-${JSON.stringify(toTranslate)}`
-        );
-        const map = new Map((t?.items || []).map(x => [x.page, x.scene_en]));
-        story.book.pages = pgs.map(p => ({ ...p, scene_en: p.scene_en || map.get(p.page) || "" }));
-      }
-    } catch {
-      // Översättning är ”best effort”; fortsätt även om det fallerar
-    }
+    // 5) Garderob – läs från bible om den finns, annars derivat
+    const wardrobe_signature = story?.book?.bible?.wardrobe
+      ? (Array.isArray(story.book.bible.wardrobe)
+          ? story.book.bible.wardrobe.join(", ")
+          : story.book.bible.wardrobe)
+      : deriveWardrobeSignature(story);
 
-    // 4) Kamerahints → bildplan
-    const camHints = await getCameraHints(env, story);
-    const plan = normalizePlan(story?.book?.pages || [], camHints.shots);
-
-    // 5) Koherens & garderob
     const coherence_code = makeCoherenceCode(story);
-    const wardrobe_signature = deriveWardrobeSignature(story);
 
-    return ok({ outline, story, plan, coherence_code, wardrobe_signature });
+    // 6) Plan är tom – kameravinklar ligger nu inne i story.book.pages[x].camera
+    return ok({
+      outline,
+      story,
+      plan: { plan: [] },
+      coherence_code,
+      wardrobe_signature,
+    });
+
   } catch (e) {
     return err(e?.message || "Story generation failed", 500);
   }
 }
 
-/** Skapar referensbild (antingen från given data URL eller via Gemini). */
-async function handleRefImage(req, env) {
-  try {
-    const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
-
-    // 1) Om kund bifogar ett foto – använd det rakt av som "golden reference"
-    if (photo_b64) {
-      const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
-
-      if (!b64 || b64.length < 64) {
-        return err("Invalid photo_b64", 400);
-      }
-
-      // INGEN cleanup – maximal identitetsstabilitet
-      return ok({
-        ref_image_b64: b64,
-        provider: "client",
-      });
-    }
-
-    // 2) Om inget foto finns – generera en textbaserad referens via Gemini
-    const prompt = characterCardPrompt({ style, bible, traits });
-    const g = await geminiImage(env, { prompt }, 70000, 2);
-
-    return ok({
-      ref_image_b64: g?.b64 || null,
-      provider: g?.provider || "google",
-      image_url: g?.image_url || null,
-    });
-
-  } catch (e) {
-    return err(e?.message || "Ref generation failed", 500);
-  }
-}
 
 
 
