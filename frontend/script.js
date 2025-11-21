@@ -848,121 +848,115 @@ async function onSubmit(e) {
     state.ref_b64 = refData.ref_image_b64 || null;
     if (!state.ref_b64) throw new Error("Ingen referensbild kunde skapas.");
 
-    // 3) INTERIOR IMAGES — SEKVENSIELLT (sida för sida, med föregående bild som stil-ankare)
-setStatus("🎥 Lägger kameror & ljus…", 38);
+   // 3) INTERIOR IMAGES — SEKVENSIELLT (Kedjan)
+    setStatus("🎥 Spelar in scener (sida för sida)…", 38);
 
-let received = 0;
-let prevBareB64 = null; // för nästa sida
+    let received = 0;
+    let prevBareB64 = null; // Håller koll på föregående bild för kontinuitet
 
-for (const pg of pages) {
-  // visa skeleton om tom
-  const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${pg.page}"]`);
-  if (wrap && !wrap.querySelector("img")?.src) {
-    const sk = wrap.querySelector(".skeleton") || document.createElement("div");
-    sk.className = "skeleton";
-    if (!wrap.querySelector(".skeleton")) wrap.prepend(sk);
-  }
+    for (const pg of pages) {
+      // Visa skeleton om bilden saknas
+      const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${pg.page}"]`);
+      if (wrap && !wrap.querySelector("img")?.src) {
+        const sk = wrap.querySelector(".skeleton") || document.createElement("div");
+        sk.className = "skeleton";
+        if (!wrap.querySelector(".skeleton")) wrap.prepend(sk);
+      }
 
-  try {
-    const res = await fetch(`${API}/api/images/next`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        style: state.form.style,
-        story: state.story,
-        plan: state.plan,
-        page: pg.page,
-        ref_image_b64: state.ref_b64,
-        prev_b64: prevBareB64, // ← nyckeln som ger koherens
-      }),
-    });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok || j?.error || !j?.image_url) throw new Error(j?.error || `HTTP ${res.status}`);
+      try {
+        // ANROPET: Skicka med prev_b64 (om det finns)
+        const res = await fetch(`${API}/api/images/next`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            style: state.form.style,
+            story: state.story,
+            // plan: state.plan, // Behövs inte, styrs av storyn nu
+            page: pg.page,
+            ref_image_b64: state.ref_b64,
+            prev_b64: prevBareB64, // <--- HÄR ÄR KEDJAN
+          }),
+        });
+        
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || j?.error || !j?.image_url) throw new Error(j?.error || `HTTP ${res.status}`);
 
-    // visa direkt
-    fillCard(pg.page, j.image_url, "Gemini");
-    state.images_by_page.set(pg.page, { image_url: j.image_url });
+        // Visa bilden direkt
+        fillCard(pg.page, j.image_url, "Gemini");
+        state.images_by_page.set(pg.page, { image_url: j.image_url });
 
-    // för nästa sida: gör om till bare b64
-    const du = await urlToDataURL(j.image_url);
-    const bare = dataUrlToBareB64(du);
-    prevBareB64 = bare || null;
+        // VIKTIGT: Spara denna bild som "förra bilden" till nästa varv
+        const du = await urlToDataURL(j.image_url);
+        const bare = dataUrlToBareB64(du);
+        prevBareB64 = bare || null;
 
-    // ladda upp till CF direkt (ersätter batch senare)
-    if (du) {
-      const uploads = await uploadToCF([{ page: pg.page, data_url: du }]).catch(() => []);
-      const u = uploads?.find(x => x.page === pg.page);
-      if (u?.image_id) {
-        state.images_by_page.set(pg.page, { image_id: u.image_id, image_url: u.url });
-        fillCard(pg.page, u.url || j.image_url, "CF");
+        // Ladda upp till Cloudflare i bakgrunden
+        if (du) {
+          const uploads = await uploadToCF([{ page: pg.page, data_url: du }]).catch(() => []);
+          const u = uploads?.find(x => x.page === pg.page);
+          if (u?.image_id) {
+            state.images_by_page.set(pg.page, { image_id: u.image_id, image_url: u.url });
+            fillCard(pg.page, u.url || j.image_url, "CF");
+          }
+        }
+
+      } catch (err) {
+        console.error("page", pg.page, err);
+        if (wrap) {
+          wrap.querySelector(".skeleton")?.remove();
+          const fb = document.createElement("div");
+          fb.className = "img-fallback";
+          fb.textContent = "Kunde inte generera bild";
+          wrap.appendChild(fb);
+          wrap.parentElement.querySelector(".retry-wrap")?.classList.remove("hidden");
+        }
+      }
+
+      received++;
+      setStatus(`🎨 Målar sida ${received}/${pages.length}…`, 38 + (received / Math.max(1, pages.length)) * 32);
+    }
+
+    // 4) COVER (Omslag)
+    if (COVER_STRATEGY === "async") {
+      generateCoverAsync().catch(() => {});
+      setStatus("☁️ Laddar upp illustrationer…", 86);
+    } else if (COVER_STRATEGY === "sync") {
+      setStatus("🎨 Skapar omslag…", 84);
+      await generateCoverAsync();
+      setStatus("☁️ Laddar upp illustrationer…", 86);
+    } else {
+      setStatus("☁️ Laddar upp illustrationer…", 86);
+    }
+
+    // 5) SLUTLIG UPPLADDNING (Säkerställ att allt är på CF)
+    const items = [];
+    for (const p of pages) {
+      const row = state.images_by_page.get(p.page);
+      if (!row) continue;
+      if (row.image_id) continue; // Redan klart
+
+      const du = row.data_url || (row.image_url ? await urlToDataURL(row.image_url) : null);
+      if (du) items.push({ page: p.page, data_url: du });
+    }
+
+    if (items.length) {
+      const uploads = await uploadToCF(items);
+      const byPage = new Map();
+      for (const u of uploads) if (Number.isFinite(u.page)) byPage.set(u.page, u);
+
+      for (const p of pages) {
+        const u = byPage.get(p.page);
+        if (u?.image_id) {
+          state.images_by_page.set(p.page, { image_id: u.image_id, image_url: u.url });
+          fillCard(p.page, u.url || state.images_by_page.get(p.page)?.image_url || "", "CF");
+        }
       }
     }
 
-  } catch (err) {
-    console.error("page", pg.page, err);
-    if (wrap) {
-      wrap.querySelector(".skeleton")?.remove();
-      const fb = document.createElement("div");
-      fb.className = "img-fallback";
-      fb.textContent = "Kunde inte generera bild";
-      wrap.appendChild(fb);
-      wrap.parentElement.querySelector(".retry-wrap")?.classList.remove("hidden");
-    }
-  }
-
-  received++;
-  setStatus(`🎨 Målar sida ${received}/${pages.length}…`, 38 + (received / Math.max(1, pages.length)) * 32);
-}
-
-
-   // 4) COVER (icke-blockerande eller hoppa över)
-if (COVER_STRATEGY === "async") {
-  // Fire-and-forget – UI visar omslag när/om det hinner
-  generateCoverAsync().catch(() => {});
-  setStatus("☁️ Laddar upp illustrationer…", 86);
-} else if (COVER_STRATEGY === "sync") {
-  // Vill du blocka tills omslaget är klart:
-  setStatus("🎨 Skapar omslag…", 84);
-  await generateCoverAsync();
-  setStatus("☁️ Laddar upp illustrationer…", 86);
-} else {
-  // "skip": låt workern använda sida 1 som omslag
-  setStatus("☁️ Laddar upp illustrationer…", 86);
-}
-
-// 5) CLOUDFLARE IMAGES (alla sidor; omslaget läggs till separat)
-const items = [];
-for (const p of pages) {
-  const row = state.images_by_page.get(p.page);
-  if (!row) continue;
-
-  // SKIPPA om redan uppladdad (vi laddade ev. upp per sida tidigare)
-  if (row.image_id) continue;
-
-  const du = row.data_url || (row.image_url ? await urlToDataURL(row.image_url) : null);
-  if (du) items.push({ page: p.page, data_url: du });
-}
-
-if (items.length) {
-  const uploads = await uploadToCF(items);
-  const byPage = new Map();
-  for (const u of uploads) if (Number.isFinite(u.page)) byPage.set(u.page, u);
-
-  for (const p of pages) {
-    const u = byPage.get(p.page);
-    if (u?.image_id) {
-      state.images_by_page.set(p.page, { image_id: u.image_id, image_url: u.url });
-      fillCard(p.page, u.url || state.images_by_page.get(p.page)?.image_url || "", "CF");
-    }
-  }
-}
-
-
     stopQuips();
-  
-
     setStatus("✅ Klart! Förhandsvisning redo.", 100);
     els.pdfBtn && (els.pdfBtn.disabled = false);
+
   } catch (e) {
     console.error(e);
     stopQuips();

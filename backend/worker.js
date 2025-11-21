@@ -679,115 +679,106 @@ function reducePrompt(p, keepLines = 8) {
   const lines = p.split(/\r?\n/).filter(Boolean);
   return lines.slice(0, keepLines).join("\n");
 }
-
-async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
+async function geminiImage(env, item, timeoutMs = 90000, attempts = 3) {
   const key = env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY missing");
+  
+  // URL för Gemini 3 Pro Image Preview
   const url =
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key="+
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=" +
     encodeURIComponent(key);
 
-  // Build the "full" parts once
-  const baseParts = [];
-  if (item.character_ref_b64)
-    baseParts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
+  // 1. Bygg payload-delarna (Parts)
+  const parts = [];
 
-  if (item.prev_b64)
-    baseParts.push({ inlineData: { mimeType: "image/png", data: item.prev_b64 } });
+  // A. Identitetsbild (Master Reference) - Alltid först
+  if (item.character_ref_b64) {
+    parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
+  }
 
+  // B. Historik (Story Context) - Loopa igenom listan
+  if (Array.isArray(item.prev_images_b64)) { // Notera: heter prev_images_b64 i anropet från handleImagesNext
+    for (const imgB64 of item.prev_images_b64) {
+      // Enkel validering att det är en sträng
+      if (typeof imgB64 === "string" && imgB64.length > 100) {
+        parts.push({ inlineData: { mimeType: "image/png", data: imgB64 } });
+      }
+    }
+  } 
+  // Fallback för gammal kod (om bara en bild skickas som prev_b64)
+  else if (item.prev_b64) {
+    parts.push({ inlineData: { mimeType: "image/png", data: item.prev_b64 } });
+  }
+
+  // C. Stil-referenser (om de finns)
   if (Array.isArray(item.style_refs_b64)) {
     for (const b64 of item.style_refs_b64.slice(0, 3)) {
-      if (typeof b64 === "string" && b64.length > 64)
-        baseParts.push({ inlineData: { mimeType: "image/png", data: b64 } });
-    }
-  }
-
-  if (item.guidance) baseParts.push({ text: item.guidance });
-  if (item.coherence_code) baseParts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
-  baseParts.push({ text: item.prompt });
-
-  let last;
-
-  // Progressive backoffs per attempt (only triggered if 500/context issue)
-  function partsForStage(stage) {
-    // stage 0: full
-    if (stage === 0) return baseParts;
-
-    // stage 1: drop style refs + shorten prompt
-    if (stage === 1) {
-      const parts = [];
-      for (const p of baseParts) {
-        if (p.inlineData && p.inlineData.data === item.prev_b64) parts.push(p); // keep prev
-        else if (p.inlineData && p.inlineData.data === item.character_ref_b64) parts.push(p); // keep char ref
-        else if (p.text?.startsWith("COHERENCE_CODE:")) parts.push(p); // keep code
-        else if (typeof p.text === "string" && p.text === item.guidance) continue; // drop guidance
-        else if (typeof p.text === "string" && p.text === item.prompt)
-          parts.push({ text: reducePrompt(item.prompt, 8) }); // shorter prompt
-        // style_refs_b64 are implicitly dropped by not copying them
+      if (typeof b64 === "string" && b64.length > 64) {
+        parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
       }
-      return parts;
     }
-
-    // stage 2: drop prev_b64 (last resort) + keep very short prompt
-    if (stage === 2) {
-      const parts = [];
-      if (item.character_ref_b64)
-        parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
-      if (item.coherence_code) parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
-      parts.push({
-        text: reducePrompt(
-          (item.minPrompt /* optional hook */) ||
-          `Same hero as reference. Same outfit and hair. Next frame of same movie. ${item.prompt || ""}`,
-          6
-        )
-      });
-      return parts;
-    }
-
-    // stage 3: minimal text only (very rare)
-    return [
-      { text: reducePrompt(`Same hero as reference. Keep outfit/hair identical. Next frame, not a copy.\n${item.prompt || ""}`, 5) }
-    ];
   }
+
+  // D. Text-instruktioner
+  if (item.guidance) parts.push({ text: item.guidance });
+  if (item.coherence_code) parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
+  
+  // Huvudprompten sist
+  parts.push({ text: item.prompt });
+
+  // 2. Anrop med Retry-loop
+  let lastError;
 
   for (let i = 0; i < attempts; i++) {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort("timeout"), timeoutMs);
+    
     try {
       const r = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          contents: [{ role: "user", parts: partsForStage(i) }],
+          contents: [{ role: "user", parts: parts }],
           generationConfig: { temperature: 0.4, topP: 0.7 },
         }),
         signal: ctl.signal,
       });
+      
       clearTimeout(t);
+
       if (!r.ok) {
         const txt = await r.text().catch(() => "");
-        // Only escalate stage if it's a context/500-ish error; otherwise fail fast.
-        if ((r.status === 500 || r.status === 413) || isContextTooLong(txt)) {
-          last = new Error(`Gemini ${r.status} ${txt}`);
-          continue; // try next stage
+        // Om det är ett 500-fel eller Context-fel, försök igen. Annars kasta.
+        if (r.status === 500 || r.status === 503 || r.status === 413 || isContextTooLong(txt)) {
+          lastError = new Error(`Gemini ${r.status} ${txt}`);
+          // Vänta lite innan nästa försök
+          await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1)));
+          continue;
         }
         throw new Error(`Gemini ${r.status} ${txt}`);
       }
 
       const j = await r.json();
       const got = findGeminiImagePart(j);
-      if (got?.b64 && got?.mime)
-        return { image_url: `data:${got.mime};base64,${got.b64}`, provider: "google", b64: got.b64 };
-      if (got?.url) return { image_url: got.url, provider: "google" };
+      
+      if (got?.b64 && got?.mime) {
+        return { image_url: `data:${got.mime};base64,${got.b64}`, provider: "google-pro", b64: got.b64 };
+      }
+      if (got?.url) {
+        return { image_url: got.url, provider: "google-pro" };
+      }
+      
       throw new Error("No image in response");
+
     } catch (e) {
       clearTimeout(t);
-      last = e;
-      // If it wasn't a context-ish error, or we’re at the last attempt, wait a bit then continue/throw
-      await new Promise((r) => setTimeout(r, 250 * (i + 1)));
+      lastError = e;
+      // Vänta lite vid nätverksfel
+      await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1)));
     }
   }
-  throw last || new Error("Gemini failed");
+
+  throw lastError || new Error("Gemini failed after attempts");
 }
 
 /* ------------------------------ Styles ------------------------------- */
@@ -1150,7 +1141,7 @@ function buildFramePrompt({
     ? [
         `*** 1. IDENTITY (Source: IMAGE 1) ***`,
         `Target: A pet animal named ${characterName}.`,
-        `CRITICAL: You must match the animal in IMAGE 1 exactly.`,
+        `CRITICAL: You must match the animal in IMAGE 1 exactly, in the selected style ("${style}").`,
         `- Same species, breed, and fur pattern.`,
         `- Same distinct markings and eye color.`,
         `- NO human traits. NO extra limbs.`,
@@ -2556,7 +2547,7 @@ async function handleImagesNext(req, env) {
       story,
       page,
       ref_image_b64,
-      prev_b64,
+      prev_b64, // <--- VIKTIGT: Vi tar emot och använder denna igen!
       coherence_code,
       style_refs_b64,
     } = await req.json().catch(() => ({}));
@@ -2569,21 +2560,20 @@ async function handleImagesNext(req, env) {
     if (!pg) return err(`Page ${page} not found`, 404);
 
     const heroName = story.book.bible?.main_character?.name || "Hero";
+    
+    // 1. Hämta garderob (Prioritera bibeln, annars fallback)
+    const bibleWardrobe = story.book.bible?.wardrobe 
+        ? (Array.isArray(story.book.bible.wardrobe) ? story.book.bible.wardrobe.join(", ") : story.book.bible.wardrobe)
+        : null;
+    const wardrobe = bibleWardrobe || deriveWardrobeSignature(story);
 
-    // Wardrobe extraction (same as in buildFramePrompt)
-    const wardrobe = story.book.bible?.wardrobe
-      ? (Array.isArray(story.book.bible.wardrobe)
-          ? story.book.bible.wardrobe.join(", ")
-          : story.book.bible.wardrobe)
-      : deriveWardrobeSignature(story);
-
-    // Previous SCENE_EN for narrative continuation
-    const idx         = pages.findIndex(p => p.page === page);
-    const prevPg      = idx > 0 ? pages[idx - 1] : null;
+    // 2. Hämta förra scenens text (för kontext i prompten)
+    const idx = pages.findIndex(p => p.page === page);
+    const prevPg = idx > 0 ? pages[idx - 1] : null;
     const prevSceneEn = prevPg?.scene_en || prevPg?.scene || prevPg?.text || "";
 
-    // Build base prompt
-    const base = buildFramePrompt({
+    // 3. Bygg huvudprompten (Identity + Wardrobe + Scene)
+    const basePrompt = buildFramePrompt({
       style,
       story,
       page: pg,
@@ -2592,18 +2582,18 @@ async function handleImagesNext(req, env) {
       coherence_code,
     });
 
-    // SUPER-KORT continuation (Gemini älskar detta)
+    // 4. Lägg till Continuation-instruktion (Kopplar ihop med prev_b64)
     const continuation = prevSceneEn
-      ? `NEXT MOMENT: Continue from previous image. Previous SCENE_EN: "${prevSceneEn}". Keep style + lighting continuity. New angle, new pose.`
-      : `NEXT MOMENT: Continue from previous page. New angle, new pose.`;
+      ? `NEXT MOMENT: This image continues directly from the previous scene (IMAGE 2). Previous action: "${prevSceneEn}". Maintain the same lighting and environment style, BUT change the camera angle and pose to fit the new action.`
+      : `NEXT MOMENT: Continue from the previous page. New angle, new pose.`;
 
-    const prompt = [base, continuation].join("\n\n");
+    const prompt = [basePrompt, continuation].join("\n\n");
 
-    // Build payload for Gemini
+    // 5. Bygg Payload (Skicka Ref + Prev)
     const payload = {
       prompt,
-      character_ref_b64: ref_image_b64, // IMAGE A
-      prev_b64,                         // IMAGE B
+      character_ref_b64: ref_image_b64, // IMAGE 1: Identitet (Ansikte/Kroppstyp)
+      prev_b64: prev_b64,               // IMAGE 2: Miljö/Stil-kontext
       coherence_code: coherence_code || makeCoherenceCode(story),
     };
 
@@ -2611,15 +2601,15 @@ async function handleImagesNext(req, env) {
       payload.style_refs_b64 = style_refs_b64;
     }
 
-    // Request to Gemini
+    // 6. Anropa Gemini
     const g = await geminiImage(env, payload, 75000, 3);
     if (!g?.image_url) return err("No image from Gemini", 502);
 
-    return ok({
-      page,
-      image_url: g.image_url,
-      provider: g.provider || "google",
-      prompt
+    return ok({ 
+      page, 
+      image_url: g.image_url, 
+      provider: g.provider || "google", 
+      prompt 
     });
 
   } catch (e) {
