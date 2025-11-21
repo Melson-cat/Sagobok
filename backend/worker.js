@@ -759,7 +759,7 @@ async function geminiImage(env, item, timeoutMs = 75000, attempts = 3) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts: partsForStage(i) }],
-          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.6, topP: 0.8 },
+          generationConfig: { responseModalities: ["IMAGE"], temperature: 0.5, topP: 0.7 },
         }),
         signal: ctl.signal,
       });
