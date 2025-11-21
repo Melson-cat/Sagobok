@@ -1028,6 +1028,37 @@ INPUT: En outline (handling).
 • Boken ska vara njutbar för både barn och vuxna.
 `;
 
+/** Skapar referensbild (antingen från given data URL eller via Gemini). */
+async function handleRefImage(req, env) {
+  try {
+    const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
+
+    // 1) Om kund bifogar ett foto – använd det rakt av som "golden reference"
+    if (photo_b64) {
+      const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
+
+      if (!b64 || b64.length < 64) {
+        return err("Invalid photo_b64", 400);
+      }
+
+      // INGEN cleanup – maximal identitetsstabilitet
+      return ok({ ref_image_b64: b64, provider: "client" });
+    }
+
+    // 2) Om inget foto finns – generera en textbaserad referens via Gemini
+    const prompt = characterCardPrompt({ style, bible, traits });
+    const g = await geminiImage(env, { prompt }, 70000, 2);
+
+    return ok({
+      ref_image_b64: g?.b64 || null,
+      provider: g?.provider || "google",
+      image_url: g?.image_url || null,
+    });
+
+  } catch (e) {
+    return err(e?.message || "Ref generation failed", 500);
+  }
+}
 
 
 function heroDescriptor({ category, name, age, traits }) {
