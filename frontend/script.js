@@ -251,14 +251,17 @@ function updateHeroFieldForCategory() {
 
 function readExtraCharactersFromUI() {
   const chars = [];
-  if (!els.extraCharRows) return chars;
-
-  els.extraCharRows.forEach((row) => {
+  // Vi söker på klassen 'extra-char' som du lade till i HTML
+  const rows = document.querySelectorAll(".extra-char"); 
+  
+  rows.forEach((row) => {
     const nameEl = row.querySelector("[data-extra-name]");
     const roleEl = row.querySelector("[data-extra-role]");
     const name = (nameEl?.value || "").trim();
     const role = (roleEl?.value || "").trim();
-    if (name || role) chars.push({ name, role });
+    
+    // Spara bara om vi har ett namn
+    if (name) chars.push({ name, role });
   });
 
   state.form.extraCharacters = chars;
@@ -419,9 +422,10 @@ function readForm() {
     f.petSpecies = "";
   } else {
     f.petSpecies = (els.age.value || "").trim().toLowerCase();
-    f.age = null; // backend bryr sig ändå inte om ålder för pets
+    f.age = null; 
   }
 
+  // NYTT: Läs in extra karaktärer om checkboxen är ikryssad
   if (els.extraCharsToggle?.checked) {
     readExtraCharactersFromUI();
   } else {
@@ -807,7 +811,7 @@ async function onSubmit(e) {
   state.cover_image_id = null;
 
   try {
-    // 1) STORY
+   // 1) STORY (Nu med extra karaktärer)
     const storyRes = await fetch(`${API}/api/story`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -815,11 +819,12 @@ async function onSubmit(e) {
         name: state.form.name,
         age: state.form.age,
         reading_age: state.form.reading_age,
-        pages: STORY_PAGES, // <- låst
+        pages: STORY_PAGES,
         category: state.form.category,
         style: state.form.style,
         theme: state.form.theme,
         traits: state.form.traits,
+        extraCharacters: state.form.extraCharacters, // <-- NYTT
       }),
     });
     const storyData = await storyRes.json().catch(() => ({}));
@@ -830,9 +835,10 @@ async function onSubmit(e) {
     const pages = state.story?.book?.pages || [];
     if (!pages.length) throw new Error("Berättelsen saknar sidor.");
     buildCards(pages, state.visibleCount);
-    setStatus("🖼️ Låser hjälten (referens)…", 22);
+    
+    setStatus("🎨 Skapar karaktärsdesign (Master Asset)...", 20);
 
-    // 2) REF IMAGE
+    // 2) REF IMAGE (Skapar den "tvättade" tecknade versionen)
     const refRes = await fetch(`${API}/api/ref-image`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -845,91 +851,79 @@ async function onSubmit(e) {
     });
     const refData = await refRes.json().catch(() => ({}));
     if (!refRes.ok || refData?.error) throw new Error(refData?.error || `HTTP ${refRes.status}`);
+    
+    // SPARA MASTER ASSET
     state.ref_b64 = refData.ref_image_b64 || null;
     if (!state.ref_b64) throw new Error("Ingen referensbild kunde skapas.");
 
-    // 3) INTERIOR IMAGES — SEKVENSIELLT (sida för sida, med föregående bild som stil-ankare)
-setStatus("🎥 Lägger kameror & ljus…", 38);
+    // 3) INTERIOR IMAGES (Digital Actor Loop)
+    setStatus("🎥 Startar inspelning (varje scen är unik)...", 30);
 
-let received = 0;
-let prevBareB64 = null; // för nästa sida
+    let received = 0;
+    // OBS: Vi tar bort 'prevBareB64' helt härifrån!
 
-for (const pg of pages) {
-  // visa skeleton om tom
-  const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${pg.page}"]`);
-  if (wrap && !wrap.querySelector("img")?.src) {
-    const sk = wrap.querySelector(".skeleton") || document.createElement("div");
-    sk.className = "skeleton";
-    if (!wrap.querySelector(".skeleton")) wrap.prepend(sk);
-  }
-
-  try {
-    const res = await fetch(`${API}/api/images/next`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        style: state.form.style,
-        story: state.story,
-        plan: state.plan,
-        page: pg.page,
-        ref_image_b64: state.ref_b64,
-        prev_b64: prevBareB64, // ← nyckeln som ger koherens
-      }),
-    });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok || j?.error || !j?.image_url) throw new Error(j?.error || `HTTP ${res.status}`);
-
-    // visa direkt
-    fillCard(pg.page, j.image_url, "Gemini");
-    state.images_by_page.set(pg.page, { image_url: j.image_url });
-
-    // för nästa sida: gör om till bare b64
-    const du = await urlToDataURL(j.image_url);
-    const bare = dataUrlToBareB64(du);
-    prevBareB64 = bare || null;
-
-    // ladda upp till CF direkt (ersätter batch senare)
-    if (du) {
-      const uploads = await uploadToCF([{ page: pg.page, data_url: du }]).catch(() => []);
-      const u = uploads?.find(x => x.page === pg.page);
-      if (u?.image_id) {
-        state.images_by_page.set(pg.page, { image_id: u.image_id, image_url: u.url });
-        fillCard(pg.page, u.url || j.image_url, "CF");
+    for (const pg of pages) {
+      const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${pg.page}"]`);
+      if (wrap && !wrap.querySelector("img")?.src) {
+        const sk = wrap.querySelector(".skeleton") || document.createElement("div");
+        sk.className = "skeleton";
+        if (!wrap.querySelector(".skeleton")) wrap.prepend(sk);
       }
+
+      try {
+        const res = await fetch(`${API}/api/images/next`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            style: state.form.style,
+            story: state.story,
+            plan: state.plan,
+            page: pg.page,
+            ref_image_b64: state.ref_b64, // <-- Skickar Master Asset (tecknad)
+            // prev_b64: null,            // <-- SKICKAR INTE FÖRRA BILDEN!
+          }),
+        });
+        
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || j?.error || !j?.image_url) throw new Error(j?.error || `HTTP ${res.status}`);
+
+        // Visa bilden
+        fillCard(pg.page, j.image_url, "Gemini");
+        state.images_by_page.set(pg.page, { image_url: j.image_url });
+
+        // Ladda upp till CF direkt
+        const du = await urlToDataURL(j.image_url);
+        if (du) {
+          const uploads = await uploadToCF([{ page: pg.page, data_url: du }]).catch(() => []);
+          const u = uploads?.find(x => x.page === pg.page);
+          if (u?.image_id) {
+            state.images_by_page.set(pg.page, { image_id: u.image_id, image_url: u.url });
+            fillCard(pg.page, u.url || j.image_url, "CF");
+          }
+        }
+
+      } catch (err) {
+        console.error("page", pg.page, err);
+        if (wrap) {
+          wrap.querySelector(".skeleton")?.remove();
+          const fb = document.createElement("div");
+          fb.className = "img-fallback";
+          fb.textContent = "Kunde inte generera bild";
+          wrap.appendChild(fb);
+          wrap.parentElement.querySelector(".retry-wrap")?.classList.remove("hidden");
+        }
+      }
+
+      received++;
+      setStatus(`🎨 Målar sida ${received}/${pages.length}…`, 30 + (received / pages.length) * 60);
     }
 
-  } catch (err) {
-    console.error("page", pg.page, err);
-    if (wrap) {
-      wrap.querySelector(".skeleton")?.remove();
-      const fb = document.createElement("div");
-      fb.className = "img-fallback";
-      fb.textContent = "Kunde inte generera bild";
-      wrap.appendChild(fb);
-      wrap.parentElement.querySelector(".retry-wrap")?.classList.remove("hidden");
+    // 4) COVER
+    if (COVER_STRATEGY === "async") {
+      generateCoverAsync().catch(() => {});
+    } else if (COVER_STRATEGY === "sync") {
+      await generateCoverAsync();
     }
-  }
-
-  received++;
-  setStatus(`🎨 Målar sida ${received}/${pages.length}…`, 38 + (received / Math.max(1, pages.length)) * 32);
-}
-
-
-   // 4) COVER (icke-blockerande eller hoppa över)
-if (COVER_STRATEGY === "async") {
-  // Fire-and-forget – UI visar omslag när/om det hinner
-  generateCoverAsync().catch(() => {});
-  setStatus("☁️ Laddar upp illustrationer…", 86);
-} else if (COVER_STRATEGY === "sync") {
-  // Vill du blocka tills omslaget är klart:
-  setStatus("🎨 Skapar omslag…", 84);
-  await generateCoverAsync();
-  setStatus("☁️ Laddar upp illustrationer…", 86);
-} else {
-  // "skip": låt workern använda sida 1 som omslag
-  setStatus("☁️ Laddar upp illustrationer…", 86);
-}
-
 // 5) CLOUDFLARE IMAGES (alla sidor; omslaget läggs till separat)
 const items = [];
 for (const p of pages) {

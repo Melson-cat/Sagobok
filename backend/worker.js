@@ -1108,69 +1108,53 @@ function buildFramePrompt({ style, story, page, pageCount, frame, characterName,
   const sGuard = styleGuard(style);
   const isPet  = (story?.book?.category || "kids").toLowerCase() === "pets";
   const coh    = coherence_code || makeCoherenceCode(story);
-  const age    = story?.book?.bible?.main_character?.age || 5;
 
+  // 1. Hårda regler för kläder och identitet
   const wardrobeLine = (!isPet && wardrobe_signature)
-    ? `Wardrobe: ${wardrobe_signature}. The hero always looks the same. Do NOT change garment type, color family, or pattern.`
+    ? `STRICT WARDROBE: ${wardrobe_signature}. The hero MUST wear exactly this outfit.`
     : "";
 
   const identityLines = isPet
-    ? [
-        `Use the exact same animal as in the reference (${characterName}).`,
-        `Match the same species, breed, fur color, markings, and proportions. DO NOT add extra limbs.`,
-        `Never turn the hero into a human. Keep it clearly an animal on every page.`,
-        `If the written description and the reference image disagree, follow the appearance in the reference image.`,
-      ].join(" ")
-    : [
-        `Use the same child hero as in the reference (${characterName}).`,
-        `Age ≈ ${age}. Depict clear *child* anatomy, never depict the hero as a teen or adult.`,
-        `DO NOT add extra limbs, never make two identical heroes in the same image.`,
-        `If the written description and the reference image disagree,  follow the reference image for identity and body type.`,
-        `Hero must appear visibly in frame unless the SCENE_EN explicitly excludes them.`,
-      ].join(" ");
+    ? `CHARACTER: The exact animal from the Reference Image. Same breed/color.`
+    : `CHARACTER: The child from the Reference Image (${characterName}). Keep face and hair identical.`;
 
-  const consistency = [
-   "You receive TWO images before this text:",
-  "IMAGE A (first image) is the strict identity reference for the main hero.",
-  "IMAGE B (second image) is the previous scene from the same story.",
+  // 2. Instruktion för "Digital Actor Strategy"
+  const instruction = [
+    "*** INSTRUCTION ***",
+    "You are provided with ONE Reference Image (Image A).",
+    "Image A shows the Character Design and Art Style.",
+    "YOUR TASK: Draw a NEW scene featuring this exact character.",
+    "",
+    "RULES:",
+    "1. IDENTITY: Face and Clothes must match Image A exactly.",
+    "2. POSE/ACTION: Do NOT copy the pose from Image A. Put the character in a dynamic action based on the text below.",
+    "3. STYLE: Maintain the visual style of Image A.",
+    "4. COMPOSITION: This is a storybook illustration. Use a cinematic angle.",
+    "5. No text, speech bubbles, or logos.",
+  ].join("\n");
 
-  // Vad ska hända nu
-  "Depict the *next moment* that happens AFTER IMAGE B.",
-  "Keep the hero's identity 100% consistent with IMAGE A.",
+  // 3. Scenens innehåll
+  const sceneDetails = [
+    `SCENE CONTEXT: ${page.scene_en || page.text}`,
+    page.time_of_day ? `LIGHTING: ${page.time_of_day}.` : "",
+    page.weather ? `WEATHER: ${page.weather}.` : "",
+  ].join("\n");
 
-  // Variation
-  "Do NOT recreate IMAGE B. Make visable changes in enviroment AND characters for this scene.",
-  "Use IMAGE B only as a guide for global style, lighting, and environment continuity.",
-
-  // Lite extra för att undvika statiska frames
-  "The Hero in image A is NEVER in the same pose as in image B.",
-    `Do not include logos or text.`,
-  ].join(" ");
-
-  const cinematicContext = [
-    `Each image is a *film frame* from the same movie.`,
-    `Background and lighting should evolve naturally with the story.`,
-    `NEVER make an identical image, NEVER use the same exact angle.`
-  ].join(" ");
-
-  const salt = "UNIQUE_PAGE:" + page.page + "-" + ((crypto?.randomUUID?.() || Date.now()).toString().slice(-8));
+  // Unikt salt för att undvika cache-problem
+  const salt = "SEED:" + page.page + "-" + Date.now();
 
   return [
     sGuard,
+    instruction,
+    "---",
     identityLines,
     wardrobeLine,
-    consistency,
-    cinematicContext,
-    `COHERENCE_CODE:${coh}`,
-    `Format: square (1:1).`,
-    page.time_of_day ? `Time of day: ${page.time_of_day}.` : "",
-    page.weather ? `Weather: ${page.weather}.` : "",
-    page.scene_en ? `SCENE_EN: ${page.scene_en}` : "",
+    "---",
+    sceneDetails,
+    `COHERENCE_ID:${coh}`,
     salt
   ].filter(Boolean).join("\n");
 }
-
-
 
 
 
@@ -2332,76 +2316,51 @@ async function handleStory(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
     const {
-      name,
-      age,
-      pages,
-      category,
-      style,
-      theme,
-      traits,
-      reading_age,
+      name, age, pages, category, style, theme, traits, reading_age
     } = body || {};
 
-    // Läsålder: explicit reading_age > annars från barnets ålder > pets default 8
     const parsedRA = parseInt(reading_age, 10);
-    const targetAge = Number.isFinite(parsedRA)
-      ? parsedRA
-      : ((category || "kids") === "pets" ? 8 : parseInt(age || 6, 10));
+    const targetAge = Number.isFinite(parsedRA) ? parsedRA : ((category || "kids") === "pets" ? 8 : 6);
 
-    // 1) Outline
+    // 1. OUTLINE (Behålls för dramaturgin)
     const outlineUser = `
-${heroDescriptor({ category, name, age, traits })}
-Kategori: ${category || "kids"}.
-Läsålder: ${targetAge}.
-Önskat tema/poäng (om angivet): ${theme || "vänskap"}.
-Antal sidor: ${pages || 12}.
-Returnera enbart json.`.trim();
+    Hjälte: ${heroDescriptor({ category, name, age, traits })}
+    Kategori: ${category || "kids"}. Läsålder: ${targetAge}.
+    Önskat tema/poäng: ${theme || "Vänskap"}.
+    Antal sidor: 16.
+    Returnera enbart JSON outline.`.trim();
 
     const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
 
-    // 2) Story (tvingar exakt JSON-format enligt STORY_SYS)
+    // 2. STORY & BIBEL (Här lägger vi till Kläd-låset)
     const storyUser = `
-OUTLINE:
-${JSON.stringify(outline)}
-Skriv en engagerande, händelserik saga som är rolig att läsa högt.
-Variera miljöer och visuella ögonblick mellan varje sida.
-${heroDescriptor({ category, name, age, traits })}
-Läsålder: ${targetAge}. **Sidor: 16**. Stil: ${style || "cartoon"}. Kategori: ${category || "kids"}.
-Returnera enbart JSON i exakt formatet.
-`.trim();
+    OUTLINE: ${JSON.stringify(outline)}
+    
+    INSTRUKTION:
+    Skriv sagan (16 sidor).
+    VIKTIGT: Du MÅSTE definiera en "bible" i JSON-objektet.
+    I bibeln, under 'wardrobe', skriv en EXAKT visuell beskrivning av karaktärens kläder på Engelska.
+    T.ex: "Wearing a yellow raincoat, green rubber boots, and a blue beanie."
+    Dessa kläder ska karaktären ha på ALLA sidor för igenkänning.
+    
+    Stil: ${style || "cartoon"}.
+    Returnera JSON enligt formatet.
+    `.trim();
 
     const story = await openaiJSON(env, STORY_SYS, storyUser);
+    
+    // Extrahera och spara garderoben
+    const wardrobe_signature = story.book.bible?.wardrobe 
+        ? (Array.isArray(story.book.bible.wardrobe) ? story.book.bible.wardrobe.join(", ") : story.book.bible.wardrobe)
+        : deriveWardrobeSignature(story);
 
-    // 3) Fallback: fyll scene_en på sidor som saknar det (kort, visuell EN-beskrivning)
-    try {
-      const pgs = Array.isArray(story?.book?.pages) ? story.book.pages : [];
-      const needs = pgs.some(p => !p.scene_en || !String(p.scene_en).trim());
-      if (pgs.length && needs) {
-        const toTranslate = pgs.map(p => ({ page: p.page, sv: p.scene || p.text || "" }));
-        const t = await openaiJSON(
-          env,
-          "Du är en saklig översättare. Returnera endast giltig JSON.",
-          `Översätt följande scenangivelser till kort engelsk, visuell beskrivning (2–3 meningar, inga repliker).
-Returnera exakt: { "items":[{"page":number,"scene_en":string}, ...] } och inget mer.
-SVENSKA:
-${JSON.stringify(toTranslate)}`
-        );
-        const map = new Map((t?.items || []).map(x => [x.page, x.scene_en]));
-        story.book.pages = pgs.map(p => ({ ...p, scene_en: p.scene_en || map.get(p.page) || "" }));
-      }
-    } catch {
-      // Översättning är ”best effort”; fortsätt även om det fallerar
-    }
+    return ok({ 
+        story, 
+        plan: { plan: [] }, 
+        coherence_code: makeCoherenceCode(story), 
+        wardrobe_signature 
+    });
 
-    // 4) Kamerahints → bildplan
-    const camHints = await getCameraHints(env, story);
-    const plan = normalizePlan(story?.book?.pages || [], camHints.shots);
-
-    // 5) Koherens & garderob
-    const coherence_code = makeCoherenceCode(story);
-    const wardrobe_signature = deriveWardrobeSignature(story);
-
-    return ok({ outline, story, plan, coherence_code, wardrobe_signature });
   } catch (e) {
     return err(e?.message || "Story generation failed", 500);
   }
@@ -2412,20 +2371,54 @@ async function handleRefImage(req, env) {
   try {
     const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
 
-    // 1) Om klienten skickar ett foto (dataURL/base64) – använd det rakt av
+    // 1) Analysera input - städa bort "data:image..." om det finns
+    let imageInput = null;
     if (photo_b64) {
-      const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
-      if (b64 && b64.length > 64) return ok({ ref_image_b64: b64, provider: "client" });
-      return err("Provided photo_b64 looked invalid", 400);
+      imageInput = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
     }
 
-    // 2) Annars generera en neutral referensbild via Gemini
+    // 2) OM FOTO FINNS: Gör "Style Transfer" (Rita om till referensblad)
+    if (imageInput) {
+       const sGuard = styleGuard(style);
+       const is3D = (style || "").toLowerCase().includes("pixar");
+
+       // Anpassa instruktionen: Ska det vara 3D (Pixar) eller 2D?
+       const techSpecs = is3D 
+         ? `- 3D render style, cute proportions, volumetric lighting, Pixar-style.`
+         : `- Flat 2D illustration, clean lines, hand-drawn look.`;
+
+       const stylePrompt = [
+         sGuard,
+         `TASK: Create a Master Character Reference Sheet based on the attached photo.`,
+         `INPUT: Use the facial features and hair from the photo.`,
+         `OUTPUT STYLE: ${techSpecs}`,
+         `CRITICAL: Do NOT output a photorealistic image. It MUST be a stylized artwork fitting the requested style.`,
+         `- White background.`,
+         `- Full body shot, standing in a neutral pose.`,
+         `- Keep key identity features (hair color, glasses, etc) but simplify details to fit a children's book.`
+       ].join("\n");
+       
+       // Vi ber Gemini rita av barnet
+       const g = await geminiImage(env, { 
+          prompt: stylePrompt, 
+          character_ref_b64: imageInput, 
+          guidance: "Transform photo into stylized character reference."
+       }, 80000, 2);
+
+       // Vi returnerar den NYA bilden som "ref_image_b64".
+       if (g?.b64) return ok({ ref_image_b64: g.b64, provider: "google-style-transfer" });
+    }
+
+    // 3) FALLBACK (Ingen bild uppladdad - skapa från text som förut)
     const prompt = characterCardPrompt({ style, bible, traits });
     const g = await geminiImage(env, { prompt }, 70000, 2);
 
-    if (g?.b64) return ok({ ref_image_b64: g.b64, provider: g.provider || "google" });
-    // Om svaret bara innehåller URL (utan b64) skickar vi tillbaka null för att signalera att klienten kan hämta själv
-    return ok({ ref_image_b64: null, provider: g?.provider || "google", image_url: g?.image_url || null });
+    return ok({ 
+       ref_image_b64: g?.b64 || null, 
+       image_url: g?.image_url || null,
+       provider: g?.provider || "google" 
+    });
+
   } catch (e) {
     return err(e?.message || "Ref generation failed", 500);
   }
@@ -2489,70 +2482,49 @@ async function handleImagesNext(req, env) {
     const {
       style = "cartoon",
       story,
-      plan,
       page,
       ref_image_b64,
-      prev_b64,
+      // prev_b64 tas emot men IGNORERAS för att tvinga fram dynamik
       coherence_code,
-      style_refs_b64,
     } = await req.json().catch(() => ({}));
 
     if (!story?.book?.pages) return err("Missing story.pages", 400);
     if (!ref_image_b64)      return err("Missing ref_image_b64", 400);
 
-    const pages     = story.book.pages;
-    const pg        = pages.find(p => p.page === page);
+    const pages = story.book.pages;
+    const pg    = pages.find(p => p.page === page);
     if (!pg) return err(`Page ${page} not found`, 404);
 
-    const frames    = plan?.plan || [];
-    const frame     = frames.find(f => f.page === page) || {};
-    const pageCount = pages.length;
-    const heroName  = story.book.bible?.main_character?.name || "Hero";
+    const heroName = story.book.bible?.main_character?.name || "Hero";
+    
+    // Hämta garderoben (prioritera bibeln)
+    const bibleWardrobe = story.book.bible?.wardrobe 
+        ? (Array.isArray(story.book.bible.wardrobe) ? story.book.bible.wardrobe.join(", ") : story.book.bible.wardrobe)
+        : null;
+    const wardrobe = bibleWardrobe || deriveWardrobeSignature(story);
 
-    // Föregående sida (för textuell kontext)
-    const idx          = pages.findIndex(p => p.page === page);
-    const prevPg       = idx > 0 ? pages[idx - 1] : null;
-    const prevSceneEn  = prevPg ? (prevPg.scene_en || prevPg.scene || prevPg.text || "") : "";
-
-    // Bas-prompt med all stil/identitet/wardrobe från din centrala helper:
-    const basePrompt = buildFramePrompt({
+    // Bygg den nya prompten
+    const prompt = buildFramePrompt({
       style,
       story,
       page: pg,
-      pageCount,
-      frame,
+      pageCount: pages.length,
+      frame: {}, 
       characterName: heroName,
-      wardrobe_signature: deriveWardrobeSignature(story),
+      wardrobe_signature: wardrobe,
       coherence_code,
     });
 
-    // Extra block som binder ihop med föregående bild/scen
-    const continuation = [
-      "This illustration continues directly from the previous scene in the same story.",
-      prevSceneEn ? `PREVIOUS_SCENE_EN: ${prevSceneEn}` : "",
-      "Use the previous image only as a visual guide for style, lighting and character identity.",
-      "Do NOT copy it. Imagine this as new scene in the same story.",
-      "The main hero must remain 100% consistent with the reference image(image A) and previous image(image B).",
-    ].filter(Boolean).join("\n");
-
-    const prompt = [
-      basePrompt,        // ← all stil + SCENE_EN + anti-mutation
-      continuation,      // ← föregående scen + “fortsättning”-logik
-    ].join("\n\n");
-
+    // SKICKA ENDAST REFERENSBILDEN
+    // Vi skippar prev_b64 för att undvika att fastna i samma pose
     const payload = {
       prompt,
-      character_ref_b64: ref_image_b64,                      // 1: referens
-      prev_b64,                                              // 2: föregående bild
+      character_ref_b64: ref_image_b64, 
       coherence_code: coherence_code || makeCoherenceCode(story),
     };
 
-    if (Array.isArray(style_refs_b64) && style_refs_b64.length) {
-      payload.style_refs_b64 = style_refs_b64;
-    }
-
-    // (Valfritt extra: ge modellen en mjuk style-hint också)
-    // payload.guidance = styleHint(style);
+    // Om vi hade style-refs kan vi skicka med dem, men Master Ref är viktigast
+    // (Låt oss hålla det enkelt för att minska brus)
 
     const g = await geminiImage(env, payload, 75000, 3);
     if (!g?.image_url) return err("No image from Gemini", 502);
