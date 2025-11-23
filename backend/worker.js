@@ -944,6 +944,8 @@ INPUT: En outline (handling).
    • I svenska scener: använd art + namn (t.ex. "katten Lina").
    • I scene_en: använd art + namn (t.ex. "the cat Lina", "the little dog Max").
    • Ingen förvandling till människa.
+   • FÖRBJUDET: Använd ALDRIG formuleringen "det lilla barnet" eller beskriv hjälten som ett barn.
+
 
 
 ===========================
@@ -1066,11 +1068,20 @@ async function handleRefImage(req, env) {
 }
 
 
-function heroDescriptor({ category, name, age, traits }) {
-  if ((category || "kids") === "pets")
-    return `HJÄLTE: ett husdjur vid namn ${name || "Nova"}; egenskaper: ${traits || "nyfiken, lekfull"}.`;
+function heroDescriptor({ category, name, age, traits, petSpecies }) {
+  const cat = (category || "kids").toLowerCase();
+
+  if (cat === "pets") {
+    const species = (petSpecies || "katt").trim().toLowerCase();
+    return `HJÄLTE: ett ${species} vid namn ${name || "Nova"}; egenskaper: ${
+      traits || "nyfiken, lekfull"
+    }.`;
+  }
+
   const a = parseInt(age || 6, 10);
-  return `HJÄLTE: ett barn vid namn ${name || "Nova"} (${a} år), egenskaper: ${traits || "modig, omtänksam"}.`;
+  return `HJÄLTE: ett barn vid namn ${name || "Nova"} (${a} år), egenskaper: ${
+    traits || "modig, omtänksam"
+  }.`;
 }
 
 /* ---------------------- Coherence + Wardrobe helpers ---------------------- */
@@ -1120,81 +1131,147 @@ function buildFramePrompt({
     ? (Array.isArray(story.book.bible.wardrobe)
         ? story.book.bible.wardrobe.join(", ")
         : story.book.bible.wardrobe)
-    : wardrobe_signature || "Consistent outfit";
+    : wardrobe_signature || "consistent outfit";
 
   const age = story?.book?.bible?.main_character?.age || 5;
   const coh = coherence_code || makeCoherenceCode(story);
 
-  // 1) IDENTITY – IMAGE 1 is the single source of truth
-  const identityLines = [
-    "*** 1. IDENTITY (Source: IMAGE 1) ***",
-    isPet
-      ? `Target: The same animal hero as in IMAGE 1 (${characterName}).`
-      : `Target: A child named ${characterName}, age approx ${age}.`,
-    "CRITICAL: You must match the hero in IMAGE 1 EXACTLY. The reference image is the only source of truth for physical appearance.",
-    isPet
-      ? "- Keep species, breed, markings, fur color, ears, tail, and body proportions identical."
-      : "- Match face shape, eye shape and color, nose, mouth, and overall child proportions.",
-    "- Do NOT add extra limbs, clones, or change body type.",
-    "Rule: If IMAGE 1 and any text differ, IMAGE 1 always wins for physical appearance.",
-  ].join("\\n");
+  // 1) INPUT GUIDE – flera tidigare ramar
+  const inputGuide = [
+    `*** INPUT GUIDE ***`,
+    `You have received MULTIPLE images and this text prompt.`,
+    `IMAGE 1 (first image): The "MASTER IDENTITY REFERENCE" for the main hero (visual truth).`,
+    `IMAGES 2..N (following images): Previous story frames from the SAME book.`,
+    `Use IMAGE 1 ONLY for the hero's physical appearance and clothing.`,
+    `Use IMAGES 2..N ONLY for story continuity (environment, lighting, mood, rough composition).`,
+    `TEXT (below): Description of the NEXT scene you must create.`,
+  ].join("\n");
 
-  // 2) WARDROBE – locked outfit for the whole book
-  const wardrobeLines = [
-    "*** 2. WARDROBE (Locked) ***",
-    `The hero must always wear: ${wardrobe}.`,
-    "Do NOT change garment type, main colors, or patterns, even if the story text suggests otherwise.",
-  ].join("\\n");
+  // 2) IDENTITY – hårt låst till IMAGE 1
+  const identityLines = isPet
+    ? [
+        `*** 1. IDENTITY (Source: IMAGE 1) ***`,
+        `Target: A pet animal named ${characterName}.`,
+        `CRITICAL: You must match the animal in IMAGE 1 exactly. Do NOT let the art style override the appearance.`,
+        `Match these traits with perfect accuracy:`,
+        `- Species and breed.`,
+        `- Fur color and pattern.`,
+        `- Head and face shape.`,
+        `- Eyes (shape, spacing, size, and color).`,
+        `- Nose and mouth proportions.`,
+        `- Body type and proportions (no extra limbs).`,
+        ``,
+        `ABSOLUTE RULE: If IMAGE 1 and any text description conflict,`,
+        `→ IMAGE 1 is the ONLY source of truth for physical appearance.`,
+      ]
+    : [
+        `*** 1. IDENTITY (Source: IMAGE 1) ***`,
+        `Target: A child named ${characterName}, age approx ${age}.`,
+        `CRITICAL: You must match the child in IMAGE 1 exactly. Do NOT let the chosen art style override the real appearance!`,
+        `Match the following physical traits with perfect accuracy:`,
+        `- Face shape (same jaw, cheeks, chin).`,
+        `- Eyes (same shape, spacing, size, and color).`,
+        `- Nose (same form and proportions).`,
+        `- Mouth and lips (same shape, fullness, proportions).`,
+        `- Hair (same color, length, texture, parting, and style).`,
+        `- Skin tone (must match IMAGE 1 exactly).`,
+        `- Body type and proportions (clear CHILD proportions, never teen/adult).`,
+        ``,
+        `ABSOLUTE RULE: If IMAGE 1 and any text description conflict,`,
+        `→ IMAGE 1 is the ONLY source of truth for physical appearance.`,
+      ];
 
-  // 3) SCENE CONTEXT – what happens in THIS frame
-  const sceneParts = [];
-  if (page.scene_en) {
-    sceneParts.push(`SCENE_EN: ${page.scene_en}`);
+  const identitySection = identityLines.join("\n");
+
+  // 3) WARDROBE – lås kläder
+  const wardrobeSection = [
+    `*** 2. WARDROBE (Strict Text Rule) ***`,
+    `The hero MUST wear the SAME outfit on every page.`,
+    `Wardrobe description: ${wardrobe}.`,
+    `Do NOT change garment type, main colors, or patterns.`,
+    `If previous frames show clothing mistakes, IGNORE those mistakes and follow this wardrobe description instead.`,
+  ].join("\n");
+
+  // 4) CONTINUITY – förklara hur tidigare bilder ska användas
+  const continuitySection = [
+    `*** 3. CONTINUITY (Sources: IMAGES 2..N) ***`,
+    `IMAGES 2..N are previous frames from the SAME storybook.`,
+    `Use them to keep global elements consistent:`,
+    `- Overall rendering style and brushwork.`,
+    `- World design, props, and recurring locations.`,
+    `- Global lighting and color mood.`,
+    ``,
+    `BUT:`,
+    `- Do NOT copy any previous frame 1:1.`,
+    `- Do NOT keep the same pose or camera angle.`,
+    `- Always move the story forward with a NEW moment in time.`,
+  ].join("\n");
+
+  // 5) STORY SO FAR – textrecap av senaste sidorna
+  const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
+  const idx   = pages.findIndex(p => p.page === page.page);
+  let historySection = "";
+  if (idx > 0) {
+    const start = Math.max(0, idx - 3); // senaste upp till 3 sidor
+    const chunks = [];
+    for (let i = start; i < idx; i++) {
+      const p = pages[i];
+      const desc = p.scene_en || p.scene || p.text || "";
+      if (!desc) continue;
+      chunks.push(`PAGE ${p.page}: ${desc}`);
+    }
+    if (chunks.length) {
+      historySection = [
+        `*** 3b. STORY SO FAR (last ${chunks.length} pages) ***`,
+        ...chunks,
+      ].join("\n");
+    }
   }
-  if (page.camera) {
-    sceneParts.push(`CAMERA_HINT: ${page.camera}`);
-  }
-  if (page.action_visual) {
-    sceneParts.push(`ACTION_VISUAL: ${page.action_visual}`);
-  }
-  if (page.location) {
-    sceneParts.push(`LOCATION: ${page.location}`);
-  }
-  if (page.time_of_day) {
-    sceneParts.push(`TIME_OF_DAY: ${page.time_of_day}`);
-  }
-  if (page.weather) {
-    sceneParts.push(`WEATHER: ${page.weather}`);
-  }
-  if (page.text) {
-    const compactText = String(page.text).replace(/\\s+/g, " ").trim();
-    sceneParts.push(
-      `STORY_TEXT_SV (context only, not appearance): ${compactText}`
-    );
-  }
+
+  // 6) NY SCEN – den sida vi genererar
   const sceneBlock = [
-    "*** 3. SCENE (What happens now) ***",
-    ...sceneParts,
-  ].join("\\n");
+    `*** 4. NEW SCENE SPECIFICATION (Current Page ${page.page}) ***`,
+    page.scene_en ? `VISUAL DESCRIPTION (environment + action, NOT appearance changes): ${page.scene_en}` : "",
+    page.action_visual ? `ACTION: ${page.action_visual}` : "ACTION: The hero is clearly doing something active in the scene.",
+    page.camera    ? `CAMERA HINT: ${page.camera}` : "CAMERA HINT: dynamic, cinematic framing.",
+    page.location  ? `LOCATION: ${page.location}` : "",
+    page.time_of_day ? `TIME OF DAY: ${page.time_of_day}` : "",
+    page.weather   ? `WEATHER: ${page.weather}` : "",
+  ].filter(Boolean).join("\n");
 
-  // 4) CINEMATIC RULES – variation but same identity
-  const cinematic = [
-    "*** 4. CINEMATIC RULES ***",
-    "Do NOT recreate the previous frame. Always use a new camera angle or composition.",
-    "Keep the global style, lighting, and world consistent with earlier pages.",
-    "The hero must clearly appear in frame unless the SCENE_EN explicitly says otherwise.",
-    "NO TEXT or logos in the image.",
-  ].join("\\n");
+  // 7) STIL + negativa constraints
+  const styleSection = [
+    `*** 5. STYLE & FORMAT ***`,
+    `Art Style: ${styleGuard(style)}`,
+    `Format: Square (1:1).`,
+    `Do NOT add text, speech bubbles, or logos.`,
+    `Avoid flat, boring compositions. Use depth, perspective, and lighting.`,
+    ``,
+    `NEGATIVE PROMPT:`,
+    `- No off-model faces.`,
+    `- No changes to hair color or hairstyle.`,
+    `- No teen/adult anatomy for the child hero.`,
+    `- No extra limbs, no duplicated hero.`,
+  ].join("\n");
 
   return [
-    `STYLE: ${styleGuard(style)}`,
-    identityLines,
-    wardrobeLines,
+    inputGuide,
+    "---",
+    identitySection,
+    "",
+    wardrobeSection,
+    "",
+    continuitySection,
+    historySection ? "\n" + historySection : "",
+    "",
     sceneBlock,
-    cinematic,
-    `COHERENCE_ID:${coh}`,
-  ].join("\\n");
+    "",
+    styleSection,
+    "",
+    `COHERENCE_CODE: ${coh}`,
+  ].join("\n");
 }
+
 
 
 
@@ -2342,7 +2419,7 @@ function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
   ].filter(Boolean).join("\n");
 }
 
-/** Genererar outline + story och derivat (kamera-hints, plan, koherenskod, garderobssignatur). */
+
 /** Genererar outline + story (inkl. bible/regi). Inga kamera-hints längre. */
 async function handleStory(req, env) {
   try {
@@ -2356,7 +2433,8 @@ async function handleStory(req, env) {
       theme,
       traits,
       reading_age,
-      extraCharacters = [] // ← från frontend, t.ex. [{ name, role, traits }]
+      extraCharacters = [],
+        petSpecies = ""
     } = body || {};
 
     // 1) Läsålder
@@ -2368,7 +2446,7 @@ async function handleStory(req, env) {
           : parseInt(age || 6, 10));
 
     // 2) Huvudkaraktär + biroller som text
-    const mainChar = heroDescriptor({ category, name, age, traits });
+    const mainChar = heroDescriptor({ category, name, age, traits, petSpecies });
 
     const extrasText = Array.isArray(extraCharacters) && extraCharacters.length > 0
       ? [
@@ -2382,10 +2460,15 @@ async function handleStory(req, env) {
       : "Inga tydligt definierade biroller angivna.";
 
     // 3) OUTLINE – enkel, men med info om hjälte + tema + extra karaktärer
-    const outlineUser = `
+  const speciesLine = (category || "kids") === "pets"
+  ? `Djurslag: ${petSpecies || "katt"}.`
+  : "";
+
+const outlineUser = `
 ${mainChar}
 ${extrasText}
 Kategori: ${category || "kids"}.
+${speciesLine}
 Läsålder: ${targetAge}.
 Önskat tema/poäng: ${theme || "vänskap"}.
 Antal sidor (mål): 16.
@@ -2518,8 +2601,9 @@ async function handleImagesNext(req, env) {
       style = "cartoon",
       story,
       page,
-      ref_image_b64,
-      prev_b64, // <--- VIKTIGT: Vi tar emot och använder denna igen!
+      ref_image_b64,   // IMAGE 1 – hero identity
+      prev_b64,        // IMAGE 2 – senaste sidan
+      prev_images_b64, // IMAGES 3..N – ännu äldre sidor
       coherence_code,
       style_refs_b64,
     } = await req.json().catch(() => ({}));
@@ -2532,19 +2616,34 @@ async function handleImagesNext(req, env) {
     if (!pg) return err(`Page ${page} not found`, 404);
 
     const heroName = story.book.bible?.main_character?.name || "Hero";
-    
-    // 1. Hämta garderob (Prioritera bibeln, annars fallback)
-    const bibleWardrobe = story.book.bible?.wardrobe 
-        ? (Array.isArray(story.book.bible.wardrobe) ? story.book.bible.wardrobe.join(", ") : story.book.bible.wardrobe)
-        : null;
+
+    // 1. Garderob (bibel -> fallback)
+    const bibleWardrobe = story.book.bible?.wardrobe
+      ? (Array.isArray(story.book.bible.wardrobe)
+          ? story.book.bible.wardrobe.join(", ")
+          : story.book.bible.wardrobe)
+      : null;
     const wardrobe = bibleWardrobe || deriveWardrobeSignature(story);
 
-    // 2. Hämta förra scenens text (för kontext i prompten)
+    // 2. Kontext: hitta index + tidigare sidor
     const idx = pages.findIndex(p => p.page === page);
     const prevPg = idx > 0 ? pages[idx - 1] : null;
     const prevSceneEn = prevPg?.scene_en || prevPg?.scene || prevPg?.text || "";
 
-    // 3. Bygg huvudprompten (Identity + Wardrobe + Scene)
+    // Senaste 2–3 sidor (utan nuvarande) som kort text-kontekst
+    const contextStart = Math.max(0, idx - 3);
+    const recentPages = pages.slice(contextStart, idx); // max 3 st
+    const storyContextBlock = recentPages.length
+      ? [
+          "STORY SO FAR (previous pages):",
+          ...recentPages.map(p => {
+            const line = (p.scene_en || p.scene || p.text || "").replace(/\s+/g, " ").trim();
+            return `- Page ${p.page}: ${line}`;
+          })
+        ].join("\n")
+      : "";
+
+    // 3. Bas-prompt: identitet + wardrobe + nuvarande scen
     const basePrompt = buildFramePrompt({
       style,
       story,
@@ -2554,40 +2653,99 @@ async function handleImagesNext(req, env) {
       coherence_code,
     });
 
-    // 4. Lägg till Continuation-instruktion (Kopplar ihop med prev_b64)
+    // 4. Bild-referenser: beskriv exakt hur IMAGE 1, 2, 3..N ska användas
+    const hasPrev = !!prev_b64;
+    const hasPrevList = Array.isArray(prev_images_b64) && prev_images_b64.length > 0;
+
+    const imageRefLines = [];
+    imageRefLines.push(
+      "*** IMAGE REFERENCES ***",
+      "IMAGE 1: Main hero identity reference (face, body, outfit).",
+      "  - Use IMAGE 1 as the single source of truth for the hero's physical appearance.",
+      "  - If any text or other images disagree, follow IMAGE 1 for face, hair, body, and wardrobe."
+    );
+
+    if (hasPrev) {
+      imageRefLines.push(
+        "IMAGE 2: The most recent story frame (previous page).",
+        "  - Use IMAGE 2 for global style, background environment, lighting, and secondary characters.",
+        "  - Do NOT copy the exact composition or pose from IMAGE 2."
+      );
+    }
+
+    if (hasPrevList) {
+      imageRefLines.push(
+        "IMAGES 3..N: Earlier story frames from this same book.",
+        "  - Use them only to maintain overall style, color palette, and world consistency.",
+        "  - Do NOT duplicate any of these frames; this page must be a new cinematic moment."
+      );
+    }
+
+    const imageRefsBlock = imageRefLines.join("\n");
+
+    // 5. Fortsättning: koppla till previous scene
     const continuation = prevSceneEn
-      ? `NEXT MOMENT: This image continues directly from the previous scene (IMAGE 2). Previous action: "${prevSceneEn}". Maintain the same lighting and environment style, BUT change the camera angle and pose to fit the new action.`
-      : `NEXT MOMENT: Continue from the previous page. New angle, new pose.`;
+      ? [
+          "*** CONTINUATION ***",
+          "This illustration is the NEXT MOMENT in the same story, directly after the previous page.",
+          `Previous scene summary: "${prevSceneEn.replace(/\s+/g, " ").trim()}"`,
+          "Keep the same world, lighting style, and character lineup.",
+          "Change the camera angle and the hero's pose to match the new action on this page.",
+        ].join("\n")
+      : [
+          "*** CONTINUATION ***",
+          "This illustration continues the story from the earlier pages.",
+          "Use a new camera angle and a natural next action for the hero.",
+        ].join("\n");
 
-    const prompt = [basePrompt, continuation].join("\n\n");
+    // 6. Slutlig prompt: bas + bild-referenser + story-kontekst + continuation
+    const promptParts = [
+      basePrompt,
+      imageRefsBlock,
+      storyContextBlock,
+      continuation,
+    ].filter(Boolean); // ta bort tomma block
 
-    // 5. Bygg Payload (Skicka Ref + Prev)
+    const prompt = promptParts.join("\n\n");
+
+    // 7. Payload till Gemini 3 Pro Image
     const payload = {
       prompt,
-      character_ref_b64: ref_image_b64, // IMAGE 1: Identitet (Ansikte/Kroppstyp)
-      prev_b64: prev_b64,               // IMAGE 2: Miljö/Stil-kontext
+      character_ref_b64: ref_image_b64,                 // IMAGE 1 – identitet
       coherence_code: coherence_code || makeCoherenceCode(story),
     };
 
+    // IMAGE 2 – senaste bild som stil/miljö
+    if (hasPrev) {
+      payload.prev_b64 = prev_b64;
+    }
+
+    // IMAGES 3..N – äldre bilder (array)
+    if (hasPrevList) {
+      payload.prev_images_b64 = prev_images_b64;
+    }
+
+    // Eventuella stilreferenser (separata art-style bilder)
     if (Array.isArray(style_refs_b64) && style_refs_b64.length) {
       payload.style_refs_b64 = style_refs_b64;
     }
 
-    // 6. Anropa Gemini
+    // 8. Anropa Gemini
     const g = await geminiImage(env, payload, 75000, 3);
     if (!g?.image_url) return err("No image from Gemini", 502);
 
-    return ok({ 
-      page, 
-      image_url: g.image_url, 
-      provider: g.provider || "google", 
-      prompt 
+    return ok({
+      page,
+      image_url: g.image_url,
+      provider: g.provider || "google",
+      prompt,
     });
 
   } catch (e) {
     return err(e?.message || "images/next failed", 500);
   }
 }
+
 
 async function handleImageRegenerate(req, env) {
   try {

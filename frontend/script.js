@@ -820,6 +820,7 @@ async function onSubmit(e) {
         style: state.form.style,
         theme: state.form.theme,
         traits: state.form.traits,
+        petSpecies: state.form.petSpecies || "",
       }),
     });
     const storyData = await storyRes.json().catch(() => ({}));
@@ -851,8 +852,10 @@ async function onSubmit(e) {
    // 3) INTERIOR IMAGES — SEKVENSIELLT (Kedjan)
     setStatus("🎥 Spelar in scener (sida för sida)…", 38);
 
-    let received = 0;
-    let prevBareB64 = null; // Håller koll på föregående bild för kontinuitet
+   let received = 0;
+// Håller koll på de senaste n (t.ex. 3) bilderna för kontinuitet
+let prevBareFrames = [];
+
 
     for (const pg of pages) {
       // Visa skeleton om bilden saknas
@@ -874,7 +877,7 @@ async function onSubmit(e) {
             // plan: state.plan, // Behövs inte, styrs av storyn nu
             page: pg.page,
             ref_image_b64: state.ref_b64,
-            prev_b64: prevBareB64, // <--- HÄR ÄR KEDJAN
+         prev_images_b64: prevBareFrames,
           }),
         });
         
@@ -885,10 +888,17 @@ async function onSubmit(e) {
         fillCard(pg.page, j.image_url, "Gemini");
         state.images_by_page.set(pg.page, { image_url: j.image_url });
 
-        // VIKTIGT: Spara denna bild som "förra bilden" till nästa varv
-        const du = await urlToDataURL(j.image_url);
-        const bare = dataUrlToBareB64(du);
-        prevBareB64 = bare || null;
+       const du = await urlToDataURL(j.image_url);
+const bare = dataUrlToBareB64(du);
+
+if (bare) {
+  prevBareFrames.push(bare);
+  // Håll bara de senaste 3 (eller 4) för token-budget och relevans
+  if (prevBareFrames.length > 3) {
+    prevBareFrames.shift();
+  }
+}
+
 
         // Ladda upp till Cloudflare i bakgrunden
         if (du) {
