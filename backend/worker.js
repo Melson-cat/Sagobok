@@ -696,7 +696,12 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
 
   // BILDER (Alla källor)
   // Ref (Identitet)
-  if (item.character_ref_b64) {
+  if (Array.isArray(item.character_refs_b64)) {
+     for (const ref of item.character_refs_b64) {
+        parts.push({ inlineData: { mimeType: "image/png", data: ref } });
+     }
+  } 
+  else if (item.character_ref_b64) {
     parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
   }
   // Prev (Senaste)
@@ -1047,21 +1052,14 @@ INPUT: En outline (handling).
 • Boken ska vara njutbar för både barn och vuxna.
 `;
 
-/** Skapar referensbild (antingen från given data URL eller via Gemini). */
-/** Skapar referensbilder (antingen från kundfoto eller via Gemini 2.5 Flash Image). */
+/** Skapar referensbild (alltid via Gemini 2.5 Flash Image, även om kund laddar upp foto). */
 async function handleRefImage(req, env) {
   try {
-    const {
-      style = "cartoon",
-      photo_b64,
-      bible,
-      traits = "",
-      count = 2     // hur många referensbilder vi vill generera (1–4)
-    } = await req.json().catch(() => ({}));
+    const { style = "cartoon", photo_b64, bible, traits = "" } =
+      await req.json().catch(() => ({}));
 
-    const num = Math.max(1, Math.min(4, count));
-
-    // 1) Om kund bifogar ett foto – använd det som "guldstandard"
+    // 1) Ta ut ev. kundfoto som ren base64 (utan data:-prefix)
+    let barePhoto = null;
     if (photo_b64) {
       const cleaned = String(photo_b64).replace(
         /^data:image\/[a-z0-9.+-]+;base64,/i,
@@ -1070,47 +1068,44 @@ async function handleRefImage(req, env) {
       if (!cleaned || cleaned.length < 64) {
         return err("Invalid photo_b64", 400);
       }
-
-      return ok({
-        ref_images_b64: [cleaned],   // alltid array för enhetlighet
-        provider: "client"
-      });
+      barePhoto = cleaned;
     }
 
-    // 2) Generera referensporträtt via 2.5 Flash Image
-    const prompt = buildRefPortraitPrompt({ style, bible, traits });
-
-    const refs = [];
-
-    for (let i = 0; i < num; i++) {
-      const g = await geminiImage(
-        env,
-        {
-          prompt,
-          model: "flash"   // => gemini-2.5-flash-image
-        },
-        70000,
-        2
-      );
-
-      if (g?.b64) {
-        refs.push(g.b64);
-      }
-    }
-
-    if (!refs.length) {
-      return err("Failed generating any reference images", 502);
-    }
-
-    return ok({
-      ref_images_b64: refs,
-      provider: "google-flash"
+    // 2) Bygg en specialiserad ref-porträtt-prompt
+    const prompt = buildRefPortraitPrompt({
+      style,
+      bible: bible || null,
+      traits,
+      hasPhoto: !!barePhoto,
     });
 
+    // 3) Anropa Gemini 2.5 Flash Image för att SKAPA referensporträttet
+    const g = await geminiImage(
+      env,
+      {
+        prompt,
+        model: "flash",           // => gemini-2.5-flash-image
+        image_b64: barePhoto || undefined, // om foto finns: använd som input-referens
+      },
+      70000,
+      2
+    );
+
+    if (!g?.b64) {
+      return err("Failed to generate reference image", 502);
+    }
+
+    // 4) Returnera bara den NYA ref-bilden – aldrig kundfotot
+    return ok({
+      ref_image_b64: g.b64,
+      provider: g.provider || "google-flash",
+      image_url: g.image_url || null,
+    });
   } catch (e) {
-    return err(e?.message || "handleRefImage failed", 500);
+    return err(e?.message || "Ref generation failed", 500);
   }
 }
+
 
 
 
@@ -2489,75 +2484,76 @@ function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
   ].filter(Boolean).join("\n");
 }
 
-function buildRefPortraitPrompt({ style, bible, traits = "", category = "kids" }) {
-  const cat = (category || "").toLowerCase() === "pets" ? "pets" : "kids";
-  const mc  = bible?.main_character || {};
+function buildRefPortraitPrompt({ style, bible, traits = "", hasPhoto }) {
+  const safeStyle = styleGuard(style || "cartoon");
+
+  const mc = bible?.main_character || {};
   const name = mc.name || "the hero";
   const age  = mc.age || null;
+  const physique = mc.physique || "";
+  const identityKeys = Array.isArray(mc.identity_keys) ? mc.identity_keys.join(", ") : "";
 
-  // Wardrobe från bible + traits
-  let wardrobe = "";
-  if (bible?.wardrobe) {
-    wardrobe = Array.isArray(bible.wardrobe)
-      ? bible.wardrobe.join(" ")
-      : String(bible.wardrobe);
-  }
-  const extraTraits = traits ? ` Extra traits: ${traits}.` : "";
+  const wardrobe = bible?.wardrobe
+    ? (Array.isArray(bible.wardrobe) ? bible.wardrobe.join(", ") : bible.wardrobe)
+    : "";
 
-  const styleText = styleGuard(style);
+  const world = bible?.world || "";
+  const tone  = bible?.tone  || "";
+  const lesson = bible?.lesson || "";
 
-  const baseLines = [
-    "You are generating a GOLDEN REFERENCE PORTRAIT for a storybook character.",
-    "This single image will be used as IMAGE 1 (master identity reference) for all later pages in the book.",
-    "",
-    styleText,
-    "",
-    "Output: one clean, centered portrait. No text, no logos, no speech bubbles.",
-  ];
+  const traitsLine = traits ? `Extra user traits/hints: ${traits}.` : "";
 
-  let identityLines;
-  if (cat === "pets") {
-    identityLines = [
-      "",
-      "*** HERO IDENTITY (PETS) ***",
-      `The hero is a pet animal named ${name}.`,
-      mc.physique ? `Physique (from bible): ${mc.physique}.` : "",
-      wardrobe ? `Wardrobe / accessories: ${wardrobe}` : "",
-      extraTraits,
-      "",
-      "Render a clear view of the full head and upper body so the face and markings are unmistakable.",
-      "The animal should look friendly, appealing and suitable for a children's book.",
-      "Neutral background or a very soft hint of environment, nothing distracting.",
-    ];
-  } else {
-    identityLines = [
-      "",
-      "*** HERO IDENTITY (KIDS) ***",
-      age
-        ? `The hero is a human child named ${name}, approximately ${age} years old.`
-        : `The hero is a human child named ${name}.`,
-      mc.physique ? `Physique (from bible): ${mc.physique}.` : "",
-      wardrobe ? `Wardrobe (from bible): ${wardrobe}` : "",
-      extraTraits,
-      "",
-      "Render a clear, appealing portrait of the child.",
-      "Frame: head and upper torso (or 3/4 body), centered in frame.",
-      "Expression: warm, kind, curious – suitable for a children's story.",
-      "Neutral or softly themed background, not a full scene.",
-    ];
-  }
+  const photoBlock = hasPhoto
+    ? [
+        `You are given IMAGE 1 which is a real-world photo of the main hero (from the client).`,
+        `Your job is to REDRAW the SAME individual in the requested art style while preserving identity perfectly.`,
+        ``,
+        `ABSOLUTE IDENTITY RULES:`,
+        `- Same face shape (jaw, cheeks, chin).`,
+        `- Same eyes (shape, spacing, size, and color).`,
+        `- Same nose and mouth (proportions, placement).`,
+        `- Same hair color, length, texture and overall hairstyle.`,
+        `- Same skin tone.`,
+        `- Same overall body type and proportions (child stays clearly a CHILD, pet stays clearly the same species).`,
+        ``,
+        `You may change:`,
+        `- Rendering style, brushwork, shading, lighting and background.`,
+        `- Clothing details ONLY within the wardrobe description below.`,
+      ].join("\n")
+    : [
+        `You do NOT get a real-world photo for this hero.`,
+        `Instead, you must invent a clear, memorable hero that matches the bible and traits below.`,
+      ].join("\n");
 
-  const safetyLines = [
-    "",
-    "*** HARD RULES ***",
-    "Do NOT add any text or UI elements.",
-    "Do NOT cut off parts of the face.",
-    "Keep proportions stable and natural; this portrait will be reused as identity reference.",
-  ];
-
-  return [...baseLines, ...identityLines, ...safetyLines]
-    .filter(Boolean)
-    .join("\n");
+  return [
+    `You are generating a SINGLE clean REFERENCE PORTRAIT for the main hero of a children's picture book.`,
+    ``,
+    `=== GOAL ===`,
+    `Create one front-facing or 3/4 view portrait that can be reused as the MASTER IDENTITY REFERENCE for all future illustrations.`,
+    ``,
+    `Art style: ${safeStyle}.`,
+    `Format: square (1:1), neutral or softly lit background that does not distract from the hero.`,
+    ``,
+    photoBlock,
+    ``,
+    `=== STORY BIBLE SUMMARY ===`,
+    `Hero name: ${name}${age ? `, approx age ${age}` : ""}.`,
+    physique ? `Physique / description: ${physique}.` : "",
+    identityKeys ? `Identity keys: ${identityKeys}.` : "",
+    wardrobe ? `Wardrobe (hero's outfit, keep consistent in all future images): ${wardrobe}.` : "",
+    world ? `World / setting: ${world}.` : "",
+    tone  ? `Tone of the story: ${tone}.` : "",
+    lesson ? `Theme/lesson: ${lesson}.` : "",
+    traitsLine,
+    ``,
+    `=== COMPOSITION RULES ===`,
+    `- Show the hero clearly from chest-up or mid-body.`,
+    `- Keep the face large enough to serve as a clear identity reference.`,
+    `- Use gentle, appealing lighting and a clean background.`,
+    `- No text, no logos, no speech bubbles.`,
+    ``,
+    `Return only the image; do not add any text in the picture.`,
+  ].filter(Boolean).join("\n");
 }
 
 
