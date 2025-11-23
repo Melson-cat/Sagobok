@@ -679,107 +679,106 @@ function reducePrompt(p, keepLines = 8) {
   const lines = p.split(/\r?\n/).filter(Boolean);
   return lines.slice(0, keepLines).join("\n");
 }
-async function geminiImage(env, item, timeoutMs = 90000, attempts = 3) {
-  const key = env.GEMINI_API_KEY;
-  if (!key) throw new Error("GEMINI_API_KEY missing");
-  
-  // URL för Gemini 3 Pro Image Preview
-  const url =
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=" +
-    encodeURIComponent(key);
+async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
+  const apiKey = env.GEMINI_API_KEY; // OBS: Se till att namnet matchar din .env (GEMINI_API_KEY vs GOOGLE_API_KEY)
+  if (!apiKey) throw new Error("GEMINI_API_KEY missing");
 
-  // 1. Bygg payload-delarna (Parts)
+  // Välj modell
+  const isFlash = item && item.model === "flash";
+  const modelId = isFlash ? "gemini-2.5-flash-image" : "gemini-3-pro-image-preview";
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
+
   const parts = [];
 
-  // A. Identitetsbild (Master Reference) - Alltid först
+  // TEXT
+  if (item.prompt) parts.push({ text: item.prompt });
+
+  // BILDER (Alla källor)
+  // Ref (Identitet)
   if (item.character_ref_b64) {
     parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
   }
-
-  // B. Historik (Story Context) - Loopa igenom listan
-  if (Array.isArray(item.prev_images_b64)) { // Notera: heter prev_images_b64 i anropet från handleImagesNext
-    for (const imgB64 of item.prev_images_b64) {
-      // Enkel validering att det är en sträng
-      if (typeof imgB64 === "string" && imgB64.length > 100) {
-        parts.push({ inlineData: { mimeType: "image/png", data: imgB64 } });
-      }
-    }
-  } 
-  // Fallback för gammal kod (om bara en bild skickas som prev_b64)
-  else if (item.prev_b64) {
+  // Prev (Senaste)
+  if (item.prev_b64) {
     parts.push({ inlineData: { mimeType: "image/png", data: item.prev_b64 } });
   }
-
-  // C. Stil-referenser (om de finns)
+  // Historik
+  if (Array.isArray(item.prev_images_b64)) {
+    for (const b64 of item.prev_images_b64) {
+      if (b64) parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
+    }
+  }
+  // Stil
   if (Array.isArray(item.style_refs_b64)) {
-    for (const b64 of item.style_refs_b64.slice(0, 3)) {
-      if (typeof b64 === "string" && b64.length > 64) {
-        parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
-      }
+    for (const b64 of item.style_refs_b64) {
+      if (b64) parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
     }
   }
 
-  // D. Text-instruktioner
-  if (item.guidance) parts.push({ text: item.guidance });
+  // Coherence Code / Guidance
   if (item.coherence_code) parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
-  
-  // Huvudprompten sist
-  parts.push({ text: item.prompt });
+  if (item.guidance) parts.push({ text: item.guidance });
 
-  // 2. Anrop med Retry-loop
+  const body = {
+    contents: [{ role: "user", parts }],
+    generationConfig: {
+      // VIKTIGT: Flash kan vara känslig för mimeType. 
+      // Pro 3 Image kräver ofta "image/png" explicit.
+      responseMimeType: "image/png", 
+      temperature: 0.4, // Lite lägre för stabilitet
+      topP: 0.7,
+    },
+  };
+
   let lastError;
-
   for (let i = 0; i < attempts; i++) {
     const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort("timeout"), timeoutMs);
-    
+    const t = setTimeout(() => ctl.abort(), timeoutMs);
+
     try {
-      const r = await fetch(url, {
+      const res = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: parts }],
-          generationConfig: { temperature: 0.4, topP: 0.7 },
-        }),
+        body: JSON.stringify(body),
         signal: ctl.signal,
       });
-      
       clearTimeout(t);
 
-      if (!r.ok) {
-        const txt = await r.text().catch(() => "");
-        // Om det är ett 500-fel eller Context-fel, försök igen. Annars kasta.
-        if (r.status === 500 || r.status === 503 || r.status === 413 || isContextTooLong(txt)) {
-          lastError = new Error(`Gemini ${r.status} ${txt}`);
-          // Vänta lite innan nästa försök
-          await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1)));
-          continue;
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        // Retry vid 500-fel eller överlast
+        if (res.status >= 500 || res.status === 429) {
+            lastError = new Error(`Gemini ${res.status}: ${txt}`);
+            await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+            continue;
         }
-        throw new Error(`Gemini ${r.status} ${txt}`);
+        throw new Error(`Gemini ${res.status}: ${txt}`);
       }
 
-      const j = await r.json();
-      const got = findGeminiImagePart(j);
+      const data = await res.json();
+      // Hitta bild-data (kan ligga i inlineData eller text-url)
+      let b64 = null;
       
-      if (got?.b64 && got?.mime) {
-        return { image_url: `data:${got.mime};base64,${got.b64}`, provider: "google-pro", b64: got.b64 };
-      }
-      if (got?.url) {
-        return { image_url: got.url, provider: "google-pro" };
-      }
+      // 1. Kolla efter inlineData (vanligast för Pro Image)
+      const part = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+      if (part?.inlineData?.data) {
+          b64 = part.inlineData.data;
+      } 
       
-      throw new Error("No image in response");
+      if (!b64) throw new Error("No image data in response");
+
+      return { b64, image_url: `data:image/png;base64,${b64}`, provider: "google" };
 
     } catch (e) {
       clearTimeout(t);
       lastError = e;
-      // Vänta lite vid nätverksfel
-      await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1)));
+      await new Promise(r => setTimeout(r, 500));
     }
   }
-
-  throw lastError || new Error("Gemini failed after attempts");
+  throw lastError || new Error("Gemini failed");
 }
+
 
 /* ------------------------------ Styles ------------------------------- */
 function styleHint(style = "cartoon") {
@@ -1049,36 +1048,70 @@ INPUT: En outline (handling).
 `;
 
 /** Skapar referensbild (antingen från given data URL eller via Gemini). */
+/** Skapar referensbilder (antingen från kundfoto eller via Gemini 2.5 Flash Image). */
 async function handleRefImage(req, env) {
   try {
-    const { style = "cartoon", photo_b64, bible, traits = "" } = await req.json().catch(() => ({}));
+    const {
+      style = "cartoon",
+      photo_b64,
+      bible,
+      traits = "",
+      count = 2     // hur många referensbilder vi vill generera (1–4)
+    } = await req.json().catch(() => ({}));
 
-    // 1) Om kund bifogar ett foto – använd det rakt av som "golden reference"
+    const num = Math.max(1, Math.min(4, count));
+
+    // 1) Om kund bifogar ett foto – använd det som "guldstandard"
     if (photo_b64) {
-      const b64 = String(photo_b64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
-
-      if (!b64 || b64.length < 64) {
+      const cleaned = String(photo_b64).replace(
+        /^data:image\/[a-z0-9.+-]+;base64,/i,
+        ""
+      );
+      if (!cleaned || cleaned.length < 64) {
         return err("Invalid photo_b64", 400);
       }
 
-      // INGEN cleanup – maximal identitetsstabilitet
-      return ok({ ref_image_b64: b64, provider: "client" });
+      return ok({
+        ref_images_b64: [cleaned],   // alltid array för enhetlighet
+        provider: "client"
+      });
     }
 
-    // 2) Om inget foto finns – generera en textbaserad referens via Gemini
-    const prompt = characterCardPrompt({ style, bible, traits });
-    const g = await geminiImage(env, { prompt }, 70000, 2);
+    // 2) Generera referensporträtt via 2.5 Flash Image
+    const prompt = buildRefPortraitPrompt({ style, bible, traits });
+
+    const refs = [];
+
+    for (let i = 0; i < num; i++) {
+      const g = await geminiImage(
+        env,
+        {
+          prompt,
+          model: "flash"   // => gemini-2.5-flash-image
+        },
+        70000,
+        2
+      );
+
+      if (g?.b64) {
+        refs.push(g.b64);
+      }
+    }
+
+    if (!refs.length) {
+      return err("Failed generating any reference images", 502);
+    }
 
     return ok({
-      ref_image_b64: g?.b64 || null,
-      provider: g?.provider || "google",
-      image_url: g?.image_url || null,
+      ref_images_b64: refs,
+      provider: "google-flash"
     });
 
   } catch (e) {
-    return err(e?.message || "Ref generation failed", 500);
+    return err(e?.message || "handleRefImage failed", 500);
   }
 }
+
 
 
 function heroDescriptor({ category, name, age, traits, petSpecies }) {
@@ -2454,6 +2487,77 @@ function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
     "Square composition (1:1). Neutral, evenly lit. No text, no logos.",
     "This reference will be used for strict identity consistency across pages."
   ].filter(Boolean).join("\n");
+}
+
+function buildRefPortraitPrompt({ style, bible, traits = "", category = "kids" }) {
+  const cat = (category || "").toLowerCase() === "pets" ? "pets" : "kids";
+  const mc  = bible?.main_character || {};
+  const name = mc.name || "the hero";
+  const age  = mc.age || null;
+
+  // Wardrobe från bible + traits
+  let wardrobe = "";
+  if (bible?.wardrobe) {
+    wardrobe = Array.isArray(bible.wardrobe)
+      ? bible.wardrobe.join(" ")
+      : String(bible.wardrobe);
+  }
+  const extraTraits = traits ? ` Extra traits: ${traits}.` : "";
+
+  const styleText = styleGuard(style);
+
+  const baseLines = [
+    "You are generating a GOLDEN REFERENCE PORTRAIT for a storybook character.",
+    "This single image will be used as IMAGE 1 (master identity reference) for all later pages in the book.",
+    "",
+    styleText,
+    "",
+    "Output: one clean, centered portrait. No text, no logos, no speech bubbles.",
+  ];
+
+  let identityLines;
+  if (cat === "pets") {
+    identityLines = [
+      "",
+      "*** HERO IDENTITY (PETS) ***",
+      `The hero is a pet animal named ${name}.`,
+      mc.physique ? `Physique (from bible): ${mc.physique}.` : "",
+      wardrobe ? `Wardrobe / accessories: ${wardrobe}` : "",
+      extraTraits,
+      "",
+      "Render a clear view of the full head and upper body so the face and markings are unmistakable.",
+      "The animal should look friendly, appealing and suitable for a children's book.",
+      "Neutral background or a very soft hint of environment, nothing distracting.",
+    ];
+  } else {
+    identityLines = [
+      "",
+      "*** HERO IDENTITY (KIDS) ***",
+      age
+        ? `The hero is a human child named ${name}, approximately ${age} years old.`
+        : `The hero is a human child named ${name}.`,
+      mc.physique ? `Physique (from bible): ${mc.physique}.` : "",
+      wardrobe ? `Wardrobe (from bible): ${wardrobe}` : "",
+      extraTraits,
+      "",
+      "Render a clear, appealing portrait of the child.",
+      "Frame: head and upper torso (or 3/4 body), centered in frame.",
+      "Expression: warm, kind, curious – suitable for a children's story.",
+      "Neutral or softly themed background, not a full scene.",
+    ];
+  }
+
+  const safetyLines = [
+    "",
+    "*** HARD RULES ***",
+    "Do NOT add any text or UI elements.",
+    "Do NOT cut off parts of the face.",
+    "Keep proportions stable and natural; this portrait will be reused as identity reference.",
+  ];
+
+  return [...baseLines, ...identityLines, ...safetyLines]
+    .filter(Boolean)
+    .join("\n");
 }
 
 

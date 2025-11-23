@@ -842,6 +842,7 @@ async function onSubmit(e) {
         photo_b64: state.form.refMode === "photo" ? state.form.photoDataUrl : null,
         bible: state.story?.book?.bible || null,
         traits: state.form.traits || "",
+         category: state.form.category, 
       }),
     });
     const refData = await refRes.json().catch(() => ({}));
