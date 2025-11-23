@@ -680,7 +680,7 @@ function reducePrompt(p, keepLines = 8) {
   return lines.slice(0, keepLines).join("\n");
 }
 async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
-  const apiKey = env.GEMINI_API_KEY; // OBS: Se till att namnet matchar din .env (GEMINI_API_KEY vs GOOGLE_API_KEY)
+  const apiKey = env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY missing");
 
   // Välj modell
@@ -691,49 +691,52 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
 
   const parts = [];
 
-  // TEXT
+  // ... (Din kod för att bygga parts är samma som förut) ...
   if (item.prompt) parts.push({ text: item.prompt });
-
+  
   // BILDER (Alla källor)
-  // Ref (Identitet)
   if (Array.isArray(item.character_refs_b64)) {
      for (const ref of item.character_refs_b64) {
         parts.push({ inlineData: { mimeType: "image/png", data: ref } });
      }
-  } 
-  else if (item.character_ref_b64) {
+  } else if (item.character_ref_b64) {
     parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
   }
-  // Prev (Senaste)
+
   if (item.prev_b64) {
     parts.push({ inlineData: { mimeType: "image/png", data: item.prev_b64 } });
   }
-  // Historik
+
   if (Array.isArray(item.prev_images_b64)) {
     for (const b64 of item.prev_images_b64) {
       if (b64) parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
     }
   }
-  // Stil
+
   if (Array.isArray(item.style_refs_b64)) {
     for (const b64 of item.style_refs_b64) {
       if (b64) parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
     }
   }
 
-  // Coherence Code / Guidance
   if (item.coherence_code) parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
   if (item.guidance) parts.push({ text: item.guidance });
 
+  // VIKTIG FIX HÄR:
+  // Flash Image stöder inte "image/png" i responseMimeType på samma sätt som Pro 3.
+  // Vi sätter det BARA om vi inte kör Flash (alltså för Pro 3).
+  const config = {
+    temperature: 0.4,
+    topP: 0.7,
+  };
+
+  if (!isFlash) {
+     config.responseMimeType = "image/png";
+  }
+
   const body = {
     contents: [{ role: "user", parts }],
-    generationConfig: {
-      // VIKTIGT: Flash kan vara känslig för mimeType. 
-      // Pro 3 Image kräver ofta "image/png" explicit.
-      responseMimeType: "image/png", 
-      temperature: 0.4, // Lite lägre för stabilitet
-      topP: 0.7,
-    },
+    generationConfig: config, // Använd vår anpassade config
   };
 
   let lastError;
@@ -752,7 +755,6 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
 
       if (!res.ok) {
         const txt = await res.text().catch(() => "");
-        // Retry vid 500-fel eller överlast
         if (res.status >= 500 || res.status === 429) {
             lastError = new Error(`Gemini ${res.status}: ${txt}`);
             await new Promise(r => setTimeout(r, 1000 * (i + 1)));
@@ -762,16 +764,19 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
       }
 
       const data = await res.json();
-      // Hitta bild-data (kan ligga i inlineData eller text-url)
       let b64 = null;
-      
-      // 1. Kolla efter inlineData (vanligast för Pro Image)
       const part = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+      
       if (part?.inlineData?.data) {
           b64 = part.inlineData.data;
       } 
       
-      if (!b64) throw new Error("No image data in response");
+      // Fallback för Flash som ibland returnerar base64 på annat sätt eller via text (sällsynt men möjligt)
+      if (!b64) {
+         // Om Flash, kolla om det finns en text-del som är en bild-url eller base64? 
+         // Men oftast är det inlineData. Om det är tomt, kasta fel.
+         throw new Error("No image data in response");
+      }
 
       return { b64, image_url: `data:image/png;base64,${b64}`, provider: "google" };
 
