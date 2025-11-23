@@ -691,9 +691,9 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
 
   const parts = [];
 
-  // ... (Din kod för att bygga parts är samma som förut) ...
+  // TEXT
   if (item.prompt) parts.push({ text: item.prompt });
-  
+
   // BILDER (Alla källor)
   if (Array.isArray(item.character_refs_b64)) {
      for (const ref of item.character_refs_b64) {
@@ -722,21 +722,16 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
   if (item.coherence_code) parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
   if (item.guidance) parts.push({ text: item.guidance });
 
-  // VIKTIG FIX HÄR:
-  // Flash Image stöder inte "image/png" i responseMimeType på samma sätt som Pro 3.
-  // Vi sätter det BARA om vi inte kör Flash (alltså för Pro 3).
+  // FIX: Ta bort responseMimeType helt, eftersom det orsakade 400-fel.
+  // Vi litar på att modellen genererar en bild.
   const config = {
     temperature: 0.4,
     topP: 0.7,
   };
 
-  if (!isFlash) {
-     config.responseMimeType = "image/png";
-  }
-
   const body = {
     contents: [{ role: "user", parts }],
-    generationConfig: config, // Använd vår anpassade config
+    generationConfig: config,
   };
 
   let lastError;
@@ -771,10 +766,7 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
           b64 = part.inlineData.data;
       } 
       
-      // Fallback för Flash som ibland returnerar base64 på annat sätt eller via text (sällsynt men möjligt)
       if (!b64) {
-         // Om Flash, kolla om det finns en text-del som är en bild-url eller base64? 
-         // Men oftast är det inlineData. Om det är tomt, kasta fel.
          throw new Error("No image data in response");
       }
 
