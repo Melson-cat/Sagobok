@@ -919,7 +919,21 @@ INPUT: En outline (handling).
    "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
   (Ingen annan text i "camera".)
 
-• "action_visual" ska kort beskriva vad hjälten GÖR fysiskt i bilden (t.ex. "running fast", "hugging the dog", "looking up at the stars").
+• "action_visual" ska kort beskriva den EXAKTA fysiska handling som bilden ska frysa:
+  - Engelska, presens, 3–10 ord (t.ex. "jumping down from the windowsill",
+    "hugging the dog tightly", "running towards the park gate").
+  - Välj EN huvudhandling per sida, hämtad från sidans text.
+  - Om texten innehåller flera små steg, välj det mest filmiska momentet som ska illustreras.
+
+• För varje sida måste "scene_en" och "action_visual" hänga ihop:
+  - Den FÖRSTA meningen i "scene_en" ska beskriva hjälten när hen utför just den handling
+    som står i "action_visual".
+  - Exempel:
+      text:          "...han sträcker på sig och hoppar ner från fönsterbrädan."
+      action_visual: "jumping down from the windowsill"
+      scene_en:      "The cat Melson jumps down from the windowsill into the warm morning light,
+                      tail raised high as dust motes dance in the sun."
+
 
 • Om en birolls-karaktär förekommer på 3 eller fler sidor:
    – Lägg in den i "bible.secondary_characters" med namn, roll, relation till hjälten,
@@ -1239,6 +1253,35 @@ function buildFramePrompt({
     page.weather   ? `WEATHER: ${page.weather}` : "",
   ].filter(Boolean).join("\n");
 
+  // 6b) MANDATORY ACTION – hård regel för bildmodellen
+const actionBlock = [
+  `*** 4b. MANDATORY ACTION (Hard Constraint) ***`,
+  `You MUST illustrate the exact physical action described for this page.`,
+  `This section overrides any artistic preference or composition bias.`,
+  ``,
+  `Required action:`,
+  `→ ${page.action_visual || page.scene_en || "The hero must perform a clear action visible in the scene."}`,
+  ``,
+  `STRICT RULES:`,
+  `- Do NOT replace the required action with a neutral standing pose.`,
+  `- Do NOT reinterpret the action in a symbolic or metaphorical way.`,
+  `- Do NOT simplify the movement.`,
+  ``,
+  `If the text says the hero is "jumping down from the windowsill":`,
+  `- The hero MUST be shown jumping, mid-jump or landing. Not standing.`,
+  `- A windowsill MUST be visible in the composition.`,
+  `- Body posture MUST clearly reflect the described action.`,
+  ``,
+  `When combining with scene_en:`,
+  `- Use scene_en ONLY for environment, mood, lighting, motion context.`,
+  `- The required action (above) OVERRIDES any ambiguity in scene_en.`,
+  ``,
+  `If IMAGE 2 (previous frame) suggests a different motion:`,
+  `→ You MUST continue the LOGIC of the motion,`,
+  `  but the action of THIS page is the PRIMARY TRUTH.`,
+].join("\n");
+
+
   // 7) STIL + negativa constraints
   const styleSection = [
     `*** 5. STYLE & FORMAT ***`,
@@ -1254,22 +1297,25 @@ function buildFramePrompt({
     `- No extra limbs, no duplicated hero.`,
   ].join("\n");
 
-  return [
-    inputGuide,
-    "---",
-    identitySection,
-    "",
-    wardrobeSection,
-    "",
-    continuitySection,
-    historySection ? "\n" + historySection : "",
-    "",
-    sceneBlock,
-    "",
-    styleSection,
-    "",
-    `COHERENCE_CODE: ${coh}`,
-  ].join("\n");
+return [
+  inputGuide,
+  "---",
+  identitySection,
+  "",
+  wardrobeSection,
+  "",
+  continuitySection,
+  historySection ? "\n" + historySection : "",
+  "",
+  sceneBlock,          // ← DIN SCENE_SPECIFICATION
+  "",
+  actionBlock,         // ← NYTT: Det hårda ACTION-blocket här
+  "",
+  styleSection,
+  "",
+  `COHERENCE_CODE: ${coh}`,
+].join("\n");
+
 }
 
 
