@@ -90,7 +90,7 @@ const mmToPt = (mm) => mm * PT_PER_MM;
 
 const TRIMS = { square200: { w_mm: 200, h_mm: 200, default_bleed_mm: 3 } };
 const GRID = { outer_mm: 10, gap_mm: 8, pad_mm: 12, text_min_mm: 30, text_max_mm: 58 };
-const TEXT_SCALE = 1.18;
+const TEXT_SCALE = 0.95;
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 
 function fontSpecForReadingAge(ra = 6) {
@@ -885,7 +885,7 @@ INPUT: En outline (handling).
 
 • Skriv en engagerande saga på svenska.
 • Exakt 16 sidor (pages 1–16).
-• Varje sida: 2–4 meningar i fältet "text".
+• Varje sida: 5-7 meningar i fältet "text".
 • Bygg berättelsen utifrån bokens tema och lärdom.
 • Max 2 sidor i samma miljö/scenografi.
 • Hjälten ska förekomma på nästan alla sidor (några få etableringsbilder är okej).
@@ -1022,7 +1022,7 @@ INPUT: En outline (handling).
 ===========================
 
 • Exakt 16 sidor (pages 1–16).
-• 2–4 meningar i "text" per sida.
+• 5-7 meningar i "text" per sida.
 • Varje sida ska vara visuellt unik (ny vinkel, ny eller utvecklad handling).
 • "scene_en" ska alltid börja med hjälten i fokus och får INTE beskriva hjältes ansikte/hår/kroppstyp.
 • "camera" måste vara en av: "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
@@ -1116,105 +1116,86 @@ function buildFramePrompt({
   const category = story?.book?.category || "kids";
   const isPet    = category.toLowerCase() === "pets";
 
-  // 1. Hämta garderob (prioritera "Bibeln")
   const wardrobe = story?.book?.bible?.wardrobe
     ? (Array.isArray(story.book.bible.wardrobe)
         ? story.book.bible.wardrobe.join(", ")
         : story.book.bible.wardrobe)
-    : wardrobe_signature || "consistent outfit";
+    : wardrobe_signature || "Consistent outfit";
 
   const age = story?.book?.bible?.main_character?.age || 5;
   const coh = coherence_code || makeCoherenceCode(story);
 
-  // 2. DEFINIERA INPUTS (Meta-instruktion för modellen)
-  // Detta hjälper modellen att skilja på "Vem" och "Var".
-  const inputGuide = [
-    `*** INPUT GUIDE ***`,
-    `You have received TWO images and this text prompt.`,
-    `IMAGE 1 (First Image): The "Master Identity Reference" (Visual Truth).`,
-    `IMAGE 2 (Second Image): The "Previous Scene" (Context/Continuity).`,
-    `TEXT (Below): The script for the NEW scene you must create.`,
-  ].join("\n");
+  // 1) IDENTITY – IMAGE 1 is the single source of truth
+  const identityLines = [
+    "*** 1. IDENTITY (Source: IMAGE 1) ***",
+    isPet
+      ? `Target: The same animal hero as in IMAGE 1 (${characterName}).`
+      : `Target: A child named ${characterName}, age approx ${age}.`,
+    "CRITICAL: You must match the hero in IMAGE 1 EXACTLY. The reference image is the only source of truth for physical appearance.",
+    isPet
+      ? "- Keep species, breed, markings, fur color, ears, tail, and body proportions identical."
+      : "- Match face shape, eye shape and color, nose, mouth, and overall child proportions.",
+    "- Do NOT add extra limbs, clones, or change body type.",
+    "Rule: If IMAGE 1 and any text differ, IMAGE 1 always wins for physical appearance.",
+  ].join("\\n");
 
-  // 3. IDENTITET (Baserat på Bild 1)
-  const identitySection = isPet
-    ? [
-        `*** 1. IDENTITY (Source: IMAGE 1) ***`,
-        `Target: A pet animal named ${characterName}.`,
-        `CRITICAL: You must match the animal in IMAGE 1 exactly, in the selected style ("${style}").`,
-        `- Same species, breed, and fur pattern.`,
-        `- Same distinct markings and eye color.`,
-        `- NO human traits. NO extra limbs.`,
-        `Rule: If IMAGE 1 and text differ, IMAGE 1 is the truth for physical appearance.`
-      ].join("\n")
-    : [
-        `*** 1. IDENTITY (Source: IMAGE 1) ***`,
-  `Target: A child named ${characterName}, approximately ${age} years old.`,
-  `CRITICAL: You must match the child in IMAGE 1 EXACTLY. Do NOT let the selected style ("${style}") override the child's real appearance!`,
-  `Match the following physical traits with perfect accuracy:`,
-  `- Face shape (same jaw, cheeks, chin).`,
-  `- Eyes (same shape, spacing, size, and color).`,
-  `- Nose (same form and proportions).`,
-  `- Mouth and lips (same shape, fullness, proportions).`,
-  `- Hair (same color, length, texture, parting, and style).`,
-  `- Skin tone (must match IMAGE 1 exactly).`,
-  `- Body type and proportions (clear CHILD proportions, never teen/adult).`,
-  ``,
-  `ABSOLUTE RULE: If IMAGE 1 and any text description conflict,`,
-  `→ IMAGE 1 is the ONLY source of truth for physical appearance.`,
-].join("\n");
-  // 4. GARDEROB (Text-låsning)
-  const wardrobeSection = [
-    `*** 2. WARDROBE (Strict Text Rule) ***`,
-    `The hero MUST wear: ${wardrobe}.`,
-    `Do NOT change garment type, colors, or patterns unless the Scene Description explicitly says so (e.g. pajamas).`,
-    `Keep this outfit consistent with the character's identity.`
-  ].join("\n");
+  // 2) WARDROBE – locked outfit for the whole book
+  const wardrobeLines = [
+    "*** 2. WARDROBE (Locked) ***",
+    `The hero must always wear: ${wardrobe}.`,
+    "Do NOT change garment type, main colors, or patterns, even if the story text suggests otherwise.",
+  ].join("\\n");
 
-  // 5. KONTINUITET (Baserat på Bild 2)
-  const continuitySection = [
-    `*** 3. CONTINUITY (Source: IMAGE 2) ***`,
-    `Use IMAGE 2 to understand the ongoing visual style, lighting atmosphere, and environment details.`,
-    `INSTRUCTION:`,
-    `- The story has moved forward.`,
-    `- The character has moved / changed pose.`,
-    `- The camera angle MUST be different from Image 2.`,
-    `Goal: A new frame that looks like it belongs in the same movie, but as a new scene, later.`
-  ].join("\n");
+  // 3) SCENE CONTEXT – what happens in THIS frame
+  const sceneParts = [];
+  if (page.scene_en) {
+    sceneParts.push(`SCENE_EN: ${page.scene_en}`);
+  }
+  if (page.camera) {
+    sceneParts.push(`CAMERA_HINT: ${page.camera}`);
+  }
+  if (page.action_visual) {
+    sceneParts.push(`ACTION_VISUAL: ${page.action_visual}`);
+  }
+  if (page.location) {
+    sceneParts.push(`LOCATION: ${page.location}`);
+  }
+  if (page.time_of_day) {
+    sceneParts.push(`TIME_OF_DAY: ${page.time_of_day}`);
+  }
+  if (page.weather) {
+    sceneParts.push(`WEATHER: ${page.weather}`);
+  }
+  if (page.text) {
+    const compactText = String(page.text).replace(/\\s+/g, " ").trim();
+    sceneParts.push(
+      `STORY_TEXT_SV (context only, not appearance): ${compactText}`
+    );
+  }
+  const sceneBlock = [
+    "*** 3. SCENE (What happens now) ***",
+    ...sceneParts,
+  ].join("\\n");
 
-  // 6. SCEN (Det nya innehållet)
-  const sceneSection = [
-    `*** 4. NEW SCENE SPECIFICATION ***`,
-    page.scene_en ? `VISUAL DESCRIPTION: ${page.scene_en}` : "",
-    page.action_visual ? `ACTION: ${page.action_visual}` : "Standing in the scene.",
-    page.camera    ? `CAMERA ANGLE: ${page.camera}` : "Cinematic, dynamic angle.",
-    page.location  ? `LOCATION: ${page.location}` : "",
-    page.time_of_day ? `LIGHTING/TIME: ${page.time_of_day}` : "",
-    page.weather   ? `WEATHER: ${page.weather}` : "",
-  ].filter(Boolean).join("\n");
-
-  // 7. STIL & SLUTKLÄM
-  const styleSection = [
-    `*** 5. STYLE & FORMAT ***`,
-    `Art Style: ${styleGuard(style)}`,
-    `Format: Square (1:1).`,
-    `No text, no speech bubbles, no blurred edges.`,
-    `Render a high-quality, finished illustration.`
-  ].join("\n");
+  // 4) CINEMATIC RULES – variation but same identity
+  const cinematic = [
+    "*** 4. CINEMATIC RULES ***",
+    "Do NOT recreate the previous frame. Always use a new camera angle or composition.",
+    "Keep the global style, lighting, and world consistent with earlier pages.",
+    "The hero must clearly appear in frame unless the SCENE_EN explicitly says otherwise.",
+    "NO TEXT or logos in the image.",
+  ].join("\\n");
 
   return [
-    inputGuide,
-    "---",
-    identitySection,
-    wardrobeSection,
-    continuitySection,
-    "---",
-    sceneSection,
-    "---",
-    styleSection,
-    `COHERENCE_ID: ${coh}`
-  ].join("\n\n");
+    `STYLE: ${styleGuard(style)}`,
+    identityLines,
+    wardrobeLines,
+    sceneBlock,
+    cinematic,
+    `COHERENCE_ID:${coh}`,
+  ].join("\\n");
 }
+
 
 
 function buildCoverPrompt({ style, story, characterName, wardrobe_signature, coherence_code }) {
@@ -1901,7 +1882,7 @@ try {
       cx,
       cy,
       trimWpt * 0.76,
-      trimHpt * 0.46,
+      trimHpt * 0.60,
       nunito,
       Math.round(baseTextSize * TEXT_SCALE),
       baseLeading,
@@ -1922,15 +1903,6 @@ try {
       color: rgb(0.35, 0.35, 0.45),
     });
 
-    // Vine dekor
-    drawVineSafe(
-      right,
-      cx,
-      contentY + trimHpt * 0.34,
-      trimWpt * 0.8,
-      rgb(0.25, 0.32, 0.55),
-      2.4
-    );
   }
 
   /* -------- SLUT -------- */
@@ -2434,7 +2406,7 @@ INSTRUKTIONER FÖR BOKEN:
 1) Använd OUTLINE som grund, men gör berättelsen mer detaljerad, händelserik och filmisk.
 2) Boken ska ha EXAKT 16 sidor (pages 1–16).
 3) FÖRFATTAREN:
-   - Skriv 2–4 meningar i "text" (svenska) per sida.
+   - Skriv 5-7 meningar i "text" (svenska) per sida.
    - Bygg berättelsen utifrån OUTLINE.theme och den övergripande lärdomen.
 4) REGISSÖREN:
    - Du MÅSTE definiera en "bible" i JSON-objektet.
