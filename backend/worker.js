@@ -2601,9 +2601,9 @@ async function handleImagesNext(req, env) {
       style = "cartoon",
       story,
       page,
-      ref_image_b64,   // IMAGE 1 – hero identity
-      prev_b64,        // IMAGE 2 – senaste sidan
-      prev_images_b64, // IMAGES 3..N – ännu äldre sidor
+      ref_image_b64,   // IMAGE 1 – hero identity (golden reference)
+      prev_b64,        // senaste bild från frontend (kan vara tom)
+      prev_images_b64, // tidigare historik (kan vara tom/undefined)
       coherence_code,
       style_refs_b64,
     } = await req.json().catch(() => ({}));
@@ -2617,7 +2617,7 @@ async function handleImagesNext(req, env) {
 
     const heroName = story.book.bible?.main_character?.name || "Hero";
 
-    // 1. Garderob (bibel -> fallback)
+    // 1. Garderob (bibeln vinner, annars fallback)
     const bibleWardrobe = story.book.bible?.wardrobe
       ? (Array.isArray(story.book.bible.wardrobe)
           ? story.book.bible.wardrobe.join(", ")
@@ -2625,25 +2625,25 @@ async function handleImagesNext(req, env) {
       : null;
     const wardrobe = bibleWardrobe || deriveWardrobeSignature(story);
 
-    // 2. Kontext: hitta index + tidigare sidor
-    const idx = pages.findIndex(p => p.page === page);
-    const prevPg = idx > 0 ? pages[idx - 1] : null;
+    // 2. Textuell kontext: föregående sida + senaste 3 sidor
+    const idx        = pages.findIndex(p => p.page === page);
+    const prevPg     = idx > 0 ? pages[idx - 1] : null;
     const prevSceneEn = prevPg?.scene_en || prevPg?.scene || prevPg?.text || "";
 
-    // Senaste 2–3 sidor (utan nuvarande) som kort text-kontekst
     const contextStart = Math.max(0, idx - 3);
-    const recentPages = pages.slice(contextStart, idx); // max 3 st
+    const recentPages  = pages.slice(contextStart, idx);
     const storyContextBlock = recentPages.length
       ? [
           "STORY SO FAR (previous pages):",
-          ...recentPages.map(p => {
-            const line = (p.scene_en || p.scene || p.text || "").replace(/\s+/g, " ").trim();
-            return `- Page ${p.page}: ${line}`;
-          })
+          ...recentPages.map(p =>
+            `- Page ${p.page}: ${(p.scene_en || p.scene || p.text || "")
+              .replace(/\s+/g, " ")
+              .trim()}`
+          ),
         ].join("\n")
       : "";
 
-    // 3. Bas-prompt: identitet + wardrobe + nuvarande scen
+    // 3. Bas-prompt: identitet + wardrobe + SCENE_EN + metadata
     const basePrompt = buildFramePrompt({
       style,
       story,
@@ -2653,84 +2653,80 @@ async function handleImagesNext(req, env) {
       coherence_code,
     });
 
-    // 4. Bild-referenser: beskriv exakt hur IMAGE 1, 2, 3..N ska användas
-    const hasPrev = !!prev_b64;
-    const hasPrevList = Array.isArray(prev_images_b64) && prev_images_b64.length > 0;
+    // 4. Bygg bildlistan som Gemini faktiskt använder (prev_images_b64)
+    // Vi vill ha: [senaste bilden först, sedan äldre historik]
+    const contextImages = [];
 
+    if (prev_b64) {
+      contextImages.push(prev_b64);
+    }
+
+    if (Array.isArray(prev_images_b64)) {
+      for (const img of prev_images_b64) {
+        if (img && img !== prev_b64) {
+          contextImages.push(img);
+        }
+      }
+    }
+
+    // Begränsa för token/latens, t.ex. max 4 kontextbilder
+    const finalContextImages = contextImages.slice(0, 4);
+
+    // 5. Bildreferenser i textprompten
     const imageRefLines = [];
     imageRefLines.push(
       "*** IMAGE REFERENCES ***",
-      "IMAGE 1: Main hero identity reference (face, body, outfit).",
-      "  - Use IMAGE 1 as the single source of truth for the hero's physical appearance.",
-      "  - If any text or other images disagree, follow IMAGE 1 for face, hair, body, and wardrobe."
+      "IMAGE 1: Main hero identity reference (visual truth).",
+      "  - Follow IMAGE 1 for face, hair, and body features.",
+      "  - If text and IMAGE 1 conflict, IMAGE 1 is always the truth for physical appearance."
     );
 
-    if (hasPrev) {
+    if (finalContextImages.length > 0) {
       imageRefLines.push(
-        "IMAGE 2: The most recent story frame (previous page).",
-        "  - Use IMAGE 2 for global style, background environment, lighting, and secondary characters.",
-        "  - Do NOT copy the exact composition or pose from IMAGE 2."
-      );
-    }
-
-    if (hasPrevList) {
-      imageRefLines.push(
-        "IMAGES 3..N: Earlier story frames from this same book.",
-        "  - Use them only to maintain overall style, color palette, and world consistency.",
-        "  - Do NOT duplicate any of these frames; this page must be a new cinematic moment."
+        "",
+        "CONTEXT IMAGES (2..N): Previous story frames.",
+        "  - The FIRST context image (Image 2) is the most recent page.",
+        "    Use it for continuity of environment, lighting, and supporting characters.",
+        "  - Older context images (3..N) give world/style consistency.",
+        "  - NEVER copy the exact pose or composition. Always move the story forward."
       );
     }
 
     const imageRefsBlock = imageRefLines.join("\n");
 
-    // 5. Fortsättning: koppla till previous scene
+    // 6. Continuation-instruktion
     const continuation = prevSceneEn
       ? [
           "*** CONTINUATION ***",
-          "This illustration is the NEXT MOMENT in the same story, directly after the previous page.",
-          `Previous scene summary: "${prevSceneEn.replace(/\s+/g, " ").trim()}"`,
-          "Keep the same world, lighting style, and character lineup.",
-          "Change the camera angle and the hero's pose to match the new action on this page.",
+          `Previous action (story): "${prevSceneEn.replace(/\s+/g, " ").trim()}"`,
+          "Now depict the NEXT moment in this story.",
+          "Keep the narrative flow natural and cinematic.",
         ].join("\n")
       : [
           "*** CONTINUATION ***",
-          "This illustration continues the story from the earlier pages.",
-          "Use a new camera angle and a natural next action for the hero.",
+          "Start the visual narrative for this scene based on SCENE_EN.",
         ].join("\n");
 
-    // 6. Slutlig prompt: bas + bild-referenser + story-kontekst + continuation
-    const promptParts = [
+    // 7. Slutlig prompt
+    const prompt = [
       basePrompt,
       imageRefsBlock,
       storyContextBlock,
       continuation,
-    ].filter(Boolean); // ta bort tomma block
+    ].filter(Boolean).join("\n\n");
 
-    const prompt = promptParts.join("\n\n");
-
-    // 7. Payload till Gemini 3 Pro Image
+    // 8. Payload till geminiImage – OBS: enbart prev_images_b64 används i din helper
     const payload = {
       prompt,
-      character_ref_b64: ref_image_b64,                 // IMAGE 1 – identitet
+      character_ref_b64: ref_image_b64,      // IMAGE 1 – identitet
+      prev_images_b64: finalContextImages,   // IMAGE 2..N – kontext i rätt ordning
       coherence_code: coherence_code || makeCoherenceCode(story),
     };
 
-    // IMAGE 2 – senaste bild som stil/miljö
-    if (hasPrev) {
-      payload.prev_b64 = prev_b64;
-    }
-
-    // IMAGES 3..N – äldre bilder (array)
-    if (hasPrevList) {
-      payload.prev_images_b64 = prev_images_b64;
-    }
-
-    // Eventuella stilreferenser (separata art-style bilder)
     if (Array.isArray(style_refs_b64) && style_refs_b64.length) {
       payload.style_refs_b64 = style_refs_b64;
     }
 
-    // 8. Anropa Gemini
     const g = await geminiImage(env, payload, 75000, 3);
     if (!g?.image_url) return err("No image from Gemini", 502);
 
@@ -2745,6 +2741,7 @@ async function handleImagesNext(req, env) {
     return err(e?.message || "images/next failed", 500);
   }
 }
+
 
 
 async function handleImageRegenerate(req, env) {
