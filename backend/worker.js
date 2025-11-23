@@ -785,10 +785,10 @@ async function geminiImage(env, item, timeoutMs = 90000, attempts = 3) {
 function styleHint(style = "cartoon") {
   const s = (style || "cartoon").toLowerCase();
   if (s === "storybook") return "storybook watercolor, soft edges, paper texture, warm and cozy";
-  if (s === "pixar") return "stylized 3D animated pixar film still (not photographic)";
+  if (s === "pixar") return "stylized 3D animated pixar film still (not photographic). Happy and expressive characters.";
   if (s === "comic") return "bold comic style, inked lines, flat colors";
   if (s === "painting") return "soft painterly illustration, visible brushwork";
-  return "expressive 2D cartoon: thick-and-thin outlines, cel shading, vibrant palette, happy and expressive, NO 3D!";
+  return "expressive 2D cartoon: thick-and-thin outlines, cel shading, vibrant palette, happy and expressive characters, NO 3D!";
 }
 
 function styleGuard(style = "cartoon") {
@@ -796,9 +796,8 @@ function styleGuard(style = "cartoon") {
   switch (s) {
     case "pixar":
       return [
-        "STYLE: stylized 3D animated pixar film still.",
+        "STYLE: stylized 3D animated pixar film still. Happy and expressive characters.",
         "Do NOT use watercolor, inked lines, flat 2D shading, or comic outlines.",
-        "Not photorealistic, not live-action, NOT 3D."
       ].join(" ");
     case "storybook":
       return [
