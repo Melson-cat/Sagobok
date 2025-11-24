@@ -2626,9 +2626,7 @@ function buildRefPortraitPrompt({ style, bible, traits, hasPhoto, category }) {
 }
 
 
-
-
-function handleStory(req, env) {
+async function handleStory(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
     const {
@@ -2644,7 +2642,14 @@ function handleStory(req, env) {
       petSpecies = "",
     } = body || {};
 
-    // ... (din befintliga logik före OUTLINE, heroDescriptor, etc – oförändrad) ...
+    // Läsålder: explicit reading_age > annars från barnets ålder > pets default 8
+    const parsedRA = parseInt(reading_age, 10);
+    const targetAge = Number.isFinite(parsedRA)
+      ? parsedRA
+      : ((category || "kids") === "pets" ? 8 : parseInt(age || 6, 10));
+
+    // 1) Bygg karaktärssträngar (MISSADES I DIN SNIPPET)
+    const mainChar = heroDescriptor({ category, name, age, traits, petSpecies });
 
     const extrasText =
       Array.isArray(extraCharacters) && extraCharacters.length > 0
@@ -2658,7 +2663,7 @@ function handleStory(req, env) {
           ].join("\n")
         : "Inga tydligt definierade biroller angivna.";
 
-    // 3) OUTLINE – enkel, men med info om hjälte + tema + extra karaktärer
+    // 2) OUTLINE
     const speciesLine =
       (category || "kids") === "pets"
         ? `Djurslag: ${petSpecies || "katt"}.`
@@ -2679,7 +2684,7 @@ Returnera ENDAST giltig JSON enligt OUTLINE-strukturen.
 
     const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
 
-    // 4) STORY – här slår vi fast allt: 16 sidor, bible, regi, biroller
+    // 3) STORY
     const storyUser = `
 OUTLINE:
 ${JSON.stringify(outline, null, 2)}
@@ -2715,10 +2720,9 @@ Inga extra fält, inga kommentarer, ingen text utanför JSON.
 
     const story = await openaiJSON(env, STORY_SYS, storyUser);
 
-    // 🔹 NYTT: säkra kategori + fixa "det lilla barnet" för husdjur
+    // 4) Efterarbete: Säkra kategori + fixa "det lilla barnet" för husdjur
     const cat = (category || "kids").toLowerCase();
     if (story?.book) {
-      // tvinga igenom vald kategori
       story.book.category = cat;
 
       if (cat === "pets") {
@@ -2750,7 +2754,7 @@ Inga extra fält, inga kommentarer, ingen text utanför JSON.
       }
     }
 
-    // 5) Garderob – läs från bible om den finns, annars derivat
+    // 5) Garderob
     const wardrobe_signature = story?.book?.bible?.wardrobe
       ? Array.isArray(story.book.bible.wardrobe)
         ? story.book.bible.wardrobe.join(", ")
@@ -2759,7 +2763,7 @@ Inga extra fält, inga kommentarer, ingen text utanför JSON.
 
     const coherence_code = makeCoherenceCode(story);
 
-    // 6) Plan är tom – kameravinklar ligger nu inne i story.book.pages[x].camera
+    // 6) Returnera
     return ok({
       outline,
       story,
@@ -2771,9 +2775,6 @@ Inga extra fält, inga kommentarer, ingen text utanför JSON.
     return err(e?.message || "Story generation failed", 500);
   }
 }
-
-
-
 
 
 
