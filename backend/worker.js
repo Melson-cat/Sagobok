@@ -683,118 +683,203 @@ async function geminiImage(env, item, timeoutMs = 90000, attempts = 3) {
   const apiKey = env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY missing");
 
-  // 1. Bestäm startmodell
-  let currentModelId = item && item.model === "flash" 
-    ? "gemini-2.5-flash-image" 
-    : "gemini-3-pro-image-preview";
+  const PRO_MODEL   = "gemini-3-pro-image-preview";
+  const FLASH_MODEL = "gemini-2.5-flash-image";
 
-  const isProStart = currentModelId.includes("pro");
-  const fallbackModelId = isProStart ? "gemini-2.5-flash-image" : null;
+  // Startmodell: om item.model === "flash" → börja på Flash, annars Pro
+  let currentModelId =
+    item && item.model === "flash" ? FLASH_MODEL : PRO_MODEL;
 
-  const getUrl = (model) => 
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const startsOnPro     = currentModelId === PRO_MODEL;
+  const fallbackModelId = startsOnPro ? FLASH_MODEL : null;
 
-  // 2. Bygg payload (samma som förut)
+  const getUrl = (model) =>
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
+      apiKey
+    )}`;
+
+  // Bygg parts (prompt + alla bildinputs)
   const parts = [];
-  if (item.prompt) parts.push({ text: item.prompt });
-  if (item.image_b64) parts.push({ inlineData: { mimeType: item.image_mime || "image/png", data: item.image_b64 } });
 
-  // Referenser
+  if (item.prompt) {
+    parts.push({ text: item.prompt });
+  }
+
+  // Generisk bild (ref-image)
+  if (item.image_b64) {
+    const mime = item.image_mime || "image/png";
+    parts.push({
+      inlineData: { mimeType: mime, data: item.image_b64 },
+    });
+  }
+
+  // Karaktärsreferenser
   if (Array.isArray(item.character_refs_b64)) {
-    for (const ref of item.character_refs_b64) parts.push({ inlineData: { mimeType: "image/png", data: ref } });
+    for (const ref of item.character_refs_b64) {
+      parts.push({
+        inlineData: { mimeType: "image/png", data: ref },
+      });
+    }
   } else if (item.character_ref_b64) {
-    parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
+    parts.push({
+      inlineData: { mimeType: "image/png", data: item.character_ref_b64 },
+    });
   }
 
-  if (item.prev_b64) parts.push({ inlineData: { mimeType: "image/png", data: item.prev_b64 } });
+  // Föregående bild (single)
+  if (item.prev_b64) {
+    parts.push({
+      inlineData: { mimeType: "image/png", data: item.prev_b64 },
+    });
+  }
 
+  // Historiklista (prev_images_b64)
   if (Array.isArray(item.prev_images_b64)) {
-    for (const b64 of item.prev_images_b64) parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
+    for (const b64 of item.prev_images_b64) {
+      if (!b64) continue;
+      parts.push({
+        inlineData: { mimeType: "image/png", data: b64 },
+      });
+    }
   }
+
+  // Stilreferenser
   if (Array.isArray(item.style_refs_b64)) {
-    for (const b64 of item.style_refs_b64) parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
+    for (const b64 of item.style_refs_b64) {
+      if (!b64) continue;
+      parts.push({
+        inlineData: { mimeType: "image/png", data: b64 },
+      });
+    }
   }
 
-  if (item.coherence_code) parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
-  if (item.guidance) parts.push({ text: item.guidance });
-
+  if (item.coherence_code) {
+    parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
+  }
+  if (item.guidance) {
+    parts.push({ text: item.guidance });
+  }
 
   let lastError;
-  
-  // 3. Loop med Fallback
+
+  // Retry-loop med fallback Pro → Flash
   for (let i = 0; i < attempts; i++) {
-    
-    // Byt till fallback på sista försöket om Pro misslyckades
-    if (i === attempts - 1 && fallbackModelId && currentModelId !== fallbackModelId) {
-        console.warn(`[Gemini] Pro failed. Switching to fallback: ${fallbackModelId}`);
-        currentModelId = fallbackModelId;
+    // På sista försöket: byt till fallback-modell om vi startade på Pro
+    if (
+      i === attempts - 1 &&
+      fallbackModelId &&
+      currentModelId !== fallbackModelId
+    ) {
+      console.warn(
+        `[Gemini] Pro failed. Fallback to: ${fallbackModelId}`
+      );
+      currentModelId = fallbackModelId;
     }
+
+    const isPro   = currentModelId === PRO_MODEL;
+    const isFlash = currentModelId === FLASH_MODEL;
+
+    // För Pro: begär PNG. För Flash: ingen responseMimeType
+    const generationConfig = isPro
+      ? {
+          temperature: 0.4,
+          topP: 0.7,
+          responseMimeType: "image/png",
+        }
+      : {
+          temperature: 0.4,
+          topP: 0.7,
+        };
+
+    const body = {
+      contents: [{ role: "user", parts }],
+      generationConfig,
+    };
 
     const ctl = new AbortController();
-    const currentTimeout = (currentModelId.includes("flash") && i > 0) ? 30000 : timeoutMs;
+    const currentTimeout =
+      isFlash && i > 0 ? Math.min(timeoutMs, 30000) : timeoutMs;
     const t = setTimeout(() => ctl.abort(), currentTimeout);
-
-    // DYNAMISK CONFIG: Sätt bara responseMimeType för Pro-modellen
-    const config = {
-      temperature: 0.4,
-      topP: 0.7,
-    };
-    if (currentModelId.includes("pro")) {
-       config.responseMimeType = "image/png";
-    }
 
     try {
       const res = await fetch(getUrl(currentModelId), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts }],
-          generationConfig: config,
-        }),
+        body: JSON.stringify(body),
         signal: ctl.signal,
       });
       clearTimeout(t);
 
       if (!res.ok) {
         const txt = await res.text().catch(() => "");
-        // Hantera överlast (503/429)
+
+        // Överbelastad → vänta och försök igen
         if (res.status === 503 || res.status === 429) {
-            console.warn(`[Gemini] ${currentModelId} overloaded (${res.status}). Retrying...`);
-            lastError = new Error(`Gemini ${res.status}: ${txt}`);
-            await new Promise(r => setTimeout(r, 2000 * (i + 1)));
-            continue;
+          console.warn(
+            `[Gemini] ${currentModelId} overloaded (${res.status}). Retrying...`
+          );
+          lastError = new Error(`Gemini ${res.status}: ${txt}`);
+          await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+          continue;
         }
+
+        // Andra 5xx → kort backoff
         if (res.status >= 500) {
-            lastError = new Error(`Gemini Server Error ${res.status}`);
-            await new Promise(r => setTimeout(r, 1000));
-            continue;
+          lastError = new Error(`Gemini Server Error ${res.status}`);
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
         }
+
+        // 4xx → kasta direkt
         throw new Error(`Gemini ${res.status}: ${txt}`);
       }
 
       const data = await res.json();
-      // Hitta bild (inlineData)
-      const part = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData && p.inlineData.data);
-      
-      if (part?.inlineData?.data) {
-          return { 
-              b64: part.inlineData.data, 
-              image_url: `data:image/png;base64,${part.inlineData.data}`, 
-              provider: currentModelId.includes("pro") ? "google-pro" : "google-flash-fallback" 
-          };
+
+      // Leta efter inlineData i candidates
+      let b64 = null;
+      const candidates = data.candidates || [];
+      for (const c of candidates) {
+        const partsArr = c.content?.parts || [];
+        const p = partsArr.find(
+          (p) => p.inlineData && p.inlineData.data
+        );
+        if (p) {
+          b64 = p.inlineData.data;
+          break;
+        }
       }
 
-      throw new Error("No image data in response");
+      if (!b64) {
+        throw new Error("No image data in response");
+      }
 
+      return {
+        b64,
+        image_url: `data:image/png;base64,${b64}`,
+        provider: isPro
+          ? "google-pro"
+          : isFlash
+          ? "google-flash"
+          : "google",
+      };
     } catch (e) {
       clearTimeout(t);
       lastError = e;
-      if (i < attempts - 1) await new Promise(r => setTimeout(r, 1000));
+      console.warn(
+        `[Gemini] Attempt ${i + 1} with ${currentModelId} failed: ${
+          e.message
+        }`
+      );
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
     }
   }
 
   throw lastError || new Error("Gemini failed after all attempts");
 }
+
 
 /* ------------------------------ Styles ------------------------------- */
 function styleHint(style = "cartoon") {
@@ -1090,6 +1175,10 @@ async function handleRefImage(req, env) {
       barePhoto = m[2];
     }
 
+    if (!barePhoto) {
+      return err("Missing photo_b64", 400);
+    }
+
     // 2) Bygg en specialiserad ref-porträtt-prompt
     const prompt = buildRefPortraitPrompt({
       style,
@@ -1107,28 +1196,47 @@ async function handleRefImage(req, env) {
       "hasPhoto:",
       !!barePhoto
     );
-    if (barePhoto) {
-      console.log("[REF] incoming user photo b64 length:", barePhoto.length);
-      console.log("[REF] photo mime:", photoMime);
-    }
-    console.log("[REF] prompt (truncated):", prompt.slice(0, 400));
-
-    // 3) Anropa Gemini 2.5 Flash Image för att skapa referensporträttet
-    const g = await geminiImage(
-      env,
-      {
-        prompt,
-        model: "flash",
-        image_b64: barePhoto || undefined,
-        image_mime: photoMime || undefined,
-        _debugTag: "ref",
-      },
-      70000,
-      2
+    console.log(
+      "[REF] incoming user photo b64 length:",
+      barePhoto.length
+    );
+    console.log("[REF] photo mime:", photoMime);
+    console.log(
+      "[REF] prompt (truncated):",
+      prompt.slice(0, 400)
     );
 
+    // 3) Försök generera stylad ref-bild: Pro → Flash (via geminiImage)
+    let g = null;
+    try {
+      g = await geminiImage(
+        env,
+        {
+          prompt,
+          image_b64: barePhoto,
+          image_mime: photoMime || "image/png",
+          _debugTag: "ref",
+        },
+        70000,
+        3
+      );
+    } catch (e) {
+      console.warn(
+        "[REF] Gemini failed for ref-image, will fall back to original:",
+        e.message
+      );
+    }
+
+    // 4) Fallback: om Gemini *helt* vägrar → använd originalfotot
     if (!g || !g.b64) {
-      return err("Failed to generate reference image", 500);
+      console.warn(
+        "[REF] Using original user photo as reference fallback."
+      );
+      return ok({
+        image_b64: barePhoto,
+        image_url: `data:${photoMime || "image/png"};base64,${barePhoto}`,
+        provider: "original-photo",
+      });
     }
 
     return ok({
@@ -1140,6 +1248,7 @@ async function handleRefImage(req, env) {
     return err(e?.message || "Ref image failed", 500);
   }
 }
+
 
 
 
