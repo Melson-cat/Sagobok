@@ -1054,6 +1054,8 @@ INPUT: En outline (handling).
 • Endast giltig JSON, inga extra fält utanför den specificerade strukturen.
 • "category" ska matcha användarens val.
 • Boken ska vara njutbar för både barn och vuxna.
+• Om "category" = "pets" får du aldrig beskriva hjälten som ett barn i något fält (text, scene, scene_en).
+
 `;
 
 /** Skapar referensbild (alltid via Gemini 2.5 Flash Image, även om kund laddar upp foto). */
@@ -1138,6 +1140,7 @@ function heroDescriptor({ category, name, age, traits, petSpecies }) {
     traits || "modig, omtänksam"
   }.`;
 }
+
 
 /* ---------------------- Coherence + Wardrobe helpers ---------------------- */
 function makeCoherenceCode(story) {
