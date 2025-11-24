@@ -679,23 +679,25 @@ function reducePrompt(p, keepLines = 8) {
   const lines = p.split(/\r?\n/).filter(Boolean);
   return lines.slice(0, keepLines).join("\n");
 }
-async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
+async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
   const apiKey = env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY missing");
 
-  const isFlash  = item && item.model === "flash";
-  const modelId  = isFlash
-    ? "gemini-2.5-flash-image"
-    : "gemini-3-pro-image-preview";
+  const PRO_MODEL   = "gemini-3-pro-image-preview";
+  const FLASH_MODEL = "gemini-2.5-flash-image";
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  // Om du explicit anger model:"flash" -> börja på Flash, annars Pro
+  const baseIsFlash   = item && item.model === "flash";
+  let currentModelId  = baseIsFlash ? FLASH_MODEL : PRO_MODEL;
+
+  // --- Bygg parts (gemensamt för alla försök) ---
 
   const parts = [];
 
   // TEXT
   if (item.prompt) parts.push({ text: item.prompt });
 
-  // 🔹 Generisk bild-input (t.ex. kundens foto i /api/ref-image)
+  // Generisk bildinput (t.ex. kundfoto i /api/ref-image)
   if (item.image_b64) {
     const mime = item.image_mime || "image/png";
     parts.push({
@@ -703,7 +705,7 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
     });
   }
 
-  // BILDER – karaktärsreferenser
+  // Karaktärsreferenser
   if (Array.isArray(item.character_refs_b64)) {
     for (const ref of item.character_refs_b64) {
       parts.push({ inlineData: { mimeType: "image/png", data: ref } });
@@ -714,19 +716,19 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
     });
   }
 
-  // BILDER – föregående bild
+  // Föregående bild (single)
   if (item.prev_b64) {
     parts.push({ inlineData: { mimeType: "image/png", data: item.prev_b64 } });
   }
 
-  // BILDER – historiklista
+  // Historiklista
   if (Array.isArray(item.prev_images_b64)) {
     for (const b64 of item.prev_images_b64) {
       if (b64) parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
     }
   }
 
-  // BILDER – stilreferenser
+  // Stilreferenser
   if (Array.isArray(item.style_refs_b64)) {
     for (const b64 of item.style_refs_b64) {
       if (b64) parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
@@ -738,22 +740,25 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
     parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
   if (item.guidance) parts.push({ text: item.guidance });
 
-  // Ingen responseMimeType -> låt bildmodellerna returnera inlineData själva
-  const config = {
+  // Ingen responseMimeType -> funkar med både Pro och Flash
+  const generationConfig = {
     temperature: 0.4,
     topP: 0.7,
   };
 
   const body = {
     contents: [{ role: "user", parts }],
-    generationConfig: config,
+    generationConfig,
   };
 
   let lastError;
 
+  // --- Retry-loop med automatisk Pro -> Flash fallback ---
   for (let i = 0; i < attempts; i++) {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), timeoutMs);
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModelId}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
     try {
       const res = await fetch(url, {
@@ -766,12 +771,27 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
 
       if (!res.ok) {
         const txt = await res.text().catch(() => "");
-        // Retry vid 5xx / 429
-        if (res.status >= 500 || res.status === 429) {
+
+        // 503/429 eller andra 5xx -> försök igen
+        if (res.status === 503 || res.status === 429 || res.status >= 500) {
+          console.warn(
+            `[Gemini] ${currentModelId} overloaded/server error (${res.status}).`
+          );
           lastError = new Error(`Gemini ${res.status}: ${txt}`);
-          await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
-          continue;
+
+          // 🔁 Om vi började på Pro och kör fortfarande Pro -> växla till Flash för nästa försök
+          if (!baseIsFlash && currentModelId === PRO_MODEL) {
+            console.warn("[Gemini] Switching to FLASH fallback model");
+            currentModelId = FLASH_MODEL;
+          }
+
+          if (i < attempts - 1) {
+            await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+            continue;
+          }
         }
+
+        // 4xx (utom 429) -> kasta direkt
         throw new Error(`Gemini ${res.status}: ${txt}`);
       }
 
@@ -785,12 +805,20 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
       return {
         b64,
         image_url: `data:image/png;base64,${b64}`,
-        provider: "google",
+        provider:
+          currentModelId === PRO_MODEL ? "google-pro" : "google-flash",
       };
     } catch (e) {
       clearTimeout(t);
       lastError = e;
-      await new Promise((r) => setTimeout(r, 500));
+      console.warn(
+        `[Gemini] Attempt ${i + 1} with ${currentModelId} failed: ${
+          e.message
+        }`
+      );
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
     }
   }
 
