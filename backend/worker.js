@@ -683,9 +683,10 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
   const apiKey = env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY missing");
 
-  // Välj modell
   const isFlash = item && item.model === "flash";
-  const modelId = isFlash ? "gemini-2.5-flash-image" : "gemini-3-pro-image-preview";
+  const modelId = isFlash
+    ? "gemini-2.5-flash-image"
+    : "gemini-3-pro-image-preview";
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
 
@@ -694,26 +695,22 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
   // TEXT
   if (item.prompt) parts.push({ text: item.prompt });
 
-  // EV. RÅ-INPUTBILD(ER) – t.ex. kundfoto till ref-porträtt
+  // 🔹 NYTT: generisk bild-input (används av /api/ref-image)
   if (item.image_b64) {
-    if (Array.isArray(item.image_b64)) {
-      for (const b64 of item.image_b64) {
-        if (!b64) continue;
-        parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
-      }
-    } else {
-      parts.push({ inlineData: { mimeType: "image/png", data: item.image_b64 } });
-    }
+    parts.push({
+      inlineData: { mimeType: "image/png", data: item.image_b64 },
+    });
   }
 
-  // BILDER (karaktär / tidigare rutor / stil)
+  // BILDER (alla övriga källor)
   if (Array.isArray(item.character_refs_b64)) {
     for (const ref of item.character_refs_b64) {
-      if (!ref) continue;
       parts.push({ inlineData: { mimeType: "image/png", data: ref } });
     }
   } else if (item.character_ref_b64) {
-    parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
+    parts.push({
+      inlineData: { mimeType: "image/png", data: item.character_ref_b64 },
+    });
   }
 
   if (item.prev_b64) {
@@ -732,7 +729,8 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
     }
   }
 
-  if (item.coherence_code) parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
+  if (item.coherence_code)
+    parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
   if (item.guidance) parts.push({ text: item.guidance });
 
   const config = {
@@ -763,30 +761,28 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
         const txt = await res.text().catch(() => "");
         if (res.status >= 500 || res.status === 429) {
           lastError = new Error(`Gemini ${res.status}: ${txt}`);
-          await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+          await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
           continue;
         }
         throw new Error(`Gemini ${res.status}: ${txt}`);
       }
 
       const data = await res.json();
-      const part = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-      const b64 = part?.inlineData?.data || null;
+      const part = data.candidates?.[0]?.content?.parts?.find(
+        (p) => p.inlineData && p.inlineData.data
+      );
+      const b64 = part?.inlineData?.data;
+      if (!b64) throw new Error("No image data in response");
 
-      if (!b64) {
-        throw new Error("No image data in response");
-      }
-
-      if (item._debugTag === "ref") {
-        console.log("[REF] Gemini image OK. b64 length:", b64.length);
-      }
-
-      return { b64, image_url: `data:image/png;base64,${b64}`, provider: "google" };
-
+      return {
+        b64,
+        image_url: `data:image/png;base64,${b64}`,
+        provider: "google",
+      };
     } catch (e) {
       clearTimeout(t);
       lastError = e;
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 500));
     }
   }
   throw lastError || new Error("Gemini failed");
@@ -2500,77 +2496,68 @@ function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
   ].filter(Boolean).join("\n");
 }
 
-function buildRefPortraitPrompt({ style, bible, traits = "", hasPhoto }) {
-  const safeStyle = styleGuard(style || "cartoon");
-
+function buildRefPortraitPrompt({ style, bible, traits, hasPhoto }) {
   const mc = bible?.main_character || {};
-  const name = mc.name || "the hero";
-  const age  = mc.age || null;
-  const physique = mc.physique || "";
-  const identityKeys = Array.isArray(mc.identity_keys) ? mc.identity_keys.join(", ") : "";
+  const name = mc.name || "Nova";
+  const age = mc.age ?? 6;
+  const world = bible?.world || "a cozy, friendly children's story world";
+  const tone = bible?.tone || "warm and playful";
+  const ward =
+    Array.isArray(bible?.wardrobe) ?
+      bible.wardrobe.join(", ")
+      : (bible?.wardrobe || "").trim();
+  const palette = (bible?.palette || []).join(", ");
 
-  const wardrobe = bible?.wardrobe
-    ? (Array.isArray(bible.wardrobe) ? bible.wardrobe.join(", ") : bible.wardrobe)
-    : "";
+  const lines = [
+    "You are creating ONE single square portrait reference for the main hero of a children's picture book.",
+    "",
+    "OUTPUT:",
+    "- Exactly one clean, centered character portrait.",
+    "- No text, no logo, no borders.",
+    "- Soft, book-friendly background.",
+    "",
+    hasPhoto
+      ? "You receive ONE INPUT PHOTO of the real hero. You MUST preserve the identity from that photo."
+      : "No input photo is provided. Invent a consistent hero that fits the description.",
+    "",
+    "BOOK CONTEXT:",
+    `- Name: ${name}`,
+    `- Approx age: ${age}`,
+    world ? `- World: ${world}` : "",
+    tone ? `- Tone: ${tone}` : "",
+    ward ? `- Wardrobe hint: ${ward}` : "",
+    palette ? `- Color palette hints: ${palette}` : "",
+    traits ? `- Personality traits: ${traits}` : "",
+    "",
+    `STYLE: ${styleHint(style)}`,
+  ].filter(Boolean);
 
-  const world = bible?.world || "";
-  const tone  = bible?.tone  || "";
-  const lesson = bible?.lesson || "";
+  if (hasPhoto) {
+    lines.push(
+      "",
+      "IDENTITY HARD RULES (FROM THE INPUT PHOTO):",
+      "- Keep the same individual, not a generic pretty character.",
+      "- Same species (if pet) or same child.",
+      "- Same face shape, eyes, nose, mouth, and main proportions.",
+      "- Same main fur/skin/hair colors and distribution.",
+      "- You are allowed to clean up lighting and background, but NOT to redesign the face.",
+      "",
+      "In other words: redraw the SAME hero from the photo in the requested style."
+    );
+  }
 
-  const traitsLine = traits ? `Extra user traits/hints: ${traits}.` : "";
+  lines.push(
+    "",
+    "COMPOSITION:",
+    "- Square aspect ratio (1:1).",
+    "- Medium close-up or 3/4 view.",
+    "- The hero is clearly visible, expressive but natural.",
+    "- Background is simple and soft, matching the book world."
+  );
 
-  const photoBlock = hasPhoto
-    ? [
-        `You are given IMAGE 1 which is a real-world photo of the main hero (from the client).`,
-        `Your job is to REDRAW the SAME individual in the requested art style while preserving identity perfectly.`,
-        ``,
-        `ABSOLUTE IDENTITY RULES:`,
-        `- Same face shape (jaw, cheeks, chin).`,
-        `- Same eyes (shape, spacing, size, and color).`,
-        `- Same nose and mouth (proportions, placement).`,
-        `- Same hair color, length, texture and overall hairstyle.`,
-        `- Same skin tone.`,
-        `- Same overall body type and proportions (child stays clearly a CHILD, pet stays clearly the same species).`,
-        ``,
-        `You may change:`,
-        `- Rendering style, brushwork, shading, lighting and background.`,
-        `- Clothing details ONLY within the wardrobe description below.`,
-      ].join("\n")
-    : [
-        `You do NOT get a real-world photo for this hero.`,
-        `Instead, you must invent a clear, memorable hero that matches the bible and traits below.`,
-      ].join("\n");
-
-  return [
-    `You are generating a SINGLE clean REFERENCE PORTRAIT for the main hero of a children's picture book.`,
-    ``,
-    `=== GOAL ===`,
-    `Create one front-facing or 3/4 view portrait that can be reused as the MASTER IDENTITY REFERENCE for all future illustrations.`,
-    ``,
-    `Art style: ${safeStyle}.`,
-    `Format: square (1:1), neutral or softly lit background that does not distract from the hero.`,
-    ``,
-    photoBlock,
-    ``,
-    `=== STORY BIBLE SUMMARY ===`,
-    `Hero name: ${name}${age ? `, approx age ${age}` : ""}.`,
-    physique ? `Physique / description: ${physique}.` : "",
-    identityKeys ? `Identity keys: ${identityKeys}.` : "",
-    wardrobe ? `Wardrobe (hero's outfit, keep consistent in all future images): ${wardrobe}.` : "",
-    world ? `World / setting: ${world}.` : "",
-    tone  ? `Tone of the story: ${tone}.` : "",
-    lesson ? `Theme/lesson: ${lesson}.` : "",
-    traitsLine,
-    ``,
-    `=== COMPOSITION RULES ===`,
-    `- Show the hero clearly from chest-up or mid-body.`,
-    `- Keep the face large enough to serve as a clear identity reference.`,
-    `- Use gentle, appealing lighting and a clean background.`,
-    `- No text, no logos, no speech bubbles.`,
-    ``,
-    `Return only the image; do not add any text in the picture.`,
-  ].filter(Boolean).join("\n");
+  return lines.join("\n");
 }
+
 
 
 
