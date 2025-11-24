@@ -695,14 +695,15 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
   // TEXT
   if (item.prompt) parts.push({ text: item.prompt });
 
-  // 🔹 NYTT: generisk bild-input (används av /api/ref-image)
+  // 🔹 Generisk bild-input (används av /api/ref-image)
   if (item.image_b64) {
+    const mime = item.image_mime || "image/png"; // <-- NYTT
     parts.push({
-      inlineData: { mimeType: "image/png", data: item.image_b64 },
+      inlineData: { mimeType: mime, data: item.image_b64 },
     });
   }
 
-  // BILDER (alla övriga källor)
+  // Övriga bildkällor (samma som du hade)
   if (Array.isArray(item.character_refs_b64)) {
     for (const ref of item.character_refs_b64) {
       parts.push({ inlineData: { mimeType: "image/png", data: ref } });
@@ -1059,26 +1060,27 @@ INPUT: En outline (handling).
 `;
 
 /** Skapar referensbild (alltid via Gemini 2.5 Flash Image, även om kund laddar upp foto). */
-/** Skapar referensbild (alltid via Gemini 2.5 Flash Image, även om kund laddar upp foto). */
 async function handleRefImage(req, env) {
   try {
     const { style = "cartoon", photo_b64, bible, traits = "" } =
       await req.json().catch(() => ({}));
 
-    // 1) Ta ut ev. kundfoto som ren base64
+    // 1) Ta ut ev. kundfoto som ren base64 + mime-type
     let barePhoto = null;
+    let photoMime = null;
+
     if (photo_b64) {
-      const cleaned = String(photo_b64).replace(
-        /^data:image\/[a-z0-9.+-]+;base64,/i,
-        ""
+      const m = String(photo_b64).match(
+        /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i
       );
-      if (!cleaned || cleaned.length < 64) {
+      if (!m || m[2].length < 64) {
         return err("Invalid photo_b64", 400);
       }
-      barePhoto = cleaned;
+      photoMime = m[1].toLowerCase(); // t.ex. image/jpeg
+      barePhoto = m[2];
     }
 
-    // 2) Bygg prompten (den anpassar sig om hasPhoto är true)
+    // 2) Bygg en specialiserad ref-porträtt-prompt
     const prompt = buildRefPortraitPrompt({
       style,
       bible: bible || null,
@@ -1086,16 +1088,21 @@ async function handleRefImage(req, env) {
       hasPhoto: !!barePhoto,
     });
 
-    console.log("[REF] Generating style transfer with Flash. Style:", style);
+    console.log("[REF] style:", style, "hasPhoto:", !!barePhoto);
+    if (barePhoto) {
+      console.log("[REF] incoming user photo b64 length:", barePhoto.length);
+      console.log("[REF] photo mime:", photoMime);
+    }
+    console.log("[REF] prompt (truncated):", prompt.slice(0, 400));
 
-    // 3) VIKTIGT: Anropa alltid Gemini (Flash) för att skapa referensen.
-    // Vi skickar med fotot som input ("image_b64") om det finns.
+    // 3) Anropa Gemini 2.5 Flash Image för att SKAPA referensporträttet
     const g = await geminiImage(
       env,
       {
         prompt,
-        model: "flash",              // => Tvingar gemini-2.5-flash-image
-        image_b64: barePhoto || undefined, // Fotot skickas in här för tolkning
+        model: "flash", // => gemini-2.5-flash-image
+        image_b64: barePhoto || undefined,
+        image_mime: photoMime || undefined,
         _debugTag: "ref",
       },
       70000,
@@ -1103,15 +1110,12 @@ async function handleRefImage(req, env) {
     );
 
     if (!g?.b64) {
-      // Fallback: Om Flash misslyckas, använd originalfotot så vi inte kraschar
-      if (barePhoto) {
-          console.warn("[REF] Flash generation failed, falling back to raw photo.");
-          return ok({ ref_image_b64: barePhoto, provider: "client-fallback" });
-      }
       return err("Failed to generate reference image", 502);
     }
 
-    // 4) Returnera den NYA, tecknade bilden
+    console.log("[REF] generated ref_image_b64 length:", g.b64.length);
+
+    // 4) Returnera bara den NYA ref-bilden – aldrig kundfotot
     return ok({
       ref_image_b64: g.b64,
       provider: g.provider || "google-flash",
@@ -1122,6 +1126,7 @@ async function handleRefImage(req, env) {
     return err(e?.message || "Ref generation failed", 500);
   }
 }
+
 
 
 
