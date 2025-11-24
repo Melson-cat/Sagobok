@@ -1050,6 +1050,7 @@ INPUT: En outline (handling).
 `;
 
 /** Skapar referensbild (alltid via Gemini 2.5 Flash Image, även om kund laddar upp foto). */
+/** Skapar referensbild (alltid via Gemini 2.5 Flash Image, även om kund laddar upp foto). */
 async function handleRefImage(req, env) {
   try {
     const { style = "cartoon", photo_b64, bible, traits = "" } =
@@ -1102,8 +1103,6 @@ async function handleRefImage(req, env) {
     return err(e?.message || "Ref generation failed", 500);
   }
 }
-
-
 
 
 function heroDescriptor({ category, name, age, traits, petSpecies }) {
@@ -2552,6 +2551,7 @@ function buildRefPortraitPrompt({ style, bible, traits = "", hasPhoto }) {
     `Return only the image; do not add any text in the picture.`,
   ].filter(Boolean).join("\n");
 }
+
 
 
 /** Genererar outline + story (inkl. bible/regi). Inga kamera-hints längre. */
