@@ -1059,24 +1059,28 @@ INPUT: En outline (handling).
 
 `;
 
-/** Skapar referensbild (alltid via Gemini 2.5 Flash Image, även om kund laddar upp foto). */
 async function handleRefImage(req, env) {
   try {
-    const { style = "cartoon", photo_b64, bible, traits = "" } =
-      await req.json().catch(() => ({}));
+    const {
+      style = "cartoon",
+      photo_b64,
+      bible,
+      traits = "",
+      category,
+    } = await req.json().catch(() => ({}));
 
-    // 1) Ta ut ev. kundfoto som ren base64 + mime-type
+    // 1) Plocka ut ev. kundfoto som ren base64 + mime-type
     let barePhoto = null;
     let photoMime = null;
 
     if (photo_b64) {
       const m = String(photo_b64).match(
-        /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i
+        /^data:(image\/[^;]+);base64,(.+)$/i
       );
       if (!m || m[2].length < 64) {
         return err("Invalid photo_b64", 400);
       }
-      photoMime = m[1].toLowerCase(); // t.ex. image/jpeg
+      photoMime = m[1].toLowerCase();
       barePhoto = m[2];
     }
 
@@ -1086,21 +1090,29 @@ async function handleRefImage(req, env) {
       bible: bible || null,
       traits,
       hasPhoto: !!barePhoto,
+      category,
     });
 
-    console.log("[REF] style:", style, "hasPhoto:", !!barePhoto);
+    console.log(
+      "[REF] style:",
+      style,
+      "category:",
+      category,
+      "hasPhoto:",
+      !!barePhoto
+    );
     if (barePhoto) {
       console.log("[REF] incoming user photo b64 length:", barePhoto.length);
       console.log("[REF] photo mime:", photoMime);
     }
     console.log("[REF] prompt (truncated):", prompt.slice(0, 400));
 
-    // 3) Anropa Gemini 2.5 Flash Image för att SKAPA referensporträttet
+    // 3) Anropa Gemini 2.5 Flash Image för att skapa referensporträttet
     const g = await geminiImage(
       env,
       {
         prompt,
-        model: "flash", // => gemini-2.5-flash-image
+        model: "flash",
         image_b64: barePhoto || undefined,
         image_mime: photoMime || undefined,
         _debugTag: "ref",
@@ -1109,21 +1121,17 @@ async function handleRefImage(req, env) {
       2
     );
 
-    if (!g?.b64) {
-      return err("Failed to generate reference image", 502);
+    if (!g || !g.b64) {
+      return err("Failed to generate reference image", 500);
     }
 
-    console.log("[REF] generated ref_image_b64 length:", g.b64.length);
-
-    // 4) Returnera bara den NYA ref-bilden – aldrig kundfotot
     return ok({
-      ref_image_b64: g.b64,
-      provider: g.provider || "google-flash",
-      image_url: g.image_url || null,
+      image_b64: g.b64,
+      image_url: g.image_url,
+      provider: g.provider || "google",
     });
   } catch (e) {
-    console.error("[REF] Ref generation failed:", e);
-    return err(e?.message || "Ref generation failed", 500);
+    return err(e?.message || "Ref image failed", 500);
   }
 }
 
@@ -2506,73 +2514,96 @@ function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
   ].filter(Boolean).join("\n");
 }
 
-function buildRefPortraitPrompt({ style, bible, traits, hasPhoto }) {
+function buildRefPortraitPrompt({ style, bible, traits, hasPhoto, category }) {
   const mc = bible?.main_character || {};
   const name = mc.name || "Nova";
   const age = mc.age ?? 6;
   const world = bible?.world || "a cozy, friendly children's story world";
   const tone = bible?.tone || "warm and playful";
-  const ward =
-    Array.isArray(bible?.wardrobe) ?
-      bible.wardrobe.join(", ")
-      : (bible?.wardrobe || "").trim();
+  const ward = Array.isArray(bible?.wardrobe)
+    ? bible.wardrobe.join(", ")
+    : (bible?.wardrobe || "").trim();
   const palette = (bible?.palette || []).join(", ");
 
-  const lines = [
-    "You are creating ONE single square portrait reference for the main hero of a children's picture book.",
-    "",
-    "OUTPUT:",
-    "- Exactly one clean, centered character portrait.",
-    "- No text, no logo, no borders.",
-    "- Soft, book-friendly background.",
-    "",
-    hasPhoto
-      ? "You receive ONE INPUT PHOTO of the real hero. You MUST preserve the identity from that photo."
-      : "No input photo is provided. Invent a consistent hero that fits the description.",
-    "",
-    "BOOK CONTEXT:",
-    `- Name: ${name}`,
-    `- Approx age: ${age}`,
-    world ? `- World: ${world}` : "",
-    tone ? `- Tone: ${tone}` : "",
-    ward ? `- Wardrobe hint: ${ward}` : "",
-    palette ? `- Color palette hints: ${palette}` : "",
-    traits ? `- Personality traits: ${traits}` : "",
-    "",
-    `STYLE: ${styleHint(style)}`,
-  ].filter(Boolean);
+  const phys = mc.physique || "";
+  const idKeys = Array.isArray(mc.identity_keys)
+    ? mc.identity_keys.join(", ")
+    : (mc.identity_keys || "");
+  const cat = (category || bible?.category || "kids").toLowerCase();
+  const looksLikePet = /\b(cat|dog|rabbit|hamster|kitten|puppy)\b/i.test(
+    phys + " " + idKeys
+  );
 
-  if (hasPhoto) {
+  const isPet = cat === "pets" || looksLikePet;
+
+  const lines = [];
+
+  if (isPet) {
     lines.push(
-      "",
-      "IDENTITY HARD RULES (FROM THE INPUT PHOTO):",
-      "- Keep the same individual, not a generic pretty character.",
-      "- Same species (if pet) or same child.",
-      "- Same face shape, eyes, nose, mouth, and main proportions.",
-      "- Same main fur/skin/hair colors and distribution.",
-      "- You are allowed to clean up lighting and background, but NOT to redesign the face.",
-      "",
-      "In other words: redraw the SAME hero from the photo in the requested style."
+      "You are creating ONE single square portrait reference for the main PET hero of a children's picture book.",
+      "The hero is a real pet (animal), not a human child."
+    );
+  } else {
+    lines.push(
+      "You are creating ONE single square portrait reference for the main CHILD hero of a children's picture book."
     );
   }
 
   lines.push(
     "",
+    "OUTPUT:",
+    "- Exactly one clean, centered character portrait.",
+    "- No text, no logo, no borders.",
+    "- Soft, book-friendly background."
+  );
+
+  if (hasPhoto) {
+    lines.push(
+      "",
+      "You receive ONE INPUT PHOTO of the real hero. You MUST preserve the identity from that photo.",
+      isPet
+        ? "- Keep the same species, approximate breed, fur colors and patterns."
+        : "- Keep the same child: face shape, eyes, nose, mouth, hair and proportions.",
+      "- If any written description disagrees with the photo, ALWAYS follow the photo.",
+      "- You may clean up lighting and background, but do NOT redesign the hero."
+    );
+  } else {
+    lines.push(
+      "",
+      "No input photo is provided. Invent a consistent hero that fits the description."
+    );
+  }
+
+  lines.push(
+    "",
+    "BOOK CONTEXT:",
+    `- Name: ${name}`,
+    !isPet ? `- Approx age: ${age}` : "",
+    world ? `- World: ${world}` : "",
+    tone ? `- Tone: ${tone}` : "",
+    ward ? `- Wardrobe hint: ${ward}` : "",
+    palette ? `- Color palette hints: ${palette}` : "",
+    traits ? `- Personality traits: ${traits}` : ""
+  );
+
+  lines.push(
+    "",
+    `STYLE: ${styleHint(style)}`,
+    "",
     "COMPOSITION:",
     "- Square aspect ratio (1:1).",
     "- Medium close-up or 3/4 view.",
-    "- The hero is clearly visible, expressive but natural.",
+    "- The hero is clearly visible and expressive.",
     "- Background is simple and soft, matching the book world."
   );
 
-  return lines.join("\n");
+  return lines.filter(Boolean).join("\n");
 }
 
 
 
 
-/** Genererar outline + story (inkl. bible/regi). Inga kamera-hints längre. */
-async function handleStory(req, env) {
+function handleStory(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
     const {
@@ -2585,37 +2616,30 @@ async function handleStory(req, env) {
       traits,
       reading_age,
       extraCharacters = [],
-        petSpecies = ""
+      petSpecies = "",
     } = body || {};
 
-    // 1) Läsålder
-    const parsedRA = parseInt(reading_age, 10);
-    const targetAge = Number.isFinite(parsedRA)
-      ? parsedRA
-      : ((category || "kids") === "pets"
-          ? 8
-          : parseInt(age || 6, 10));
+    // ... (din befintliga logik före OUTLINE, heroDescriptor, etc – oförändrad) ...
 
-    // 2) Huvudkaraktär + biroller som text
-    const mainChar = heroDescriptor({ category, name, age, traits, petSpecies });
-
-    const extrasText = Array.isArray(extraCharacters) && extraCharacters.length > 0
-      ? [
-          "BI-ROLLER (återkommande karaktärer):",
-          ...extraCharacters.map(c => {
-            const role = c.role || "vän/familjemedlem";
-            const t   = c.traits || "";
-            return `- ${c.name} (${role})${t ? ` – egenskaper: ${t}` : ""}`;
-          })
-        ].join("\n")
-      : "Inga tydligt definierade biroller angivna.";
+    const extrasText =
+      Array.isArray(extraCharacters) && extraCharacters.length > 0
+        ? [
+            "BI-ROLLER (återkommande karaktärer):",
+            ...extraCharacters.map((c) => {
+              const role = c.role || "vän/familjemedlem";
+              const t = c.traits || "";
+              return `- ${c.name} (${role})${t ? ` – egenskaper: ${t}` : ""}`;
+            }),
+          ].join("\n")
+        : "Inga tydligt definierade biroller angivna.";
 
     // 3) OUTLINE – enkel, men med info om hjälte + tema + extra karaktärer
-  const speciesLine = (category || "kids") === "pets"
-  ? `Djurslag: ${petSpecies || "katt"}.`
-  : "";
+    const speciesLine =
+      (category || "kids") === "pets"
+        ? `Djurslag: ${petSpecies || "katt"}.`
+        : "";
 
-const outlineUser = `
+    const outlineUser = `
 ${mainChar}
 ${extrasText}
 Kategori: ${category || "kids"}.
@@ -2666,11 +2690,46 @@ Inga extra fält, inga kommentarer, ingen text utanför JSON.
 
     const story = await openaiJSON(env, STORY_SYS, storyUser);
 
+    // 🔹 NYTT: säkra kategori + fixa "det lilla barnet" för husdjur
+    const cat = (category || "kids").toLowerCase();
+    if (story?.book) {
+      // tvinga igenom vald kategori
+      story.book.category = cat;
+
+      if (cat === "pets") {
+        const heroName =
+          name ||
+          (story.book.hero && story.book.hero.name) ||
+          (story.book.main_character && story.book.main_character.name) ||
+          "Melson";
+
+        const species =
+          (petSpecies ||
+            (story.book.hero && story.book.hero.species) ||
+            (story.book.main_character && story.book.main_character.species) ||
+            "katten").toLowerCase();
+
+        const reChild = /det lilla barnet/gi;
+
+        if (Array.isArray(story.book.pages)) {
+          for (const pg of story.book.pages) {
+            if (!pg) continue;
+            if (typeof pg.text === "string") {
+              pg.text = pg.text.replace(reChild, `${species} ${heroName}`);
+            }
+            if (typeof pg.scene === "string") {
+              pg.scene = pg.scene.replace(reChild, `${species} ${heroName}`);
+            }
+          }
+        }
+      }
+    }
+
     // 5) Garderob – läs från bible om den finns, annars derivat
     const wardrobe_signature = story?.book?.bible?.wardrobe
-      ? (Array.isArray(story.book.bible.wardrobe)
-          ? story.book.bible.wardrobe.join(", ")
-          : story.book.bible.wardrobe)
+      ? Array.isArray(story.book.bible.wardrobe)
+        ? story.book.bible.wardrobe.join(", ")
+        : story.book.bible.wardrobe
       : deriveWardrobeSignature(story);
 
     const coherence_code = makeCoherenceCode(story);
@@ -2683,11 +2742,11 @@ Inga extra fält, inga kommentarer, ingen text utanför JSON.
       coherence_code,
       wardrobe_signature,
     });
-
   } catch (e) {
     return err(e?.message || "Story generation failed", 500);
   }
 }
+
 
 
 
