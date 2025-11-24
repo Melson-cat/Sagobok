@@ -850,6 +850,15 @@ async function onSubmit(e) {
     state.ref_b64 = refData.ref_image_b64 || null;
     if (!state.ref_b64) throw new Error("Ingen referensbild kunde skapas.");
 
+    // DEBUG: visa referensbilden i konsolen
+const refPreviewUrl =
+  refData.image_url ||
+  (state.ref_b64 ? `data:image/png;base64,${state.ref_b64}` : null);
+
+if (refPreviewUrl) {
+  console.log("[BokPiloten] Ref image preview URL:", refPreviewUrl);
+}
+
    // 3) INTERIOR IMAGES — SEKVENSIELLT (Kedjan)
     setStatus("🎥 Spelar in scener (sida för sida)…", 38);
 

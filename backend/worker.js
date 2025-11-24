@@ -694,11 +694,24 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
   // TEXT
   if (item.prompt) parts.push({ text: item.prompt });
 
-  // BILDER (Alla källor)
+  // EV. RÅ-INPUTBILD(ER) – t.ex. kundfoto till ref-porträtt
+  if (item.image_b64) {
+    if (Array.isArray(item.image_b64)) {
+      for (const b64 of item.image_b64) {
+        if (!b64) continue;
+        parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
+      }
+    } else {
+      parts.push({ inlineData: { mimeType: "image/png", data: item.image_b64 } });
+    }
+  }
+
+  // BILDER (karaktär / tidigare rutor / stil)
   if (Array.isArray(item.character_refs_b64)) {
-     for (const ref of item.character_refs_b64) {
-        parts.push({ inlineData: { mimeType: "image/png", data: ref } });
-     }
+    for (const ref of item.character_refs_b64) {
+      if (!ref) continue;
+      parts.push({ inlineData: { mimeType: "image/png", data: ref } });
+    }
   } else if (item.character_ref_b64) {
     parts.push({ inlineData: { mimeType: "image/png", data: item.character_ref_b64 } });
   }
@@ -722,8 +735,6 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
   if (item.coherence_code) parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
   if (item.guidance) parts.push({ text: item.guidance });
 
-  // FIX: Ta bort responseMimeType helt, eftersom det orsakade 400-fel.
-  // Vi litar på att modellen genererar en bild.
   const config = {
     temperature: 0.4,
     topP: 0.7,
@@ -751,23 +762,23 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 2) {
       if (!res.ok) {
         const txt = await res.text().catch(() => "");
         if (res.status >= 500 || res.status === 429) {
-            lastError = new Error(`Gemini ${res.status}: ${txt}`);
-            await new Promise(r => setTimeout(r, 1000 * (i + 1)));
-            continue;
+          lastError = new Error(`Gemini ${res.status}: ${txt}`);
+          await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+          continue;
         }
         throw new Error(`Gemini ${res.status}: ${txt}`);
       }
 
       const data = await res.json();
-      let b64 = null;
       const part = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-      
-      if (part?.inlineData?.data) {
-          b64 = part.inlineData.data;
-      } 
-      
+      const b64 = part?.inlineData?.data || null;
+
       if (!b64) {
-         throw new Error("No image data in response");
+        throw new Error("No image data in response");
+      }
+
+      if (item._debugTag === "ref") {
+        console.log("[REF] Gemini image OK. b64 length:", b64.length);
       }
 
       return { b64, image_url: `data:image/png;base64,${b64}`, provider: "google" };
@@ -1050,7 +1061,6 @@ INPUT: En outline (handling).
 `;
 
 /** Skapar referensbild (alltid via Gemini 2.5 Flash Image, även om kund laddar upp foto). */
-/** Skapar referensbild (alltid via Gemini 2.5 Flash Image, även om kund laddar upp foto). */
 async function handleRefImage(req, env) {
   try {
     const { style = "cartoon", photo_b64, bible, traits = "" } =
@@ -1077,13 +1087,19 @@ async function handleRefImage(req, env) {
       hasPhoto: !!barePhoto,
     });
 
+    console.log("[REF] style:", style, "hasPhoto:", !!barePhoto);
+    if (barePhoto) {
+      console.log("[REF] incoming user photo b64 length:", barePhoto.length);
+    }
+
     // 3) Anropa Gemini 2.5 Flash Image för att SKAPA referensporträttet
     const g = await geminiImage(
       env,
       {
         prompt,
-        model: "flash",           // => gemini-2.5-flash-image
-        image_b64: barePhoto || undefined, // om foto finns: använd som input-referens
+        model: "flash",              // => gemini-2.5-flash-image
+        image_b64: barePhoto || undefined, // foto som input (om finns)
+        _debugTag: "ref",
       },
       70000,
       2
@@ -1093,6 +1109,8 @@ async function handleRefImage(req, env) {
       return err("Failed to generate reference image", 502);
     }
 
+    console.log("[REF] generated ref_image_b64 length:", g.b64.length);
+
     // 4) Returnera bara den NYA ref-bilden – aldrig kundfotot
     return ok({
       ref_image_b64: g.b64,
@@ -1100,9 +1118,11 @@ async function handleRefImage(req, env) {
       image_url: g.image_url || null,
     });
   } catch (e) {
+    console.error("[REF] Ref generation failed:", e);
     return err(e?.message || "Ref generation failed", 500);
   }
 }
+
 
 
 function heroDescriptor({ category, name, age, traits, petSpecies }) {
