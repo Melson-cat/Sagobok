@@ -209,21 +209,60 @@ async function pollOrderPaid(orderId, { intervalMs = POLL_INTERVAL_MS, timeoutMs
 
 function buildImagesPayload() {
   const images = [];
-  if (state.cover_image_id) images.push({ kind: "cover", image_id: state.cover_image_id });
-  else if (state.cover_preview_url) images.push({ kind: "cover", data_url: state.cover_preview_url });
 
+  // --- Cover ---
+  if (state.cover_image_id) {
+    images.push({ kind: "cover", image_id: state.cover_image_id });
+  } else if (state.cover_preview_url) {
+    if (state.cover_preview_url.startsWith("data:image/")) {
+      images.push({ kind: "cover", data_url: state.cover_preview_url });
+    } else {
+      images.push({ kind: "cover", url: state.cover_preview_url });
+    }
+  }
+
+  // --- Interiors ---
   const pages = state.story?.book?.pages || [];
   for (const p of pages) {
     const row = state.images_by_page.get(p.page);
     if (!row) continue;
-    images.push(
-      row.image_id ? { page: p.page, image_id: row.image_id } :
-      row.data_url ? { page: p.page, data_url: row.data_url } :
-      row.image_url ? { page: p.page, url: row.image_url } : null
-    );
+
+    // 1) CF-bild vinner (stabilast)
+    if (row.image_id) {
+      images.push({ page: p.page, image_id: row.image_id });
+      continue;
+    }
+
+    // 2) Om vi har explicit data_url – använd den
+    if (row.data_url && row.data_url.startsWith("data:image/")) {
+      images.push({ page: p.page, data_url: row.data_url });
+      continue;
+    }
+
+    // 3) image_url kan vara HTTP/HTTPS eller data:image
+    if (row.image_url) {
+      if (row.image_url.startsWith("data:image/")) {
+        images.push({ page: p.page, data_url: row.image_url });
+      } else {
+        images.push({ page: p.page, url: row.image_url });
+      }
+      continue;
+    }
+
+    // 4) Fallback om något har lagt URL i row.url
+    if (row.url) {
+      if (row.url.startsWith("data:image/")) {
+        images.push({ page: p.page, data_url: row.url });
+      } else {
+        images.push({ page: p.page, url: row.url });
+      }
+      continue;
+    }
   }
-  return images.filter(Boolean);
+
+  return images;
 }
+
 
 function updateHeroFieldForCategory() {
   const cat = state.form.category || "kids";
@@ -569,17 +608,18 @@ function buildCard(item) {
     imgWrap.appendChild(sk);
   }
 
-  // Hover overlay regenerate
-  const over = document.createElement("div");
-  over.className = "regen-overlay";
+   const over = document.createElement("div");
+  over.className = "regen-overlay hidden"; // <- starta gömd
 
   const btn = document.createElement("button");
   btn.className = "regen-btn";
   btn.textContent = "Regenerera";
+
   btn.onclick = () => regenerateImage(item.page, article);
 
   over.appendChild(btn);
   imgWrap.appendChild(over);
+
 
   // Text – redigerbar
   const txt = document.createElement("div");
@@ -603,21 +643,17 @@ async function fillCard(page, imgUrl, providerLabel = "") {
   const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${page}"]`);
   if (!wrap || !imgUrl) return;
 
-  // Se till att det finns ett img-element
   let imgEl = wrap.querySelector("img");
   if (!imgEl) {
     imgEl = document.createElement("img");
     wrap.prepend(imgEl);
   }
 
-  // Ta bort alla typer av skeletons
-  wrap.querySelectorAll(".skeleton, .skeleton-box").forEach((el) => el.remove());
+  const sk   = wrap.querySelector(".skeleton, .skeleton-box");
+  const prov = wrap.querySelector(".img-provider");
+  const over = wrap.querySelector(".regen-overlay");
   wrap.querySelector(".img-fallback")?.remove();
 
-  // Provider-label om du lägger till en sådan senare
-  const prov = wrap.querySelector(".img-provider");
-
-  // undvik dubblettarbete
   if (wrap.dataset.currentUrl === imgUrl) return;
   wrap.dataset.currentUrl = imgUrl;
 
@@ -627,15 +663,20 @@ async function fillCard(page, imgUrl, providerLabel = "") {
 
   const show = () => {
     imgEl.src = tmp.src;
-    imgEl.classList.add("is-ready"); // fade-in
+    imgEl.classList.add("is-ready");
+    sk?.remove();
+
     if (prov) {
       prov.textContent = providerLabel || "";
       prov.classList.toggle("hidden", !providerLabel);
     }
+    // 🔓 gör regen-knappen synlig först nu
+    if (over) over.classList.remove("hidden");
   };
 
   tmp.onload = show;
   tmp.onerror = () => {
+    sk?.remove();
     const fb = document.createElement("div");
     fb.className = "img-fallback";
     fb.innerHTML = `
@@ -646,7 +687,7 @@ async function fillCard(page, imgUrl, providerLabel = "") {
       e.preventDefault();
       fb.remove();
       const sk2 = document.createElement("div");
-      sk2.className = "skeleton";
+      sk2.className = "skeleton-box";
       wrap.prepend(sk2);
       if (page === 0) generateCoverAsync().catch(() => {});
       else regenerateOne(page);
@@ -655,14 +696,11 @@ async function fillCard(page, imgUrl, providerLabel = "") {
   };
 
   tmp.src = imgUrl;
-
   if (tmp.decode) {
-    try {
-      await tmp.decode();
-      show();
-    } catch {}
+    try { await tmp.decode(); show(); } catch {}
   }
 }
+
 
 
 
@@ -681,22 +719,11 @@ async function uploadToCF(items) {
 }
 
 /* --------------------------- PDF --------------------------- */
-// in script.js (your onCreatePdf)
 async function onCreatePdf() {
   try {
     if (!state.story) throw new Error("Ingen story i minnet.");
 
-    const images = [];
-    if (state.cover_image_id) images.push({ kind: "cover", image_id: state.cover_image_id });
-    else if (state.cover_preview_url) images.push({ kind: "cover", data_url: state.cover_preview_url });
-    const pages = state.story?.book?.pages || [];
-    for (const p of pages) {
-      const row = state.images_by_page.get(p.page);
-      if (!row) continue;
-      images.push(row.image_id ? { page: p.page, image_id: row.image_id }
-        : row.data_url ? { page: p.page, data_url: row.data_url }
-        : row.image_url ? { page: p.page, url: row.image_url } : null);
-    }
+    const images = buildImagesPayload();
 
     setStatus("📕 Bygger PDF…", 100);
     const res = await fetch(`${API}/api/pdf`, {
@@ -712,10 +739,11 @@ async function onCreatePdf() {
     });
 
     if (!res.ok) {
-      const body = await res.text().catch(()=>"");
+      const body = await res.text().catch(() => "");
       console.error("PDF backend error:", body);
       throw new Error(`PDF misslyckades (HTTP ${res.status})\n${body}`);
     }
+
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     window.open(url, "_blank");
@@ -726,6 +754,7 @@ async function onCreatePdf() {
     alert(e?.message || "Kunde inte skapa PDF.");
   }
 }
+
 
 async function onBuyPdf() {
   if (!state.story) { alert("Skapa förhandsvisning först."); return; }
