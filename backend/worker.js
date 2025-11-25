@@ -808,18 +808,29 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
         provider:
           currentModelId === PRO_MODEL ? "google-pro" : "google-flash",
       };
-    } catch (e) {
+     } catch (e) {
       clearTimeout(t);
       lastError = e;
       console.warn(
-        `[Gemini] Attempt ${i + 1} with ${currentModelId} failed: ${
-          e.message
-        }`
+        `[Gemini] Attempt ${i + 1} with ${currentModelId} failed: ${e.message}`
       );
+
+      // 🔁 Fallback-logik:
+      // Om vi har fler försök kvar OCH vi började på Pro (inte model:"flash")
+      // -> byt till FLASH för nästa varv – oavsett om felet var 503 eller AbortError.
+      if (i < attempts - 1 && !baseIsFlash && currentModelId === PRO_MODEL) {
+        console.warn(
+          "[Gemini] Pro failed or timed out – switching to FLASH fallback for next attempt"
+        );
+        currentModelId = FLASH_MODEL;
+      }
+
+      // Liten paus innan nästa försök, om det finns något kvar
       if (i < attempts - 1) {
         await new Promise((r) => setTimeout(r, 500));
       }
     }
+
   }
 
   throw lastError || new Error("Gemini failed");
@@ -2995,14 +3006,13 @@ async function handleImagesNext(req, env) {
   }
 }
 
-
-
 async function handleImageRegenerate(req, env) {
   try {
     const {
       story,
       page,
       ref_image_b64,
+      prev_b64, // <--- NYTT: Ta emot föregående bild
       style,
       coherence_code,
       style_refs_b64
@@ -3016,43 +3026,54 @@ async function handleImageRegenerate(req, env) {
     const target = pages.find((p) => p.page === page);
     if (!target) return err(`Page ${page} not found`, 404);
 
-    // Gör en enkel plan bara för att få rätt frame
-    const plan = normalizePlan(pages, []); // beroende på din signatur, ev. normalizePlan(pages)
-    const frame = plan?.plan?.find((f) => f.page === page) || null;
-
-    const effectiveStyle = style || story.book.style || "cartoon";
-    const cc = coherence_code || makeCoherenceCode(story);
-    const wardrobe_signature = deriveWardrobeSignature(story);
     const heroName = story.book.bible?.main_character?.name || "Hero";
+    
+    // Hämta garderob (samma logik som handleImagesNext)
+    const bibleWardrobe = story.book.bible?.wardrobe 
+        ? (Array.isArray(story.book.bible.wardrobe) ? story.book.bible.wardrobe.join(", ") : story.book.bible.wardrobe)
+        : null;
+    const wardrobe = bibleWardrobe || deriveWardrobeSignature(story);
 
+    // Bygg bas-prompten
     const prompt = buildFramePrompt({
-      style: effectiveStyle,
+      style: style || story.book.style || "cartoon",
       story,
       page: target,
-      pageCount: pages.length,
-      frame,
       characterName: heroName,
-      wardrobe_signature,
-      coherence_code: cc,
+      wardrobe_signature: wardrobe,
+      coherence_code: coherence_code || makeCoherenceCode(story),
     });
 
+    // Lägg till REGENERATE-instruktion
+    const regenPrompt = [
+       prompt,
+       "*** REGENERATION REQUEST ***",
+       "Create a NEW variation of this scene.",
+       "Fix any previous errors.",
+       "Maintain strict identity from Image 1.",
+       prev_b64 ? "Maintain environment continuity from Image 2." : ""
+    ].join("\n\n");
+
+    // Payload
     const payload = {
-      prompt,
-      character_ref_b64: ref_image_b64,
-      coherence_code: cc,
-      guidance: styleHint(effectiveStyle),
+      prompt: regenPrompt,
+      character_ref_b64: ref_image_b64, // IMAGE 1
+      prev_b64: prev_b64,               // IMAGE 2 (Nytt!)
+      coherence_code: coherence_code || makeCoherenceCode(story),
     };
 
     if (Array.isArray(style_refs_b64) && style_refs_b64.length) {
       payload.style_refs_b64 = style_refs_b64;
     }
 
-    const img = await geminiImage(env, payload, 75000, 3);
+    // Anropa med 60s timeout (lite längre tid för enstaka regen är ok)
+    const img = await geminiImage(env, payload, 60000, 2); 
+
     if (!img?.image_url) return err("No image from Gemini", 502);
 
     return ok({
       page,
-      prompt,
+      prompt: regenPrompt,
       image_url: img.image_url,
       provider: img.provider || "google",
     });

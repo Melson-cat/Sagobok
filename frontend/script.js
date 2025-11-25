@@ -1015,6 +1015,26 @@ async function regenerateOne(page) {
   sk.className = "skeleton";
   wrap.prepend(sk);
 
+  // NYTT: Hitta föregående bild för kontinuitet
+  let prevB64 = null;
+  try {
+    const prevPageNum = page - 1;
+    if (prevPageNum > 0) {
+        const prevImgData = state.images_by_page.get(prevPageNum);
+        if (prevImgData) {
+            // Vi har antingen data_url eller image_url, se till att vi får Base64
+            const urlToFetch = prevImgData.data_url || prevImgData.image_url;
+            if (urlToFetch) {
+                const du = await urlToDataURL(urlToFetch);
+                prevB64 = dataUrlToBareB64(du);
+            }
+        }
+    }
+  } catch (err) {
+    console.warn("Kunde inte hämta föregående bild för regen:", err);
+    // Vi fortsätter ändå utan prev_b64
+  }
+
   try {
     const res = await fetch(`${API}/api/image/regenerate`, {
       method: "POST",
@@ -1023,10 +1043,8 @@ async function regenerateOne(page) {
         page,
         story: state.story,
         ref_image_b64: state.ref_b64,
+        prev_b64: prevB64, // <--- SKICKAR DEN HÄR
         style: state.form.style,
-        // om du vill i framtiden kan du även skicka:
-        // coherence_code: state.coherence_code,
-        // style_refs_b64: state.style_refs_b64,
       }),
     });
 
