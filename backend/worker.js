@@ -1106,7 +1106,6 @@ INPUT: En outline (handling).
 • Om "category" = "pets" får du aldrig beskriva hjälten som ett barn i något fält (text, scene, scene_en).
 
 `;
-
 async function handleRefImage(req, env) {
   try {
     const {
@@ -1117,7 +1116,7 @@ async function handleRefImage(req, env) {
       category,
     } = await req.json().catch(() => ({}));
 
-    // 1) Plocka ut kundfoto som ren base64 + mime-type
+    // 1) Extrahera ren base64 + mime-type
     let barePhoto = null;
     let photoMime = null;
 
@@ -1131,12 +1130,9 @@ async function handleRefImage(req, env) {
       photoMime = m[1].toLowerCase();
       barePhoto = m[2];
     }
+    if (!barePhoto) return err("Missing photo_b64", 400);
 
-    if (!barePhoto) {
-      return err("Missing photo_b64", 400);
-    }
-
-    // 2) Bygg ref-porträtt-prompt
+    // 2) Bygg prompten
     const prompt = buildRefPortraitPrompt({
       style,
       bible: bible || null,
@@ -1145,24 +1141,14 @@ async function handleRefImage(req, env) {
       category,
     });
 
-    console.log(
-      "[REF] style:",
-      style,
-      "category:",
-      category,
-      "hasPhoto:",
-      !!barePhoto
-    );
-    console.log("[REF] incoming user photo b64 length:", barePhoto.length);
-    console.log("[REF] photo mime:", photoMime);
-    console.log("[REF] prompt (truncated):", prompt.slice(0, 400));
+    console.log("[REF] prompt excerpt:", prompt.slice(0, 400));
 
-    // 3) Anropa Gemini 2.5 Flash Image för ref-porträtt
+    // 3) Generera ref-bilden via Gemini (FLASH FÖR REF)
     const g = await geminiImage(
       env,
       {
         prompt,
-        model: "flash",                 // 🔹 tvinga FLASH för ref-bild
+        model: "flash",
         image_b64: barePhoto,
         image_mime: photoMime || "image/png",
         _debugTag: "ref",
@@ -1171,22 +1157,50 @@ async function handleRefImage(req, env) {
       2
     );
 
-    if (!g || !g.b64) {
-      return err("Failed to generate reference image", 500);
+    if (!g?.b64) return err("Failed to generate reference image", 500);
+
+    // === 🔹 Steg 4: LADDA UPP TILL CLOUDFLARE IMAGES ===
+
+    const uploadUrl = `https://api.cloudflare.com/client/v4/accounts/${env.IMAGES_ACCOUNT_ID}/images/v1`;
+
+    const fileBytes = Uint8Array.from(atob(g.b64), c => c.charCodeAt(0));
+    const form = new FormData();
+    form.append("file", new Blob([fileBytes], { type: "image/png" }), "ref.png");
+
+    const uploadRes = await fetch(uploadUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${env.IMAGES_API_KEY}`,
+      },
+      body: form,
+    });
+
+    const uploadJson = await uploadRes.json();
+    if (!uploadJson?.success) {
+      console.error("CF Image Upload Failed:", uploadJson);
+      return err("Cloudflare image upload failed", 500);
     }
 
-    // 🔹 Viktigt: skicka ref_image_b64 så frontend blir nöjd
+    const cfId = uploadJson.result.id;
+    const cfImageUrl = uploadJson.result.variants?.[0]
+      || `https://imagedelivery.net/${env.IMAGES_ACCOUNT_HASH}/${cfId}/public`;
+
+    // === 🔹 Returnera både base64 och Cloudflare-länken ===
+
     return ok({
-      ref_image_b64: g.b64,             // det script.js läser
-      image_b64: g.b64,                 // ev. kvar för andra flöden
-      image_url: g.image_url,
+      ref_image_b64: g.b64,
+      image_b64: g.b64,
+      image_url: g.image_url,       // data URL
+      cloudflare_image_url: cfImageUrl, // 🔥 riktig URL
+      cloudflare_id: cfId,
       provider: g.provider || "google",
     });
+
   } catch (e) {
+    console.error("RefImage Error:", e);
     return err(e?.message || "Ref image failed", 500);
   }
 }
-
 
 
 
