@@ -483,58 +483,86 @@ function writeForm() {
 }
 
 
-/* --------------------------- Preview rendering --------------------------- */
 function renderSkeleton(count = 4) {
   els.previewGrid.innerHTML = "";
+
   for (let i = 0; i < count; i++) {
     const el = document.createElement("article");
     el.className = "thumb";
-    el.innerHTML = `
-      <div class="imgwrap"><div class="skeleton"></div></div>
-      <div class="txt"><span class="skeleton" style="display:block;height:12px;margin-bottom:8px"></span><span class="skeleton" style="display:block;height:12px;width:60%"></span></div>`;
+
+    const wrap = document.createElement("div");
+    wrap.className = "imgwrap";
+
+    const sk = document.createElement("div");
+    sk.className = "skeleton-box";
+
+    wrap.appendChild(sk);
+
+    const txt = document.createElement("div");
+    txt.className = "page-text";
+    txt.textContent = "Genererar sida…";
+    txt.style.opacity = "0.5";
+
+    el.appendChild(wrap);
+    el.appendChild(txt);
+
     els.previewGrid.appendChild(el);
   }
-  els.previewSection.classList.remove("hidden");
 }
 
-function buildCards(pages, visibleCount) {
-  els.previewGrid.innerHTML = "";
-  // Cover först
-  const cover = document.createElement("article");
-  cover.className = "thumb cover";
-  cover.innerHTML = `
-    <div class="imgwrap" data-page="0">
-      <div class="skeleton"></div>
-      <img alt="Omslag" style="opacity:0" />
-      <span class="img-provider hidden"></span>
-    </div>
-    <div class="txt">Omslag</div>`;
-  els.previewGrid.appendChild(cover);
 
-  // Interiör
-  pages.forEach((pg, i) => {
-    const card = document.createElement("article");
-    card.className = "thumb";
-    if (i >= visibleCount) card.classList.add("locked");
-    card.innerHTML = `
-      <div class="imgwrap" data-page="${pg.page}">
-        <div class="skeleton"></div>
-        <img alt="Sida ${pg.page}" style="opacity:0" />
-        <span class="img-provider hidden"></span>
-      </div>
-      <div class="txt">${escapeHtml(pg.text || "")}</div>
-      <div class="retry-wrap hidden" style="padding:10px 12px;">
-        <button class="retry-btn retry" data-page="${pg.page}">🔄 Generera igen</button>
-      </div>`;
-    els.previewGrid.appendChild(card);
-  });
 
-  els.previewSection.classList.remove("hidden");
-  smoothScrollTo(els.previewSection);
+function buildCard(item) {
+  const article = document.createElement("article");
+  article.className = "thumb";
 
-  // 🔓 Aktivera "Generera igen" på upplåsta sidor
-  enablePerPageRegenerate();
+  // Bild-wrapper
+  const imgWrap = document.createElement("div");
+  imgWrap.className = "imgwrap";
+
+  // dataset för page så fillCard hittar rätt
+  imgWrap.dataset.page = item.page;
+
+  if (!item.image_url) {
+    const sk = document.createElement("div");
+    sk.className = "skeleton-box";
+    imgWrap.appendChild(sk);
+  } else {
+    const img = document.createElement("img");
+    img.src = item.image_url;
+    imgWrap.appendChild(img);
+  }
+
+  // Hover overlay regenerate
+  const over = document.createElement("div");
+  over.className = "regen-overlay";
+
+  const btn = document.createElement("button");
+  btn.className = "regen-btn";
+  btn.textContent = "Regenerera";
+
+  btn.onclick = () => regenerateImage(item.page, article);
+
+  over.appendChild(btn);
+  imgWrap.appendChild(over);
+
+  // Text – redigerbar
+  const txt = document.createElement("div");
+  txt.className = "page-text";
+  txt.contentEditable = "true";
+  txt.textContent = item.text || "";
+
+  // Spara redigering till story-objektet
+  txt.oninput = () => {
+    const page = state.story.book.pages.find(p => p.page === item.page);
+    if (page) page.text = txt.textContent;
+  };
+
+  article.appendChild(imgWrap);
+  article.appendChild(txt);
+  return article;
 }
+
 
 
 // Stabil slot-updaterare (cover=0, interiör=1..16)
@@ -990,16 +1018,6 @@ if (bare) {
     els.submitBtn.textContent = "Skapa förhandsvisning";
   }
 }
-
-function enablePerPageRegenerate() {
-  if (!els.previewGrid) return;
-
-  // Visa "🔄 Generera igen" på alla upplåsta sidor
-  els.previewGrid
-    .querySelectorAll(".thumb:not(.locked) .retry-wrap")
-    .forEach((el) => el.classList.remove("hidden"));
-}
-
 /* --------------------------- Single regenerate --------------------------- */
 
 async function regenerateOne(page) {
@@ -1072,6 +1090,64 @@ async function regenerateOne(page) {
     wrap.appendChild(fb);
   }
 }
+
+async function regenerateImage(page, cardEl) {
+  const wrap = cardEl.querySelector(".imgwrap");
+  wrap.innerHTML = `<div class="skeleton-box"></div>`;
+
+  let prevB64 = null;
+  try {
+    const prev = state.images_by_page.get(page - 1);
+    if (prev) {
+      const du = await urlToDataURL(prev.image_url);
+      prevB64 = dataUrlToBareB64(du);
+    }
+  } catch {}
+
+  const payload = {
+    story: state.story,
+    page,
+    ref_image_b64: state.ref_b64,
+    prev_b64: prevB64,
+    style: state.form.style,
+  };
+
+  const res = await fetch(`${API}/api/images/regenerate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const j = await res.json().catch(() => null);
+
+  if (!j || !j.image_url) {
+    wrap.innerHTML = `<div class="error">Fel – försök igen</div>`;
+    return;
+  }
+
+  // Ny bild
+  wrap.innerHTML = "";
+  const img = document.createElement("img");
+  img.src = j.image_url;
+
+  wrap.appendChild(img);
+
+  // Lägg tillbaka regenerate overlay
+  const over = document.createElement("div");
+  over.className = "regen-overlay";
+
+  const btn = document.createElement("button");
+  btn.className = "regen-btn";
+  btn.textContent = "Regenerera";
+  btn.onclick = () => regenerateImage(page, cardEl);
+
+  over.appendChild(btn);
+  wrap.appendChild(over);
+
+  // uppdatera state
+  state.images_by_page.set(page, { image_url: j.image_url });
+}
+
 
 
 async function generateCoverAsync() {
@@ -1232,14 +1308,6 @@ function bindEvents() {
 
   els.form?.addEventListener("submit", onSubmit);
 
-  els.previewGrid?.addEventListener("click", (e) => {
-    const t = e.target;
-    if (t && t.classList.contains("retry-btn")) {
-      e.preventDefault();
-      const page = Number(t.getAttribute("data-page"));
-      if (page) regenerateOne(page);
-    }
-  });
 
   els.navToggle?.addEventListener("click", () => {
     els.mobileMenu.classList.toggle("open");
