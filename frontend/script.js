@@ -484,6 +484,13 @@ function writeForm() {
 
 
 function renderSkeleton(count = 4) {
+  if (!els.previewGrid) return;
+
+  // 🔹 Visa preview-sektionen
+  if (els.previewSection) {
+    els.previewSection.classList.remove("hidden");
+  }
+
   els.previewGrid.innerHTML = "";
 
   for (let i = 0; i < count; i++) {
@@ -493,9 +500,9 @@ function renderSkeleton(count = 4) {
     const wrap = document.createElement("div");
     wrap.className = "imgwrap";
 
+    // Klassisk skeleton (matchar CSS .thumb .imgwrap .skeleton)
     const sk = document.createElement("div");
-    sk.className = "skeleton-box";
-
+    sk.className = "skeleton";
     wrap.appendChild(sk);
 
     const txt = document.createElement("div");
@@ -545,18 +552,21 @@ function buildCard(item) {
   // Bild-wrapper
   const imgWrap = document.createElement("div");
   imgWrap.className = "imgwrap";
-
-  // dataset för page så fillCard hittar rätt
   imgWrap.dataset.page = item.page;
 
+  // Bild-elementet (finns alltid)
+  const img = document.createElement("img");
+  if (item.image_url) {
+    img.src = item.image_url;
+    img.classList.add("is-ready");
+  }
+  imgWrap.appendChild(img);
+
+  // Skeleton ovanpå tills bild finns
   if (!item.image_url) {
     const sk = document.createElement("div");
-    sk.className = "skeleton-box";
+    sk.className = "skeleton";
     imgWrap.appendChild(sk);
-  } else {
-    const img = document.createElement("img");
-    img.src = item.image_url;
-    imgWrap.appendChild(img);
   }
 
   // Hover overlay regenerate
@@ -566,7 +576,6 @@ function buildCard(item) {
   const btn = document.createElement("button");
   btn.className = "regen-btn";
   btn.textContent = "Regenerera";
-
   btn.onclick = () => regenerateImage(item.page, article);
 
   over.appendChild(btn);
@@ -580,7 +589,7 @@ function buildCard(item) {
 
   // Spara redigering till story-objektet
   txt.oninput = () => {
-    const page = state.story.book.pages.find(p => p.page === item.page);
+    const page = state.story?.book?.pages?.find((p) => p.page === item.page);
     if (page) page.text = txt.textContent;
   };
 
@@ -590,30 +599,35 @@ function buildCard(item) {
 }
 
 
-
-// Stabil slot-updaterare (cover=0, interiör=1..16)
 async function fillCard(page, imgUrl, providerLabel = "") {
   const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${page}"]`);
   if (!wrap || !imgUrl) return;
 
-  const imgEl = wrap.querySelector("img");
-  const sk    = wrap.querySelector(".skeleton");
-  const prov  = wrap.querySelector(".img-provider");
+  // Se till att det finns ett img-element
+  let imgEl = wrap.querySelector("img");
+  if (!imgEl) {
+    imgEl = document.createElement("img");
+    wrap.prepend(imgEl);
+  }
+
+  // Ta bort alla typer av skeletons
+  wrap.querySelectorAll(".skeleton, .skeleton-box").forEach((el) => el.remove());
   wrap.querySelector(".img-fallback")?.remove();
+
+  // Provider-label om du lägger till en sådan senare
+  const prov = wrap.querySelector(".img-provider");
 
   // undvik dubblettarbete
   if (wrap.dataset.currentUrl === imgUrl) return;
   wrap.dataset.currentUrl = imgUrl;
 
   const tmp = new Image();
-  // (valfritt) tmp.crossOrigin = "anonymous";
   tmp.loading = "eager";
-  tmp.referrerPolicy = "no-referrer"; // minimerar CORS-strul för vissa CDN
+  tmp.referrerPolicy = "no-referrer";
 
   const show = () => {
     imgEl.src = tmp.src;
-    imgEl.classList.add("is-ready");     // triggar fade-in via CSS
-    sk?.remove();
+    imgEl.classList.add("is-ready"); // fade-in
     if (prov) {
       prov.textContent = providerLabel || "";
       prov.classList.toggle("hidden", !providerLabel);
@@ -622,7 +636,6 @@ async function fillCard(page, imgUrl, providerLabel = "") {
 
   tmp.onload = show;
   tmp.onerror = () => {
-    sk?.remove();
     const fb = document.createElement("div");
     fb.className = "img-fallback";
     fb.innerHTML = `
@@ -641,14 +654,16 @@ async function fillCard(page, imgUrl, providerLabel = "") {
     wrap.appendChild(fb);
   };
 
-  // starta laddning
   tmp.src = imgUrl;
 
-  // snabbare paint på moderna browsers
   if (tmp.decode) {
-    try { await tmp.decode(); show(); } catch {}
+    try {
+      await tmp.decode();
+      show();
+    } catch {}
   }
 }
+
 
 
 
