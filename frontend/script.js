@@ -881,13 +881,16 @@ let prevBareFrames = [];
         const res = await fetch(`${API}/api/images/next`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
+      body: JSON.stringify({
             style: state.form.style,
             story: state.story,
-            // plan: state.plan, // Behövs inte, styrs av storyn nu
             page: pg.page,
             ref_image_b64: state.ref_b64,
-         prev_images_b64: prevBareFrames,
+            // ➜ endast SENASTE ramen som prev_b64
+            prev_b64:
+              prevBareFrames.length
+                ? prevBareFrames[prevBareFrames.length - 1]
+                : null,
           }),
         });
         
