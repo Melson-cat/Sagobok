@@ -510,6 +510,32 @@ function renderSkeleton(count = 4) {
   }
 }
 
+function buildCards(pages, visibleCount) {
+  if (!els.previewGrid) return;
+  els.previewGrid.innerHTML = "";
+
+  // Omslaget (page 0 – placeholder tills cover är klar)
+  const coverCard = buildCard({
+    page: 0,
+    image_url: state.cover_preview_url || null,
+    text: state.story?.book?.title || "",
+  });
+  els.previewGrid.appendChild(coverCard);
+
+  // Innersidor
+  for (const pg of pages) {
+    const card = buildCard({
+      page: pg.page,
+      image_url: (state.images_by_page.get(pg.page) || {}).image_url || null,
+      text:
+        pg.text ||
+        pg.scene_sv ||
+        pg.scene_en ||
+        "",
+    });
+    els.previewGrid.appendChild(card);
+  }
+}
 
 
 function buildCard(item) {
