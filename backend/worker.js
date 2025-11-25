@@ -742,7 +742,7 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
 
   // Ingen responseMimeType -> funkar med både Pro och Flash
   const generationConfig = {
-    temperature: 0.4,
+    temperature: 0.55,
     topP: 0.7,
   };
 
@@ -1238,7 +1238,7 @@ function buildFramePrompt({
   coherence_code,
 }) {
   const category = story?.book?.category || "kids";
-  const isPet    = category.toLowerCase() === "pets";
+  const isPet = category.toLowerCase() === "pets";
 
   const wardrobe = story?.book?.bible?.wardrobe
     ? (Array.isArray(story.book.bible.wardrobe)
@@ -1249,18 +1249,30 @@ function buildFramePrompt({
   const age = story?.book?.bible?.main_character?.age || 5;
   const coh = coherence_code || makeCoherenceCode(story);
 
-  // 1) INPUT GUIDE – flera tidigare ramar
+  // 1) INPUT GUIDE – flera bilder + text
   const inputGuide = [
     `*** INPUT GUIDE ***`,
-    `You have received MULTIPLE images and this text prompt.`,
-    `IMAGE 1 (first image): The "MASTER IDENTITY REFERENCE" for the main hero (visual truth).`,
-    `IMAGES 2..N (following images): Previous story frames from the SAME book.`,
+    `You receive IMAGE 1, optionally IMAGE 2, and this text prompt.`,
+    ``,
+    `IMAGE 1: The "MASTER IDENTITY REFERENCE" for the main hero (visual truth).`,
+    `IMAGE 2 (and any additional context images if present): Previous story frame(s) from the SAME book.`,
+    ``,
     `Use IMAGE 1 ONLY for the hero's physical appearance and clothing.`,
-    `Use IMAGES 2..N ONLY for story continuity (environment, lighting, mood, rough composition).`,
+    `Use IMAGE 2 ONLY for story continuity (environment, lighting, mood, rough composition).`,
+    ``,
     `TEXT (below): Description of the NEXT scene you must create.`,
   ].join("\n");
 
-  // 2) IDENTITY – hårt låst till IMAGE 1
+  // 2) FORMAT – för att undvika split-screen / collage
+  const formatRules = [
+    `*** COMPOSITION RULES (CRITICAL) ***`,
+    `1. SINGLE IMAGE ONLY: Do NOT create a collage, grid, or split-screen.`,
+    `2. FULL FRAME: The scene must fill the entire square canvas.`,
+    `3. NO INSETS: Do not put the reference face in a corner or as a small overlay.`,
+    `4. INTEGRATION: The hero must be IN the scene, interacting with the light, depth, and environment.`,
+  ].join("\n");
+
+  // 3) IDENTITY – hårt låst till IMAGE 1
   const identityLines = isPet
     ? [
         `*** 1. IDENTITY (Source: IMAGE 1) ***`,
@@ -1285,10 +1297,9 @@ function buildFramePrompt({
         `ABSOLUTE RULE: If IMAGE 1 and any text description conflict,`,
         `→ IMAGE 1 is the ONLY source of truth for physical appearance.`,
       ];
-
   const identitySection = identityLines.join("\n");
 
-  // 3) WARDROBE – lås kläder
+  // 4) WARDROBE – lås kläder
   const wardrobeSection = [
     `*** 2. WARDROBE (Strict Text Rule) ***`,
     `The hero MUST wear the SAME outfit on every page.`,
@@ -1297,24 +1308,27 @@ function buildFramePrompt({
     `If previous frames show clothing mistakes, IGNORE those mistakes and follow this wardrobe description instead.`,
   ].join("\n");
 
-  // 4) CONTINUITY – förklara hur tidigare bilder ska användas
+  // 5) CONTINUITY + ANTI-STAGNATION – hur tidigare bilder ska användas
   const continuitySection = [
-    `*** 3. CONTINUITY (Sources: IMAGES 2..N) ***`,
-    `IMAGES 2..N are previous frames from the SAME storybook.`,
-    `Use them to keep global elements consistent:`,
-    `- Overall rendering style and brushwork.`,
-    `- World design, props, and recurring locations.`,
+    `*** 3. CONTINUITY vs NEW ACTION (Sources: IMAGE 2 and context) ***`,
+    `IMAGE 2 shows what happened a moment ago in the story.`,
+    ``,
+    `KEEP from IMAGE 2:`,
+    `- Environment style and recurring props.`,
     `- Global lighting and color mood.`,
     ``,
-    `BUT:`,
-    `- Do NOT copy any previous frame 1:1.`,
-    `- Do NOT keep the same pose or camera angle.`,
+    `DISCARD from IMAGE 2:`,
+    `- The exact pose of the hero.`,
+    `- The exact camera angle and framing.`,
+    ``,
+    `CHANGE in the NEW frame:`,
+    `- You MUST create a significantly different composition than IMAGE 2.`,
     `- Always move the story forward with a NEW moment in time.`,
   ].join("\n");
 
-  // 5) STORY SO FAR – textrecap av senaste sidorna
+  // 6) STORY SO FAR – textrecap av senaste sidorna
   const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
-  const idx   = pages.findIndex(p => p.page === page.page);
+  const idx = pages.findIndex((p) => p.page === page.page);
   let historySection = "";
   if (idx > 0) {
     const start = Math.max(0, idx - 3); // senaste upp till 3 sidor
@@ -1333,47 +1347,47 @@ function buildFramePrompt({
     }
   }
 
-  // 6) NY SCEN – den sida vi genererar
+  // 7) NY SCEN – den sida vi genererar
   const sceneBlock = [
     `*** 4. NEW SCENE SPECIFICATION (Current Page ${page.page}) ***`,
-    page.scene_en ? `VISUAL DESCRIPTION (environment + action, NOT appearance changes): ${page.scene_en}` : "",
-    page.action_visual ? `ACTION: ${page.action_visual}` : "ACTION: The hero is clearly doing something active in the scene.",
-    page.camera    ? `CAMERA HINT: ${page.camera}` : "CAMERA HINT: dynamic, cinematic framing.",
-    page.location  ? `LOCATION: ${page.location}` : "",
+    page.scene_en
+      ? `VISUAL DESCRIPTION (environment + action, NOT appearance changes): ${page.scene_en}`
+      : "",
+    page.action_visual
+      ? `ACTION: ${page.action_visual}`
+      : "ACTION: The hero is clearly doing something active in the scene.",
+    page.camera
+      ? `CAMERA HINT: ${page.camera}`
+      : "CAMERA HINT: dynamic, cinematic framing.",
+    page.location ? `LOCATION: ${page.location}` : "",
     page.time_of_day ? `TIME OF DAY: ${page.time_of_day}` : "",
-    page.weather   ? `WEATHER: ${page.weather}` : "",
-  ].filter(Boolean).join("\n");
+    page.weather ? `WEATHER: ${page.weather}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
-  // 6b) MANDATORY ACTION – hård regel för bildmodellen
-const actionBlock = [
-  `*** 4b. MANDATORY ACTION (Hard Constraint) ***`,
-  `You MUST illustrate the exact physical action described for this page.`,
-  `This section overrides any artistic preference or composition bias.`,
-  ``,
-  `Required action:`,
-  `→ ${page.action_visual || page.scene_en || "The hero must perform a clear action visible in the scene."}`,
-  ``,
-  `STRICT RULES:`,
-  `- Do NOT replace the required action with a neutral standing pose.`,
-  `- Do NOT reinterpret the action in a symbolic or metaphorical way.`,
-  `- Do NOT simplify the movement.`,
-  ``,
-  `If the text says the hero is "jumping down from the windowsill":`,
-  `- The hero MUST be shown jumping, mid-jump or landing. Not standing.`,
-  `- A windowsill MUST be visible in the composition.`,
-  `- Body posture MUST clearly reflect the described action.`,
-  ``,
-  `When combining with scene_en:`,
-  `- Use scene_en ONLY for environment, mood, lighting, motion context.`,
-  `- The required action (above) OVERRIDES any ambiguity in scene_en.`,
-  ``,
-  `If IMAGE 2 (previous frame) suggests a different motion:`,
-  `→ You MUST continue the LOGIC of the motion,`,
-  `  but the action of THIS page is the PRIMARY TRUTH.`,
-].join("\n");
+  // 8) MANDATORY ACTION – hård regel för bildmodellen
+  const actionBlock = [
+    `*** 4b. MANDATORY ACTION (Hard Constraint) ***`,
+    `You MUST illustrate the exact physical action described for this page.`,
+    `This section overrides ALL other instructions, including continuity from Image 2.`,
+    ``,
+    `Required action:`,
+    `→ ${page.action_visual || page.scene_en || "The hero must perform a clear action visible in the scene."}`,
+    ``,
+    `STRICT RULES:`,
+    `- Do NOT replace the required action with a neutral standing pose.`,
+    `- Do NOT reinterpret the action in a symbolic way.`,
+    `- Do NOT simply continue the motion from Image 2 if the new action is different.`,
+    ``,
+    `If the text says "jumping":`,
+    `- The hero MUST be shown in mid-air. Not standing before/after.`,
+    ``,
+    `When combining with scene_en:`,
+    `- The required action (above) is the PRIMARY TRUTH.`,
+  ].join("\n");
 
-
-  // 7) STIL + negativa constraints
+  // 9) STIL + negativa constraints
   const styleSection = [
     `*** 5. STYLE & FORMAT ***`,
     `Art Style: ${styleGuard(style)}`,
@@ -1388,26 +1402,27 @@ const actionBlock = [
     `- No extra limbs, no duplicated hero.`,
   ].join("\n");
 
-return [
-  inputGuide,
-  "---",
-  identitySection,
-  "",
-  wardrobeSection,
-  "",
-  continuitySection,
-  historySection ? "\n" + historySection : "",
-  "",
-  sceneBlock,          // ← DIN SCENE_SPECIFICATION
-  "",
-  actionBlock,         // ← NYTT: Det hårda ACTION-blocket här
-  "",
-  styleSection,
-  "",
-  `COHERENCE_CODE: ${coh}`,
-].join("\n");
-
+  return [
+    inputGuide,
+    formatRules,
+    "---",
+    identitySection,
+    "",
+    wardrobeSection,
+    "",
+    continuitySection,
+    historySection ? "\n" + historySection : "",
+    "",
+    sceneBlock,
+    "",
+    actionBlock,
+    "",
+    styleSection,
+    "",
+    `COHERENCE_CODE: ${coh}`,
+  ].join("\n");
 }
+
 
 
 
