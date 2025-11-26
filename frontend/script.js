@@ -86,7 +86,6 @@ const state = {
     traits: "",
     photoDataUrl: null,
      petSpecies: "",
-     extraCharacters: [],
   },
   visibleCount: 4,
 
@@ -288,35 +287,6 @@ function updateHeroFieldForCategory() {
 }
 
 
-function readExtraCharactersFromUI() {
-  const chars = [];
-  if (!els.extraCharRows) return chars;
-
-  els.extraCharRows.forEach((row) => {
-    const nameEl = row.querySelector("[data-extra-name]");
-    const roleEl = row.querySelector("[data-extra-role]");
-    const name = (nameEl?.value || "").trim();
-    const role = (roleEl?.value || "").trim();
-    if (name || role) chars.push({ name, role });
-  });
-
-  state.form.extraCharacters = chars;
-}
-
-function applyExtraCharactersToUI() {
-  const chars = state.form.extraCharacters || [];
-  if (!els.extraCharRows) return;
-
-  els.extraCharRows.forEach((row, idx) => {
-    const nameEl = row.querySelector("[data-extra-name]");
-    const roleEl = row.querySelector("[data-extra-role]");
-    const item = chars[idx] || { name: "", role: "" };
-    if (nameEl) nameEl.value = item.name || "";
-    if (roleEl) roleEl.value = item.role || "";
-  });
-}
-
-
 /* --------------------------- Status/Progress --------------------------- */
 const STATUS_QUIPS = [
   "puffar kuddar…",
@@ -460,12 +430,6 @@ function readForm() {
     f.petSpecies = (els.age.value || "").trim().toLowerCase();
     f.age = null; // backend bryr sig ändå inte om ålder för pets
   }
-
-  if (els.extraCharsToggle?.checked) {
-    readExtraCharactersFromUI();
-  } else {
-    state.form.extraCharacters = [];
-  }
 }
 
 
@@ -510,14 +474,6 @@ function writeForm() {
   } else {
     els.photoPreview.classList.add("hidden");
     els.photoPreview.src = "";
-  }
-
-  // Extra karaktärer – startläge
-  if (els.extraCharsToggle && els.extraCharsContainer) {
-    const hasExtras = Array.isArray(f.extraCharacters) && f.extraCharacters.length > 0;
-    els.extraCharsToggle.checked = hasExtras;
-    els.extraCharsContainer.classList.toggle("hidden", !hasExtras);
-    if (hasExtras) applyExtraCharactersToUI();
   }
 }
 
@@ -721,41 +677,7 @@ async function uploadToCF(items) {
 }
 
 /* --------------------------- PDF --------------------------- */
-async function onCreatePdf() {
-  try {
-    if (!state.story) throw new Error("Ingen story i minnet.");
 
-    const images = buildImagesPayload();
-
-    setStatus("📕 Bygger PDF…", 100);
-    const res = await fetch(`${API}/api/pdf`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        story: state.story,
-        images,
-        mode: "preview",
-        trim: "square210",
-        watermark_text: "FÖRHANDSVISNING",
-      }),
-    });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      console.error("PDF backend error:", body);
-      throw new Error(`PDF misslyckades (HTTP ${res.status})\n${body}`);
-    }
-
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank");
-    setStatus(null);
-  } catch (e) {
-    console.error(e);
-    setStatus(null);
-    alert(e?.message || "Kunde inte skapa PDF.");
-  }
-}
 
 
 async function onBuyPdf() {
@@ -1083,7 +1005,6 @@ if (bare) {
 
     stopQuips();
     setStatus("✅ Klart! Förhandsvisning redo.", 100);
-    els.pdfBtn && (els.pdfBtn.disabled = false);
 
   } catch (e) {
     console.error(e);
@@ -1166,63 +1087,6 @@ async function regenerateOne(page) {
       </div>`;
     wrap.appendChild(fb);
   }
-}
-
-async function regenerateImage(page, cardEl) {
-  const wrap = cardEl.querySelector(".imgwrap");
-  wrap.innerHTML = `<div class="skeleton-box"></div>`;
-
-  let prevB64 = null;
-  try {
-    const prev = state.images_by_page.get(page - 1);
-    if (prev) {
-      const du = await urlToDataURL(prev.image_url);
-      prevB64 = dataUrlToBareB64(du);
-    }
-  } catch {}
-
-  const payload = {
-    story: state.story,
-    page,
-    ref_image_b64: state.ref_b64,
-    prev_b64: prevB64,
-    style: state.form.style,
-  };
-
-  const res = await fetch(`${API}/api/images/regenerate`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  const j = await res.json().catch(() => null);
-
-  if (!j || !j.image_url) {
-    wrap.innerHTML = `<div class="error">Fel – försök igen</div>`;
-    return;
-  }
-
-  // Ny bild
-  wrap.innerHTML = "";
-  const img = document.createElement("img");
-  img.src = j.image_url;
-
-  wrap.appendChild(img);
-
-  // Lägg tillbaka regenerate overlay
-  const over = document.createElement("div");
-  over.className = "regen-overlay";
-
-  const btn = document.createElement("button");
-  btn.className = "regen-btn";
-  btn.textContent = "Regenerera";
-  btn.onclick = () => regenerateImage(page, cardEl);
-
-  over.appendChild(btn);
-  wrap.appendChild(over);
-
-  // uppdatera state
-  state.images_by_page.set(page, { image_url: j.image_url });
 }
 
 
@@ -1335,31 +1199,6 @@ function bindEvents() {
     });
   });
 
- if (els.extraCharsToggle && els.extraCharsContainer) {
-  els.extraCharsToggle.addEventListener("change", () => {
-    const on = els.extraCharsToggle.checked;
-    els.extraCharsContainer.classList.toggle("hidden", !on);
-
-    if (!on) {
-      state.form.extraCharacters = [];
-      els.extraCharRows?.forEach((row) => {
-        const nameInput = row.querySelector("[data-extra-name]");
-        const roleInput = row.querySelector("[data-extra-role]");
-        if (nameInput) nameInput.value = "";
-        if (roleInput) roleInput.value = "";
-      });
-      saveForm();
-    } else {
-      applyExtraCharactersToUI();
-    }
-  });
-
-  if (state.form.extraCharacters && state.form.extraCharacters.length > 0) {
-    els.extraCharsToggle.checked = true;
-    els.extraCharsContainer.classList.remove("hidden");
-    applyExtraCharactersToUI();
-  }
-}
 
   els.charPhoto?.addEventListener("change", async () => {
     const f = els.charPhoto.files?.[0];
@@ -1387,8 +1226,7 @@ function bindEvents() {
     els.mobileMenu.setAttribute("aria-hidden", open ? "false" : "true");
   });
 
-  els.pdfBtn?.addEventListener("click", onCreatePdf);
-  if (els.pdfBtn) els.pdfBtn.disabled = false;
+
   els.buyPdfBtn?.addEventListener("click", onBuyPdf);
 
   els.buyPrintBtn = document.getElementById("buyPrintBtn");
