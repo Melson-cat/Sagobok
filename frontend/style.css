@@ -859,3 +859,104 @@ textarea:focus {
   .panel { border: 0; box-shadow: none; background: white; }
   .thumb { page-break-inside: avoid; }
 }
+
+/* ========= Header ========= */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--panel) 70%, white);
+  backdrop-filter: blur(8px) saturate(1.05);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 10px 26px rgba(10,30,40,0.06);
+  transform: translateY(0);
+  transition: transform .25s ease, box-shadow .2s ease;
+}
+
+/* wrapper så innehållet centreras och ligger på samma rad */
+.header-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px 16px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+/* används när vi gömmer headern på scroll */
+.site-header.header-hidden {
+  transform: translateY(-100%);
+  box-shadow: none;
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;   /* logga över text */
+  align-items: center;      /* centrera logga + text */
+  justify-content: center;
+  gap: 4px;
+  text-decoration: none;
+  color: inherit;
+  text-align: center;
+}
+
+.brand img {
+  width: 56px;
+  height: auto;
+  object-fit: contain;
+  margin-bottom: 2px;
+  display: block;
+}
+
+.brand span {
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  font-size: 1.02rem;
+}
+
+/* meny till höger */
+.main-nav {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.main-nav a {
+  color: inherit;
+  opacity: .88;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.main-nav a:hover {
+  opacity: 1;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Mobiljusteringar */
+@media (max-width: 760px) {
+  .header-inner {
+    padding: 12px 10px;
+    gap: 12px;
+  }
+
+  .brand img { width: 48px; }
+  .brand span { font-size: 0.95rem; }
+
+  .main-nav {
+    gap: 12px;
+  }
+
+  .main-nav a {
+    font-size: 0.9rem;
+  }
+
+  /* om du vill dölja några länkar på mobil */
+  .main-nav a[data-nav="create"],
+  .main-nav a[data-nav="examples"] {
+    display: none;
+  }
+}
