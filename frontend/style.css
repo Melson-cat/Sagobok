@@ -81,10 +81,11 @@ body::before {
   box-shadow: 0 10px 26px rgba(10,30,40,0.06);
   display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 14px 18px;
+  gap: 24px;
+  padding: 20px 32px;          /* ⬅︎ MER HÖJD + lite mer sidmarginal */
 }
 
+/* Logga + namn */
 .brand {
   display: flex;
   align-items: center;
@@ -92,42 +93,18 @@ body::before {
   text-decoration: none;
   color: inherit;
 }
-.brand img { width: 36px; height: 36px; object-fit: contain; }
-.brand span {
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  font-size: 1.02rem;
-}
-header .brand img {
+
+.brand img {
   width: 40px;
   height: auto;
+  object-fit: contain;
 }
 
-
-.main-nav {
-  margin-left: auto;
-  display: flex;
-  gap: 18px;
-}
-.main-nav a {
-  color: inherit;
-  opacity: .88;
-  text-decoration: none;
-  font-weight: 600;
-}
-.main-nav a:hover {
-  opacity: 1;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.hamburger {
-  display: none;
-  margin-left: auto;
-  background: transparent;
-  border: 0;
-  font-size: 1.2rem;
-  cursor: pointer;
+.brand span {
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  font-size: 1rem;
+  text-transform: none;
 }
 
 /* ========= Layout ========= */
@@ -767,6 +744,36 @@ textarea:focus {
   font-weight: 700;
 }
 
+/* Desktop-nav */
+.main-nav {
+  margin-left: auto;
+  display: flex;
+  gap: 20px;
+}
+
+.main-nav a {
+  color: inherit;
+  opacity: .88;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.main-nav a:hover {
+  opacity: 1;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Hamburger-knapp (visas på mobil) */
+.hamburger {
+  display: none;
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  font-size: 1.4rem;
+  cursor: pointer;
+}
+
 /* ========= Hjälpklasser ========= */
 .hidden { display: none !important; }
 
@@ -792,6 +799,20 @@ textarea:focus {
     align-items: flex-start;
   }
 }
+  .brand {
+    flex-direction: column;    /* ⬅︎ text UNDER logga */
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .brand img {
+    width: 56px;               /* ⬅︎ större logga på dator */
+  }
+
+  .brand span {
+    font-size: 1.05rem;
+  }
+
 
 @media (max-width: 760px) {
   .main-nav { display: none; }

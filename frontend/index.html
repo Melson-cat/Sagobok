@@ -27,8 +27,7 @@
       <a href="/index.html" data-nav="home">Hem</a>
       <a href="#bookForm" data-nav="create">Skapa bok</a>
       <a href="#examples" data-nav="examples">Exempel</a>
-      <a href="#about" data-nav="about">Om oss</a>
-      <a href="/status.html" data-nav="status">Status</a>
+      <a href="/status.html" data-nav="status">Orderstatus</a>
     </nav>
     <button id="navToggle" class="hamburger" aria-label="Meny" aria-expanded="false" aria-controls="mobileMenu">☰</button>
   </header>
@@ -39,8 +38,7 @@
       <a href="/index.html">Hem</a>
       <a href="/index.html#bookForm">Skapa bok</a>
       <a href="/index.html#examples">Exempel</a>
-      <a href="/index.html#about">Om oss</a>
-      <a href="/status.html">Status</a>
+      <a href="/status.html">Orderstatus</a>
     </nav>
   </div>
 
@@ -252,28 +250,37 @@
     <p>© 2025 SagoStugan</p>
   </footer>
 
+
   <script>
-  // Minimal header-controller (delad på alla sidor)
-  (function () {
-    const toggle = document.getElementById("navToggle");
-    const menu = document.getElementById("mobileMenu");
-    if (toggle && menu) {
-      const setOpen = (open) => {
-        toggle.setAttribute("aria-expanded", String(open));
-        menu.setAttribute("aria-hidden", String(!open));
-        menu.classList.toggle("open", open);
-      };
+(function () {
+  const toggle = document.getElementById("navToggle");
+  const menu   = document.getElementById("mobileMenu");
+  if (!toggle || !menu) return;
+
+  const setOpen = (open) => {
+    toggle.setAttribute("aria-expanded", String(open));
+    menu.setAttribute("aria-hidden", String(!open));
+    menu.classList.toggle("open", open);
+  };
+
+  // start: stängd
+  setOpen(false);
+
+  // Öppna/stäng via hamburger-ikonen
+  toggle.addEventListener("click", () => {
+    const isOpen = toggle.getAttribute("aria-expanded") === "true";
+    setOpen(!isOpen);
+  });
+
+  // Stäng menyn när man klickar på en länk i mobilmenyn
+  menu.addEventListener("click", (e) => {
+    if (e.target && e.target.tagName === "A") {
       setOpen(false);
-      toggle.addEventListener("click", () => {
-        const isOpen = toggle.getAttribute("aria-expanded") === "true";
-        setOpen(!isOpen);
-      });
-      menu.addEventListener("click", (e) => {
-        if (e.target && e.target.tagName === "A") setOpen(false);
-      });
     }
-  })();
-  </script>
+  });
+})();
+</script>
+
   <script src="script.js" defer></script>
 </body>
 </html>
