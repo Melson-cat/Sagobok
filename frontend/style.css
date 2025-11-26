@@ -712,3 +712,84 @@ input:focus, select:focus, textarea:focus {
     justify-content: center;
   }
 }
+/* Fix: låt topp-gradienten fortsätta hela vägen ned så "randen" försvinner */
+body::before {
+  inset: -20% -10% 0 -10%;
+  height: auto;
+}
+/* Lite tajtare hero och något nedtonad höger-sida */
+.hero {
+  margin-bottom: 24px;
+}
+
+.hero-art {
+  max-width: 320px;
+  margin-left: auto;
+  transform: translateY(0);  /* mildare animation */
+  animation: heroFloat 18s ease-in-out infinite alternate;
+}
+
+.hero-bubble {
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
+}
+
+/* Floating-tag lite mindre */
+.hero-floating-tag {
+  font-size: 0.78rem;
+  padding: 5px 10px;
+}
+/* Mobil: gör hero mycket renare */
+@media (max-width: 900px) {
+  .hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+
+  /* Lägg text ovanför och döljer art helt på smalare skärmar */
+  .hero-art {
+    display: none;
+  }
+
+  .hero-main {
+    align-items: flex-start;
+  }
+}
+
+/* Ännu tajtare på små telefoner */
+@media (max-width: 600px) {
+  .hero-title {
+    font-size: 1.6rem;
+  }
+
+  .hero-tagline {
+    font-size: 0.95rem;
+  }
+
+  .hero-pill-row {
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+
+  .hero-pill {
+    font-size: 0.8rem;
+    padding: 4px 9px;
+  }
+
+  /* CTA-knappar som tydlig stack, det gör hero lugnare */
+  .hero-cta-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .hero-cta-row .btn-cta,
+  .hero-cta-row .hero-ghost {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Steglistan lite mindre visuellt tung */
+  .hero-list {
+    font-size: 0.85rem;
+  }
+}
