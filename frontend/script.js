@@ -954,7 +954,7 @@ if (bare) {
 
       const fb = document.createElement("div");
       fb.className = "img-fallback";
-      fb.textContent = "Kunde inte generera bild";
+      fb.textContent = "oj, Jag tänkte för länge! Prova gärna att generera bilden igen!";
       wrap.appendChild(fb);
 
       // 🔓 Viktigt: lås upp regenerera även vid total API-fail
@@ -1019,12 +1019,10 @@ if (bare) {
   }
 }
 /* --------------------------- Single regenerate --------------------------- */
-/* --------------------------- Single regenerate --------------------------- */
-
-async function regenerateOne(page, btn) {
+async function regenerateOne(page) {
   if (!state.ref_b64 || !state.story) return;
 
-  // undvik spam – om sidan redan regenereras: gör inget
+  // Hindra dubbelklick / parallella requests per sida
   if (regeneratingPages.has(page)) return;
   regeneratingPages.add(page);
 
@@ -1034,24 +1032,23 @@ async function regenerateOne(page, btn) {
     return;
   }
 
-  // Lås knappen visuellt
-  if (btn) btn.disabled = true;
-
-  // Rensa ev. tidigare bild/fel
-  wrap.querySelector("img")?.remove();
+  // 1) Rensa befintligt visuellt innehåll
   wrap.querySelector(".img-fallback")?.remove();
-
-  // Dölj overlay medan vi laddar
-  const overlay = wrap.querySelector(".regen-overlay");
-  if (overlay) overlay.classList.add("hidden");
-
-  // Ta bort ev. gamla skeletons och lägg in nytt “ladd”-läge
+  wrap.querySelector("img")?.remove();
   wrap.querySelector(".skeleton, .skeleton-box")?.remove();
+
+  // 2) Hämta overlay och lås den medan vi regenererar
+  const over = wrap.querySelector(".regen-overlay");
+  if (over) {
+    over.classList.add("hidden");
+  }
+
+  // 3) Lägg till ny skeleton (samma stil som vid first-run)
   const sk = document.createElement("div");
   sk.className = "skeleton";
   wrap.prepend(sk);
 
-  // Försök hämta föregående bild som prev_b64 (för kontinuitet)
+  // 4) Försök få prev_b64 för kontinuitet
   let prevB64 = null;
   try {
     const prevPageNum = page - 1;
@@ -1067,17 +1064,16 @@ async function regenerateOne(page, btn) {
     }
   } catch (err) {
     console.warn("Kunde inte hämta föregående bild för regen:", err);
-    // Vi kör ändå utan prev_b64
+    // Vi fortsätter ändå utan prev_b64
   }
 
   try {
-    // ✅ Viktigt: matcha din backend-route exakt: /api/image/regenerate
     const res = await fetch(`${API}/api/image/regenerate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        story: state.story,
         page,
+        story: state.story,
         ref_image_b64: state.ref_b64,
         prev_b64: prevB64,
         style: state.form.style,
@@ -1089,38 +1085,35 @@ async function regenerateOne(page, btn) {
       throw new Error(j?.error || `HTTP ${res.status}`);
     }
 
-    // Ta bort skeleton, visa nya bilden via samma pipeline som första gången
+    // Ta bort skeleton – fillCard sätter in nya bilden + visar overlay
     sk.remove();
     await fillCard(page, j.image_url, j.provider || "Gemini");
 
-    // Uppdatera state så PDF + framtida prev_b64 använder rätt bild
+    // Uppdatera state
     state.images_by_page.set(page, {
       image_url: j.image_url,
       provider: j.provider || "Gemini",
     });
   } catch (e) {
-    console.error("Regenerate failed for page", page, e);
+    console.error("regenerateOne error", e);
     sk.remove();
 
-    // Visa snygg fallback med egen retry-knapp
-    wrap.innerHTML = `
-      <div class="img-fallback">
-        Kunde inte generera bild just nu.<br/>
-        <button class="regen-btn" type="button" style="margin-top:8px;">
-          🔄 Försök igen
-        </button>
-      </div>
-    `;
-    const retryBtn = wrap.querySelector(".regen-btn");
-    if (retryBtn) {
-      retryBtn.onclick = () => regenerateOne(page, retryBtn);
-    }
+    // Visa tydlig fallback + lås inte fast kortet
+    const fb = document.createElement("div");
+    fb.className = "img-fallback";
+    fb.innerHTML = `
+      Kunde inte generera bild
+      <div class="retry-wrap" style="margin-top:8px;">
+        <button class="retry-btn retry" data-page="${page}">🔄 Generera igen</button>
+      </div>`;
+    wrap.appendChild(fb);
+
+    // Lås upp overlay igen så användaren kan försöka på nytt
+    if (over) over.classList.remove("hidden");
   } finally {
     regeneratingPages.delete(page);
-    if (btn) btn.disabled = false;
   }
 }
-
 
 
 
