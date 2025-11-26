@@ -268,8 +268,8 @@ body::before {
 /* Liten badge */
 .hero-badge-card {
   position: absolute;
-  right: -10px;
-  bottom: -18px;
+  right: -8px;
+  bottom: -16px;
   font-size: 0.8rem;
   padding: 10px 12px;
 }
