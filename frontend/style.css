@@ -268,8 +268,8 @@ body::before {
 /* Liten badge */
 .hero-badge-card {
   position: absolute;
-  right: -18px;
-  bottom: -28px;
+  right: -10px;
+  bottom: -18px;
   font-size: 0.8rem;
   padding: 10px 12px;
 }
@@ -286,8 +286,8 @@ body::before {
 /* Flytande tag ovanför */
 .hero-floating-tag {
   position: absolute;
-  top: -10px;
-  right: 4px;
+  top: -16px;
+  right: -4px;
   font-size: 0.78rem;
   padding: 5px 10px;
   border-radius: 999px;
@@ -300,7 +300,7 @@ body::before {
 .hero-art::before {
   content: "";
   position: absolute;
-  inset: -24px -34px;
+  inset: -22px -30px;
   background: radial-gradient(circle at 30% 0%, rgba(255,255,255,0.9), transparent 60%);
   filter: blur(10px);
   z-index: -1;
@@ -808,14 +808,35 @@ textarea:focus {
   .hero-title { font-size: 1.6rem; }
   .hero-tagline { font-size: 0.95rem; }
 
+ @media (max-width: 600px) {
+  /* Säkerställ gradient-text även på mobil */
+  .hero-highlight {
+    background: linear-gradient(120deg, var(--brand), var(--brand-2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Pill-raden: se till att de inte degraderas till ren text */
   .hero-pill-row {
+    display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     margin-bottom: 4px;
   }
+
   .hero-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     font-size: 0.8rem;
     padding: 4px 9px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--panel) 82%, white);
+    border: 1px solid color-mix(in srgb, var(--border) 60%, var(--brand-2));
   }
+}
+
 
   /* CTA-knappar som tydlig stack */
   .hero-cta-row {

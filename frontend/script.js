@@ -853,7 +853,7 @@ async function onSubmit(e) {
     const pages = state.story?.book?.pages || [];
     if (!pages.length) throw new Error("Berättelsen saknar sidor.");
     buildCards(pages, state.visibleCount);
-    setStatus("🖼️ Låser hjälten (referens)…", 22);
+    setStatus("🖼️ Målar huvudkaraktären…", 22);
 
     // 2) REF IMAGE
     const refRes = await fetch(`${API}/api/ref-image`, {
@@ -882,7 +882,7 @@ if (refPreviewUrl) {
 }
 
    // 3) INTERIOR IMAGES — SEKVENSIELLT (Kedjan)
-    setStatus("🎥 Spelar in scener (sida för sida)…", 38);
+    setStatus("🎥 Spelar in scener…", 38);
 
    let received = 0;
 // Håller koll på de senaste n (t.ex. 3) bilderna för kontinuitet
