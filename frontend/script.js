@@ -591,25 +591,23 @@ function buildCard(item) {
   // Bild-wrapper
   const imgWrap = document.createElement("div");
   imgWrap.className = "imgwrap";
+
+  // dataset för page så fillCard hittar rätt
   imgWrap.dataset.page = item.page;
 
-  // Bild-elementet (finns alltid)
-  const img = document.createElement("img");
-  if (item.image_url) {
-    img.src = item.image_url;
-    img.classList.add("is-ready");
-  }
-  imgWrap.appendChild(img);
-
-  // Skeleton ovanpå tills bild finns
   if (!item.image_url) {
     const sk = document.createElement("div");
-    sk.className = "skeleton";
+    sk.className = "skeleton-box";
     imgWrap.appendChild(sk);
+  } else {
+    const img = document.createElement("img");
+    img.src = item.image_url;
+    imgWrap.appendChild(img);
   }
 
-   const over = document.createElement("div");
-  over.className = "regen-overlay hidden"; // <- starta gömd
+  // Hover overlay regenerate – STARTA GÖMD
+  const over = document.createElement("div");
+  over.className = "regen-overlay hidden";
 
   const btn = document.createElement("button");
   btn.className = "regen-btn";
@@ -620,7 +618,6 @@ function buildCard(item) {
   over.appendChild(btn);
   imgWrap.appendChild(over);
 
-
   // Text – redigerbar
   const txt = document.createElement("div");
   txt.className = "page-text";
@@ -629,7 +626,7 @@ function buildCard(item) {
 
   // Spara redigering till story-objektet
   txt.oninput = () => {
-    const page = state.story?.book?.pages?.find((p) => p.page === item.page);
+    const page = state.story.book.pages.find((p) => p.page === item.page);
     if (page) page.text = txt.textContent;
   };
 
@@ -643,17 +640,14 @@ async function fillCard(page, imgUrl, providerLabel = "") {
   const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${page}"]`);
   if (!wrap || !imgUrl) return;
 
-  let imgEl = wrap.querySelector("img");
-  if (!imgEl) {
-    imgEl = document.createElement("img");
-    wrap.prepend(imgEl);
-  }
+  const imgEl = wrap.querySelector("img");
+  const sk    = wrap.querySelector(".skeleton, .skeleton-box");
+  const prov  = wrap.querySelector(".img-provider");
+  const over  = wrap.querySelector(".regen-overlay");
 
-  const sk   = wrap.querySelector(".skeleton, .skeleton-box");
-  const prov = wrap.querySelector(".img-provider");
-  const over = wrap.querySelector(".regen-overlay");
   wrap.querySelector(".img-fallback")?.remove();
 
+  // undvik dubblettarbete
   if (wrap.dataset.currentUrl === imgUrl) return;
   wrap.dataset.currentUrl = imgUrl;
 
@@ -662,15 +656,25 @@ async function fillCard(page, imgUrl, providerLabel = "") {
   tmp.referrerPolicy = "no-referrer";
 
   const show = () => {
-    imgEl.src = tmp.src;
-    imgEl.classList.add("is-ready");
+    if (imgEl) {
+      imgEl.src = tmp.src;
+      imgEl.classList.add("is-ready"); // triggar fade-in via CSS
+    } else {
+      // fallback om inget img fanns
+      const newImg = document.createElement("img");
+      newImg.src = tmp.src;
+      newImg.classList.add("is-ready");
+      wrap.prepend(newImg);
+    }
+
     sk?.remove();
 
     if (prov) {
       prov.textContent = providerLabel || "";
       prov.classList.toggle("hidden", !providerLabel);
     }
-    // 🔓 gör regen-knappen synlig först nu
+
+    // 🔓 NU låser vi upp regenerera – först när bild är klar
     if (over) over.classList.remove("hidden");
   };
 
@@ -681,23 +685,20 @@ async function fillCard(page, imgUrl, providerLabel = "") {
     fb.className = "img-fallback";
     fb.innerHTML = `
       <p>Misslyckades att ladda bilden.</p>
-      <button class="retry" data-page="${page}">Försök igen</button>
     `;
-    fb.querySelector(".retry")?.addEventListener("click", (e) => {
-      e.preventDefault();
-      fb.remove();
-      const sk2 = document.createElement("div");
-      sk2.className = "skeleton-box";
-      wrap.prepend(sk2);
-      if (page === 0) generateCoverAsync().catch(() => {});
-      else regenerateOne(page);
-    });
     wrap.appendChild(fb);
+
+    // 🔓 Även vid load-fail ska man kunna regenerera
+    if (over) over.classList.remove("hidden");
   };
 
   tmp.src = imgUrl;
+
   if (tmp.decode) {
-    try { await tmp.decode(); show(); } catch {}
+    try { 
+      await tmp.decode(); 
+      show(); 
+    } catch {}
   }
 }
 
@@ -1021,17 +1022,22 @@ if (bare) {
           }
         }
 
-      } catch (err) {
-        console.error("page", pg.page, err);
-        if (wrap) {
-          wrap.querySelector(".skeleton")?.remove();
-          const fb = document.createElement("div");
-          fb.className = "img-fallback";
-          fb.textContent = "Kunde inte generera bild";
-          wrap.appendChild(fb);
-          wrap.parentElement.querySelector(".retry-wrap")?.classList.remove("hidden");
-        }
-      }
+       } catch (err) {
+    console.error("page", pg.page, err);
+    if (wrap) {
+      wrap.querySelector(".skeleton, .skeleton-box")?.remove();
+
+      const fb = document.createElement("div");
+      fb.className = "img-fallback";
+      fb.textContent = "Kunde inte generera bild";
+      wrap.appendChild(fb);
+
+      // 🔓 Viktigt: lås upp regenerera även vid total API-fail
+      const over = wrap.querySelector(".regen-overlay");
+      if (over) over.classList.remove("hidden");
+    }
+  }
+
 
       received++;
       setStatus(`🎨 Målar sida ${received}/${pages.length}…`, 38 + (received / Math.max(1, pages.length)) * 32);
