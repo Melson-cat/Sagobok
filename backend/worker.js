@@ -1341,19 +1341,31 @@ function buildFramePrompt({
     `- Always move the story forward with a NEW moment in time.`,
   ].join("\n");
 
-  // 6) STORY SO FAR – textrecap av senaste sidorna
-  const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
+    const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
   const idx = pages.findIndex((p) => p.page === page.page);
   let historySection = "";
+
   if (idx > 0) {
-    const start = Math.max(0, idx - 3); // senaste upp till 3 sidor
+    const MAX_HISTORY_PAGES = 2; // 👈 alltid bara de 2 senaste
+    const start = Math.max(0, idx - MAX_HISTORY_PAGES);
     const chunks = [];
+
     for (let i = start; i < idx; i++) {
       const p = pages[i];
-      const desc = p.scene_en || p.scene || p.text || "";
-      if (!desc) continue;
+
+      // Ta text, men begränsa mängden vi skickar
+      const raw = p.scene_en || p.scene || p.text || "";
+      if (!raw) continue;
+
+      // 👇 Trunkera per sida (t.ex. ~280 tecken)
+      const desc =
+        raw.length > 280
+          ? raw.slice(0, 280) + " …"
+          : raw;
+
       chunks.push(`PAGE ${p.page}: ${desc}`);
     }
+
     if (chunks.length) {
       historySection = [
         `*** 3b. STORY SO FAR (last ${chunks.length} pages) ***`,
@@ -1361,6 +1373,7 @@ function buildFramePrompt({
       ].join("\n");
     }
   }
+
 
   // 7) NY SCEN – den sida vi genererar
   const sceneBlock = [
