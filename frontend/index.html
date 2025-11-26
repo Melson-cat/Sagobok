@@ -23,13 +23,6 @@
       <img src="images/logo.png" alt="SagoStugan" />
       <span>SagoStugan</span>
     </a>
-    <nav class="main-nav" aria-label="Huvudmeny">
-      <a href="/index.html" data-nav="home">Hem</a>
-      <a href="#bookForm" data-nav="create">Skapa bok</a>
-      <a href="#examples" data-nav="examples">Exempel</a>
-      <a href="/status.html" data-nav="status">Orderstatus</a>
-    </nav>
-    <button id="navToggle" class="hamburger" aria-label="Meny" aria-expanded="false" aria-controls="mobileMenu">☰</button>
   </header>
 
   <!-- Mobilmeny -->
@@ -250,37 +243,6 @@
     <p>© 2025 SagoStugan</p>
   </footer>
 
-
- <script>
-document.addEventListener("DOMContentLoaded", function () {
-  const toggle = document.getElementById("navToggle");
-  const menu   = document.getElementById("mobileMenu");
-  if (!toggle || !menu) return;
-
-  const setOpen = (open) => {
-    toggle.setAttribute("aria-expanded", String(open));
-    menu.setAttribute("aria-hidden", String(!open));
-    menu.classList.toggle("open", open);
-  };
-
-  // start: stängd
-  setOpen(false);
-
-  // Klick på hamburgaren → öppna/stäng
-  toggle.addEventListener("click", () => {
-    const isOpen = toggle.getAttribute("aria-expanded") === "true";
-    setOpen(!isOpen);
-  });
-
-  // Klick på länk i mobilmenyn → stäng
-  menu.addEventListener("click", (e) => {
-    const t = e.target;
-    if (t && t.tagName === "A") {
-      setOpen(false);
-    }
-  });
-});
-</script>
 
 
   <script src="script.js" defer></script>

@@ -49,7 +49,7 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* Bakgrundseffekt – täcker hela sidan (ingen mörk rand) */
+/* Bakgrundseffekt */
 body::before {
   content: "";
   position: fixed;
@@ -65,8 +65,9 @@ body::before {
 /* ========= Fokus ========= */
 :focus { outline: none; }
 :focus-visible {
-  box-shadow: 0 0 0 3px var(--focus),
-              0 0 0 6px color-mix(in srgb, var(--focus) 30%, transparent) !important;
+  box-shadow:
+    0 0 0 3px var(--focus),
+    0 0 0 6px color-mix(in srgb, var(--focus) 30%, transparent) !important;
   border-radius: 12px;
 }
 
@@ -82,13 +83,13 @@ body::before {
   display: flex;
   align-items: center;
   gap: 24px;
-  padding: 20px 32px;          /* ⬅︎ MER HÖJD + lite mer sidmarginal */
+  padding: 20px 32px;
 }
 
 .brand {
   display: flex;
   flex-direction: column;   /* logga över text */
-  align-items: center;      /* centrera horisontellt */
+  align-items: center;
   justify-content: center;
   gap: 4px;
   text-decoration: none;
@@ -97,16 +98,36 @@ body::before {
 }
 
 .brand img {
-  width: 56px;              /* större logga */
+  width: 56px;
   height: auto;
   object-fit: contain;
-  margin-bottom: 2px;       /* liten luft mellan logga & text */
+  margin-bottom: 2px;
 }
 
 .brand span {
   font-weight: 800;
   letter-spacing: 0.06em;
   font-size: 1.02rem;
+}
+
+/* Desktop-nav */
+.main-nav {
+  margin-left: auto;
+  display: flex;
+  gap: 20px;
+}
+
+.main-nav a {
+  color: inherit;
+  opacity: .88;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.main-nav a:hover {
+  opacity: 1;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* ========= Layout ========= */
@@ -116,8 +137,7 @@ body::before {
   padding: 32px 16px 64px;
 }
 
-/* ========= HERO – Sagobok-vibb ========= */
-
+/* ========= HERO ========= */
 .hero {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
@@ -161,7 +181,7 @@ body::before {
   color: var(--muted);
 }
 
-/* Pillar / badges under texten */
+/* Pillar */
 .hero-pill-row {
   display: flex;
   flex-wrap: wrap;
@@ -213,7 +233,7 @@ body::before {
   margin-top: 2px;
 }
 
-/* Höger-sida: “illustration” / kort */
+/* Höger “kort” */
 .hero-art {
   position: relative;
   min-height: 220px;
@@ -249,7 +269,6 @@ body::before {
   box-shadow: 0 8px 18px rgba(0,0,0,0.18);
 }
 
-/* Liten badge */
 .hero-badge-card {
   position: absolute;
   right: -8px;
@@ -267,7 +286,6 @@ body::before {
   opacity: 0.85;
 }
 
-/* Flytande tag ovanför */
 .hero-floating-tag {
   position: absolute;
   top: -16px;
@@ -290,16 +308,14 @@ body::before {
   z-index: -1;
 }
 
-
-
-/* Små animationer för hero */
+/* Hero animation */
 @keyframes heroFloat {
   0%   { transform: translateY(0px); }
   50%  { transform: translateY(-4px); }
   100% { transform: translateY(2px); }
 }
 
-/* ========= Introtext under/över hero (om du använder .intro) ========= */
+/* ========= Intro (om du använder .intro) ========= */
 .intro h1 {
   font-size: clamp(28px, 4vw, 42px);
   margin: 0 0 8px;
@@ -333,20 +349,19 @@ form { display: grid; gap: 18px; }
   grid-template-columns: repeat(3, 1fr);
 }
 
-/* Viktigt för att inputs inte ska sticka ut på mobil */
 .field {
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-width: 0;
 }
-
 .field.col-span-2 { grid-column: span 2; }
 .field.col-span-3 { grid-column: span 3; }
 
 label { font-weight: 700; font-size: .98rem; }
 .hint { color: var(--muted); font-size: .9rem; margin: 4px 0 0; }
 
+/* Skärmläsare-only */
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
@@ -490,7 +505,7 @@ textarea:focus {
   border: 1px solid var(--border);
 }
 
-/* ----- CTA för checkout ----- */
+/* CTA för checkout */
 .checkout-actions {
   justify-content: flex-start;
   gap: 12px;
@@ -526,7 +541,6 @@ textarea:focus {
 .preview-note { color: var(--muted); }
 
 /* ========= Bildgalleri ========= */
-
 .thumb-grid {
   display: grid;
   gap: 16px;
@@ -563,7 +577,7 @@ textarea:focus {
   border-radius: 12px;
 }
 
-/* Skeleton / shimmer */
+/* Skeleton */
 .skeleton,
 .skeleton-box {
   background: linear-gradient(
@@ -581,7 +595,7 @@ textarea:focus {
   100% { background-position: -200% 0; }
 }
 
-/* Fadin för bilder */
+/* Bild-fadein */
 .thumb .imgwrap img {
   width: 100%;
   height: 100%;
@@ -703,7 +717,7 @@ textarea:focus {
   width: 0%;
 }
 
-/* ========= Contenteditable (textedit) ========= */
+/* ========= Contenteditable ========= */
 .page-text[contenteditable="true"] {
   border-radius: 12px;
   padding: 6px;
@@ -723,63 +737,11 @@ textarea:focus {
   color: var(--muted);
 }
 
-/* ========= Mobilmeny ========= */
-.mobile-menu {
-  display: none;
-  position: fixed;
-  inset: 56px 0 0 0;
-  z-index: 30;
-  background: color-mix(in srgb, var(--panel) 86%, white);
-  backdrop-filter: blur(6px);
-  border-top: 1px solid var(--border);
-  padding: 18px;
-}
-.mobile-menu.open { display: block; }
-.mobile-menu nav {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.mobile-menu a {
-  color: var(--text);
-  text-decoration: none;
-  font-weight: 700;
-}
-
-/* Desktop-nav */
-.main-nav {
-  margin-left: auto;
-  display: flex;
-  gap: 20px;
-}
-
-.main-nav a {
-  color: inherit;
-  opacity: .88;
-  text-decoration: none;
-  font-weight: 600;
-}
-
-.main-nav a:hover {
-  opacity: 1;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-/* Hamburger-knapp (visas på mobil) */
-.hamburger {
-  display: none;
-  margin-left: auto;
-  background: transparent;
-  border: 0;
-  font-size: 1.4rem;
-  cursor: pointer;
-}
-
 /* ========= Hjälpklasser ========= */
 .hidden { display: none !important; }
 
 /* ========= Responsivitet ========= */
+
 @media (max-width: 1100px) {
   .container { padding: 24px 12px 56px; }
 }
@@ -793,26 +755,40 @@ textarea:focus {
     grid-template-columns: minmax(0, 1fr);
     gap: 18px;
   }
-  /* Göm hero-art på mobil för renare hero */
-  .hero-art {
-    display: none;
-  }
-  .hero-main {
-    align-items: flex-start;
-  }
+  .hero-art { display: none; }
+  .hero-main { align-items: flex-start; }
 }
 
-
+/* Mobil: enkel meny + formstack */
 @media (max-width: 760px) {
-  .main-nav { display: none; }
-  .hamburger {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+  .site-header {
+    padding: 16px 14px;
+    gap: 16px;
   }
+
+  .main-nav {
+    margin-left: auto;
+    display: flex;
+    gap: 14px;
+  }
+
+  /* Dölj alla länkar först ... */
+  .main-nav a {
+    display: none;
+    font-size: 0.95rem;
+    padding: 4px 2px;
+  }
+
+  /* ... och visa bara Hem + Orderstatus */
+  .main-nav a[data-nav="home"],
+  .main-nav a[data-nav="status"] {
+    display: inline-block;
+  }
+
   .form-row { grid-template-columns: 1fr; }
   .field.col-span-2,
   .field.col-span-3 { grid-column: auto; }
+
   .thumb-grid { grid-template-columns: repeat(2,1fr); }
 }
 
@@ -823,8 +799,6 @@ textarea:focus {
   .hero-title { font-size: 1.6rem; }
   .hero-tagline { font-size: 0.95rem; }
 
- @media (max-width: 600px) {
-  /* Säkerställ gradient-text även på mobil */
   .hero-highlight {
     background: linear-gradient(120deg, var(--brand), var(--brand-2));
     -webkit-background-clip: text;
@@ -832,14 +806,12 @@ textarea:focus {
     color: transparent;
   }
 
-  /* Pill-raden: se till att de inte degraderas till ren text */
   .hero-pill-row {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
     margin-bottom: 4px;
   }
-
   .hero-pill {
     display: inline-flex;
     align-items: center;
@@ -847,26 +819,20 @@ textarea:focus {
     font-size: 0.8rem;
     padding: 4px 9px;
     border-radius: 999px;
-    background: color-mix(in srgb, var(--panel) 82%, white);
-    border: 1px solid color-mix(in srgb, var(--border) 60%, var(--brand-2));
   }
-}
 
-
-  /* CTA-knappar som tydlig stack */
   .hero-cta-row {
-    flex-direction: row;          /* inte column */
+    flex-direction: row;
     flex-wrap: wrap;
     justify-content: flex-start;
     gap: 8px;
   }
-   .hero-cta-row .btn-cta,
+  .hero-cta-row .btn-cta,
   .hero-cta-row .hero-ghost {
-    flex: 1 1 calc(50% - 6px);    /* två i rad, lite luft */
+    flex: 1 1 calc(50% - 6px);
     width: auto;
     justify-content: center;
   }
-
 
   .hero-list { font-size: 0.85rem; }
 }
@@ -874,7 +840,6 @@ textarea:focus {
 @media (max-width: 520px) {
   .thumb-grid { grid-template-columns: 1fr; }
 
-  /* CTA-stapling finns redan, men säkerställ */
   .checkout-actions {
     flex-direction: column;
     align-items: stretch;
@@ -892,9 +857,7 @@ textarea:focus {
 /* ========= Utskrift ========= */
 @media print {
   .site-header,
-  .mobile-menu,
   .main-nav,
-  .hamburger,
   .actions,
   #statusBar {
     display: none !important;
