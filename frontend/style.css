@@ -72,6 +72,7 @@ body::before {
 }
 
 /* ========= Header ========= */
+
 .site-header {
   position: sticky;
   top: 0;
@@ -80,10 +81,6 @@ body::before {
   backdrop-filter: blur(8px) saturate(1.05);
   border-bottom: 1px solid var(--border);
   box-shadow: 0 10px 26px rgba(10,30,40,0.06);
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  padding: 18px 24px;
   transform: translateY(0);
   transition: transform .25s ease, box-shadow .2s ease;
 }
@@ -94,31 +91,87 @@ body::before {
   box-shadow: none;
 }
 
-.brand {
+/* wrapper som gör att logga + meny ligger på samma rad
+   och centrerat i bredden */
+.header-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px 20px;
   display: flex;
-  flex-direction: column;   /* logga över text */
-  align-items: center;      /* centrera logga + text mot varandra */
-  justify-content: center;
-  gap: 4px;
+  align-items: center;
+  gap: 24px;
+}
+
+/* Brand – till vänster */
+.brand {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
   text-decoration: none;
   color: inherit;
-  text-align: center;
-  margin-right: 12px;       /* lite luft mot menyn */
 }
 
 .brand img {
   width: 56px;
   height: auto;
   object-fit: contain;
-  margin-bottom: 2px;       /* liten luft mellan logga & text */
   display: block;
 }
 
 .brand span {
   font-weight: 800;
   letter-spacing: 0.06em;
-  font-size: 1.02rem;
+  font-size: 1.05rem;
 }
+
+/* Meny – till höger */
+.main-nav {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.main-nav a {
+  color: inherit;
+  opacity: .88;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.main-nav a:hover {
+  opacity: 1;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ========= Mobil-header ========= */
+@media (max-width: 760px) {
+  .header-inner {
+    padding: 12px 10px;
+    gap: 12px;
+  }
+
+  .brand img { width: 46px; }
+  .brand span { font-size: 0.95rem; }
+
+  .main-nav {
+    gap: 12px;
+  }
+
+  .main-nav a {
+    font-size: 0.9rem;
+  }
+
+  /* Visa bara Hem + Orderstatus på mobil */
+  .main-nav a[data-nav="create"],
+  .main-nav a[data-nav="examples"] {
+    display: none;
+  }
+}
+
 
 /* ========= Layout ========= */
 .container {
@@ -773,11 +826,6 @@ textarea:focus {
     font-size: 0.9rem;
   }
 
-  /* Om du fortfarande bara vill ha Hem + Orderstatus på mobil */
-  .main-nav a[data-nav="create"],
-  .main-nav a[data-nav="examples"] {
-    display: none;
-  }
 }
   .form-row { grid-template-columns: 1fr; }
   .field.col-span-2,
@@ -942,7 +990,12 @@ textarea:focus {
     padding: 12px 10px;
     gap: 12px;
   }
+ .form-row { grid-template-columns: 1fr; }
+  .field.col-span-2,
+  .field.col-span-3 { grid-column: auto; }
 
+  .thumb-grid { grid-template-columns: repeat(2,1fr); }
+}
   .brand img { width: 48px; }
   .brand span { font-size: 0.95rem; }
 
@@ -954,9 +1007,5 @@ textarea:focus {
     font-size: 0.9rem;
   }
 
-  /* om du vill dölja några länkar på mobil */
-  .main-nav a[data-nav="create"],
-  .main-nav a[data-nav="examples"] {
-    display: none;
-  }
-}
+ 
+
