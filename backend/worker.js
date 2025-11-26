@@ -331,7 +331,18 @@ function buildReceiptEmail({ kind, amount, currency, orderId, customerName, succ
           <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:560px;background:#ffffff;border-radius:16px;padding:24px 20px;box-shadow:0 8px 24px rgba(0,0,0,0.06);">
             <tr>
               <td align="center" style="padding-bottom:12px;">
-                <div style="font-size:28px;font-weight:700;color:#4b3c88;">Sagostugan</div>
+               <tr>
+  <td align="center" style="padding-bottom:12px;">
+    <img 
+      src="https://sagostugan.se/images/logo.png"
+      alt="Sagostugan"
+      width="120"
+      style="display:block;margin:0 auto 10px auto;"
+    />
+    <div style="font-size:13px;color:#8a7fb8;margin-top:4px;">SagoStugan</div>
+  </td>
+</tr>
+
                 <div style="font-size:13px;color:#8a7fb8;margin-top:4px;">små sagor, stora minnen</div>
               </td>
             </tr>

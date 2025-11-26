@@ -98,6 +98,11 @@ body::before {
   letter-spacing: 0.04em;
   font-size: 1.02rem;
 }
+header .brand img {
+  width: 40px;
+  height: auto;
+}
+
 
 .main-nav {
   margin-left: auto;
