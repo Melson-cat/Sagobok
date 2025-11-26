@@ -277,6 +277,22 @@ function buildReceiptEmail({ kind, amount, currency, orderId, customerName, succ
   const currencyStr = (currency || "SEK").toUpperCase();
   const name = customerName || "vän";
 
+  // 🔹 Bygg "pretty" success-URL för mailet (sagostugan.se)
+  let prettySuccessUrl = successUrl;
+  try {
+    if (successUrl) {
+      const u = new URL(successUrl);
+      // Ignorera originaldomän och path, behåll query (session_id, kind, etc)
+      u.protocol = "https:";
+      u.hostname = "sagostugan.se";
+      u.pathname = "/success.html";
+      prettySuccessUrl = u.toString();
+    }
+  } catch {
+    // om något blir knas använder vi original successUrl som fallback
+    prettySuccessUrl = successUrl;
+  }
+
   const subject =
     kind === "print"
       ? "Tack för din bokbeställning – Sagostugan"
@@ -292,9 +308,9 @@ function buildReceiptEmail({ kind, amount, currency, orderId, customerName, succ
     `Order-ID: ${orderId}`,
     "",
     kind === "print"
-      ? "Vi skapar nu din tryckta bok. Du kan följa din beställning via kvittosidan:"
-      : "Vi skapar nu din digitala bok. Du kan ladda ner den direkt via kvittosidan:",
-    successUrl,
+      ? "Vi skapar nu din tryckta bok. Du kan följa din beställning via statussidan:"
+      : "Vi skapar nu din digitala bok. Du kan öppna kvittosidan här:",
+    prettySuccessUrl,
     "",
     "Varma hälsningar,",
     "Sagostugan"
@@ -352,19 +368,19 @@ function buildReceiptEmail({ kind, amount, currency, orderId, customerName, succ
                       Vi börjar nu skapa din <strong>tryckta bok</strong>. När den är klar skickar vi ett nytt mejl med uppdaterad status.
                     </p>`
                     : `<p style="margin:0 0 10px 0;">
-                      Vi skapar nu din <strong>digitala bok</strong>. Du kan ladda ner den direkt via kvittosidan.
+                      Vi skapar nu din <strong>digitala bok</strong>. Du kan öppna kvittosidan och ladda ner boken där.
                     </p>`
                 }
 
                 <p style="margin:0 0 18px 0;">
-                  <a href="${successUrl}" style="display:inline-block;padding:10px 18px;background:#4b3c88;color:#ffffff;text-decoration:none;border-radius:999px;font-size:14px;font-weight:600;">
+                  <a href="${prettySuccessUrl}" style="display:inline-block;padding:10px 18px;background:#4b3c88;color:#ffffff;text-decoration:none;border-radius:999px;font-size:14px;font-weight:600;">
                     Öppna kvittosida
                   </a>
                 </p>
 
                 <p style="margin:0 0 12px 0;font-size:13px;color:#6c658a;">
                   Om knappen inte fungerar kan du kopiera och klistra in länken i din webbläsare:<br />
-                  <span style="word-break:break-all;font-size:12px;color:#4b3c88;">${successUrl}</span>
+                  <span style="word-break:break-all;font-size:12px;color:#4b3c88;">${prettySuccessUrl}</span>
                 </p>
 
                 <p style="margin:14px 0 0 0;font-size:14px;">
@@ -376,7 +392,7 @@ function buildReceiptEmail({ kind, amount, currency, orderId, customerName, succ
 
             <tr>
               <td align="center" style="padding-top:10px;font-size:11px;color:#a39ac7;">
-                Detta mejl skickades automatiskt. Svara gärna om du har några frågor.
+                Detta mejl skickades automatiskt. Det går inte att svara på. Kontakta oss på hej@sagostugan.se
               </td>
             </tr>
           </table>
@@ -388,6 +404,7 @@ function buildReceiptEmail({ kind, amount, currency, orderId, customerName, succ
 
   return { subject, text, html };
 }
+
 
 
 
