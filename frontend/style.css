@@ -85,26 +85,28 @@ body::before {
   padding: 20px 32px;          /* ⬅︎ MER HÖJD + lite mer sidmarginal */
 }
 
-/* Logga + namn */
 .brand {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;   /* logga över text */
+  align-items: center;      /* centrera horisontellt */
+  justify-content: center;
+  gap: 4px;
   text-decoration: none;
   color: inherit;
+  text-align: center;
 }
 
 .brand img {
-  width: 40px;
+  width: 56px;              /* större logga */
   height: auto;
   object-fit: contain;
+  margin-bottom: 2px;       /* liten luft mellan logga & text */
 }
 
 .brand span {
   font-weight: 800;
   letter-spacing: 0.06em;
-  font-size: 1rem;
-  text-transform: none;
+  font-size: 1.02rem;
 }
 
 /* ========= Layout ========= */
@@ -799,19 +801,6 @@ textarea:focus {
     align-items: flex-start;
   }
 }
-  .brand {
-    flex-direction: column;    /* ⬅︎ text UNDER logga */
-    align-items: flex-start;
-    gap: 4px;
-  }
-
-  .brand img {
-    width: 56px;               /* ⬅︎ större logga på dator */
-  }
-
-  .brand span {
-    font-size: 1.05rem;
-  }
 
 
 @media (max-width: 760px) {

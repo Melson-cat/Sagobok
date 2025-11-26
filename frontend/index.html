@@ -251,8 +251,8 @@
   </footer>
 
 
-  <script>
-(function () {
+ <script>
+document.addEventListener("DOMContentLoaded", function () {
   const toggle = document.getElementById("navToggle");
   const menu   = document.getElementById("mobileMenu");
   if (!toggle || !menu) return;
@@ -266,20 +266,22 @@
   // start: stängd
   setOpen(false);
 
-  // Öppna/stäng via hamburger-ikonen
+  // Klick på hamburgaren → öppna/stäng
   toggle.addEventListener("click", () => {
     const isOpen = toggle.getAttribute("aria-expanded") === "true";
     setOpen(!isOpen);
   });
 
-  // Stäng menyn när man klickar på en länk i mobilmenyn
+  // Klick på länk i mobilmenyn → stäng
   menu.addEventListener("click", (e) => {
-    if (e.target && e.target.tagName === "A") {
+    const t = e.target;
+    if (t && t.tagName === "A") {
       setOpen(false);
     }
   });
-})();
+});
 </script>
+
 
   <script src="script.js" defer></script>
 </body>
