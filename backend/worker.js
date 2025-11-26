@@ -272,51 +272,40 @@ function buildReceiptHtml({ name, kind, amountLabel, orderId, successUrl }) {
 }
 
 function buildReceiptEmail({ kind, amount, currency, orderId, customerName, successUrl }) {
-  const niceKind = kind === "print" ? "Tryckt bok" : "PDF-bok";
+  const mode = kind === "print" ? "print" : "pdf";
+  const niceKind = mode === "print" ? "Tryckt bok" : "Digital PDF-bok";
   const amountStr = amount != null ? (amount / 100).toFixed(2).replace(".", ",") : "";
   const currencyStr = (currency || "SEK").toUpperCase();
   const name = customerName || "vän";
-
-  // 🔹 Bygg "pretty" success-URL för mailet (sagostugan.se)
-  let prettySuccessUrl = successUrl;
-  try {
-    if (successUrl) {
-      const u = new URL(successUrl);
-      // Ignorera originaldomän och path, behåll query (session_id, kind, etc)
-      u.protocol = "https:";
-      u.hostname = "sagostugan.se";
-      u.pathname = "/success.html";
-      prettySuccessUrl = u.toString();
-    }
-  } catch {
-    // om något blir knas använder vi original successUrl som fallback
-    prettySuccessUrl = successUrl;
-  }
+  const logoUrl = "https://sagostugan.se/images/logo.png";
+  const supportEmail = "hej@sagostugan.se";
 
   const subject =
-    kind === "print"
+    mode === "print"
       ? "Tack för din bokbeställning – Sagostugan"
-      : "Din digitala sagobok är på väg – Sagostugan";
+      : "Din digitala sagobok är redo snart – Sagostugan";
 
-  const text = [
+  const textLines = [
     `Hej ${name}!`,
     "",
-    `Tack för att du beställde en bok från Sagostugan.`,
+    "Tack för att du beställde en bok från Sagostugan.",
     "",
     `Typ av beställning: ${niceKind}`,
     amountStr ? `Belopp: ${amountStr} ${currencyStr}` : "",
     `Order-ID: ${orderId}`,
     "",
-    kind === "print"
-      ? "Vi skapar nu din tryckta bok. Du kan följa din beställning via statussidan:"
-      : "Vi skapar nu din digitala bok. Du kan öppna kvittosidan här:",
-    prettySuccessUrl,
+    mode === "print"
+      ? "Vi börjar nu skapa din tryckta bok. Du får ett mejl när den är på väg från tryckeriet."
+      : "Vi skapar nu din digitala bok. Du kan ladda ner den via kvittosidan:",
+    successUrl,
+    "",
+    "Om du har frågor kan du svara på detta mejl eller kontakta oss på " + supportEmail + ".",
     "",
     "Varma hälsningar,",
     "Sagostugan"
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ].filter(Boolean);
+
+  const text = textLines.join("\n");
 
   const html = `<!DOCTYPE html>
 <html lang="sv">
@@ -329,32 +318,36 @@ function buildReceiptEmail({ kind, amount, currency, orderId, customerName, succ
       <tr>
         <td align="center">
           <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:560px;background:#ffffff;border-radius:16px;padding:24px 20px;box-shadow:0 8px 24px rgba(0,0,0,0.06);">
+            
+            <!-- Header med logga -->
             <tr>
-              <td align="center" style="padding-bottom:12px;">
-               <tr>
-  <td align="center" style="padding-bottom:12px;">
-    <img 
-      src="https://sagostugan.se/images/logo.png"
-      alt="Sagostugan"
-      width="120"
-      style="display:block;margin:0 auto 10px auto;"
-    />
-    <div style="font-size:13px;color:#8a7fb8;margin-top:4px;">SagoStugan</div>
-  </td>
-</tr>
-
-                <div style="font-size:13px;color:#8a7fb8;margin-top:4px;">små sagor, stora minnen</div>
+              <td align="center" style="padding-bottom:4px;">
+                <img src="${logoUrl}" alt="Sagostugan" width="120" style="display:block;margin:0 auto 8px auto;border-radius:12px;" />
+                <div style="font-size:13px;color:#8a7fb8;margin-top:0;">små sagor, stora minnen</div>
               </td>
             </tr>
 
+            <!-- Hero-rubrik -->
             <tr>
-              <td style="padding:8px 4px 16px 4px;font-size:15px;color:#1e1730;line-height:1.6;">
-                <p style="margin:0 0 12px 0;">Hej ${name}!</p>
-                <p style="margin:0 0 12px 0;">
-                  Tack för att du beställde en bok från <strong>Sagostugan</strong>.
+              <td align="left" style="padding:4px 4px 10px 4px;">
+                <h1 style="margin:0 0 8px 0;font-size:20px;color:#31255e;">
+                  ${
+                    mode === "print"
+                      ? "Tack för din bokbeställning!"
+                      : "Din digitala sagobok är på väg ✨"
+                  }
+                </h1>
+                <p style="margin:0 0 10px 0;font-size:15px;color:#1e1730;line-height:1.6;">
+                  Hej ${name}!<br/>
+                  Tack för att du låter oss vara en del av dina sagostunder.
                 </p>
+              </td>
+            </tr>
 
-                <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width:100%;margin:12px 0 16px 0;background:#f6f3ff;border-radius:12px;padding:12px 14px;font-size:14px;">
+            <!-- Order-sammanfattning -->
+            <tr>
+              <td style="padding:4px 4px 14px 4px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width:100%;margin:0;background:#f6f3ff;border-radius:12px;padding:12px 14px;font-size:14px;">
                   <tr>
                     <td style="padding:4px 0;"><strong>Typ av beställning:</strong></td>
                     <td style="padding:4px 0;">${niceKind}</td>
@@ -362,9 +355,9 @@ function buildReceiptEmail({ kind, amount, currency, orderId, customerName, succ
                   ${
                     amountStr
                       ? `<tr>
-                    <td style="padding:4px 0;"><strong>Belopp:</strong></td>
-                    <td style="padding:4px 0;">${amountStr} ${currencyStr}</td>
-                  </tr>`
+                          <td style="padding:4px 0;"><strong>Belopp:</strong></td>
+                          <td style="padding:4px 0;">${amountStr} ${currencyStr}</td>
+                        </tr>`
                       : ""
                   }
                   <tr>
@@ -372,40 +365,54 @@ function buildReceiptEmail({ kind, amount, currency, orderId, customerName, succ
                     <td style="padding:4px 0;">${orderId}</td>
                   </tr>
                 </table>
-
-                ${
-                  kind === "print"
-                    ? `<p style="margin:0 0 10px 0;">
-                      Vi börjar nu skapa din <strong>tryckta bok</strong>. När den är klar skickar vi ett nytt mejl med uppdaterad status.
-                    </p>`
-                    : `<p style="margin:0 0 10px 0;">
-                      Vi skapar nu din <strong>digitala bok</strong>. Du kan öppna kvittosidan och ladda ner boken där.
-                    </p>`
-                }
-
-                <p style="margin:0 0 18px 0;">
-                  <a href="${prettySuccessUrl}" style="display:inline-block;padding:10px 18px;background:#4b3c88;color:#ffffff;text-decoration:none;border-radius:999px;font-size:14px;font-weight:600;">
-                    Öppna kvittosida
-                  </a>
-                </p>
-
-                <p style="margin:0 0 12px 0;font-size:13px;color:#6c658a;">
-                  Om knappen inte fungerar kan du kopiera och klistra in länken i din webbläsare:<br />
-                  <span style="word-break:break-all;font-size:12px;color:#4b3c88;">${prettySuccessUrl}</span>
-                </p>
-
-                <p style="margin:14px 0 0 0;font-size:14px;">
-                  Varma hälsningar,<br/>
-                  <strong>Sagostugan</strong>
-                </p>
               </td>
             </tr>
 
+            <!-- Info-text beroende på typ -->
             <tr>
-              <td align="center" style="padding-top:10px;font-size:11px;color:#a39ac7;">
-                Detta mejl skickades automatiskt. Det går inte att svara på. Kontakta oss på hej@sagostugan.se
+              <td style="padding:0 4px 10px 4px;font-size:14px;color:#1e1730;line-height:1.6;">
+                ${
+                  mode === "print"
+                    ? `<p style="margin:0 0 10px 0;">
+                        Vi börjar nu skapa din <strong>tryckta bok</strong>. Så fort tryckeriet har tagit emot beställningen och boken är på väg
+                        får du en uppdatering via mejl.
+                       </p>
+                       <p style="margin:0 0 10px 0;">
+                        Du kan när som helst se status på din beställning via kvittosidan:
+                       </p>`
+                    : `<p style="margin:0 0 10px 0;">
+                        Din <strong>digitala bok</strong> genereras just nu. Inom kort kan du ladda ner den direkt via kvittosidan.
+                       </p>`
+                }
               </td>
             </tr>
+
+            <!-- Knapp till kvittosida -->
+            <tr>
+              <td style="padding:0 4px 14px 4px;">
+                <a href="${successUrl}" style="display:inline-block;padding:11px 20px;background:#4b3c88;color:#ffffff;text-decoration:none;border-radius:999px;font-size:14px;font-weight:600;">
+                  Öppna kvittosida
+                </a>
+              </td>
+            </tr>
+
+            <!-- Länk som text -->
+            <tr>
+              <td style="padding:0 4px 14px 4px;font-size:12px;color:#6c658a;line-height:1.5;">
+                Om knappen inte fungerar kan du kopiera och klistra in länken i din webbläsare:<br/>
+                <span style="word-break:break-all;color:#4b3c88;">${successUrl}</span>
+              </td>
+            </tr>
+
+            <!-- Footer / support -->
+            <tr>
+              <td style="padding:10px 4px 0 4px;font-size:12px;color:#a39ac7;line-height:1.5;" align="center">
+                Det här mejlet skickades automatiskt från Sagostugan.<br/>
+                Har du frågor? Svara på mejlet eller skriv till
+                <a href="mailto:${supportEmail}" style="color:#7a6ad4;text-decoration:none;">${supportEmail}</a>.
+              </td>
+            </tr>
+
           </table>
         </td>
       </tr>
@@ -415,6 +422,7 @@ function buildReceiptEmail({ kind, amount, currency, orderId, customerName, succ
 
   return { subject, text, html };
 }
+
 
 
 
