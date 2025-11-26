@@ -243,6 +243,37 @@
     <p>© 2025 SagoStugan</p>
   </footer>
 
+<script>
+(function () {
+  const header = document.querySelector('.site-header');
+  if (!header) return;
+
+  let lastY = window.scrollY;
+  let ticking = false;
+
+  function onScroll() {
+    const currentY = window.scrollY;
+
+    // scrollar nedåt och är inte längst upp → göm header
+    if (currentY > lastY && currentY > 80) {
+      header.classList.add('header-hidden');
+    } else {
+      // scrollar uppåt → visa header
+      header.classList.remove('header-hidden');
+    }
+
+    lastY = currentY;
+    ticking = false;
+  }
+
+  window.addEventListener('scroll', () => {
+    if (!ticking) {
+      window.requestAnimationFrame(onScroll);
+      ticking = true;
+    }
+  }, { passive: true });
+})();
+</script>
 
 
   <script src="script.js" defer></script>

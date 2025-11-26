@@ -83,51 +83,41 @@ body::before {
   display: flex;
   align-items: center;
   gap: 24px;
-  padding: 20px 32px;
+  padding: 18px 24px;
+  transform: translateY(0);
+  transition: transform .25s ease, box-shadow .2s ease;
+}
+
+/* används när vi gömmer headern på scroll */
+.site-header.header-hidden {
+  transform: translateY(-100%);
+  box-shadow: none;
 }
 
 .brand {
   display: flex;
   flex-direction: column;   /* logga över text */
-  align-items: center;
+  align-items: center;      /* centrera logga + text mot varandra */
   justify-content: center;
   gap: 4px;
   text-decoration: none;
   color: inherit;
   text-align: center;
+  margin-right: 12px;       /* lite luft mot menyn */
 }
 
 .brand img {
   width: 56px;
   height: auto;
   object-fit: contain;
-  margin-bottom: 2px;
+  margin-bottom: 2px;       /* liten luft mellan logga & text */
+  display: block;
 }
 
 .brand span {
   font-weight: 800;
   letter-spacing: 0.06em;
   font-size: 1.02rem;
-}
-
-/* Desktop-nav */
-.main-nav {
-  margin-left: auto;
-  display: flex;
-  gap: 20px;
-}
-
-.main-nav a {
-  color: inherit;
-  opacity: .88;
-  text-decoration: none;
-  font-weight: 600;
-}
-
-.main-nav a:hover {
-  opacity: 1;
-  text-decoration: underline;
-  text-underline-offset: 3px;
 }
 
 /* ========= Layout ========= */
@@ -759,38 +749,42 @@ textarea:focus {
   .hero-main { align-items: flex-start; }
 }
 
-/* Mobil: enkel meny + formstack */
+
+/* ========= Mobil-header ========= */
 @media (max-width: 760px) {
   .site-header {
-    padding: 16px 14px;
-    gap: 16px;
+    padding: 14px 10px;
+    gap: 12px;
+  }
+
+  .brand img {
+    width: 48px;
+  }
+
+  .brand span {
+    font-size: 0.95rem;
   }
 
   .main-nav {
-    margin-left: auto;
-    display: flex;
-    gap: 14px;
+    gap: 12px;
   }
 
-  /* Dölj alla länkar först ... */
   .main-nav a {
+    font-size: 0.9rem;
+  }
+
+  /* Om du fortfarande bara vill ha Hem + Orderstatus på mobil */
+  .main-nav a[data-nav="create"],
+  .main-nav a[data-nav="examples"] {
     display: none;
-    font-size: 0.95rem;
-    padding: 4px 2px;
   }
-
-  /* ... och visa bara Hem + Orderstatus */
-  .main-nav a[data-nav="home"],
-  .main-nav a[data-nav="status"] {
-    display: inline-block;
-  }
-
+}
   .form-row { grid-template-columns: 1fr; }
   .field.col-span-2,
   .field.col-span-3 { grid-column: auto; }
 
   .thumb-grid { grid-template-columns: repeat(2,1fr); }
-}
+
 
 @media (max-width: 600px) {
   .hero {
