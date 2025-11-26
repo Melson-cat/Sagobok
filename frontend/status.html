@@ -200,45 +200,74 @@
     return body;
   }
 
-  function explain(order){
-    const isPrinted=(order.kind==="printed"||order.kind==="print");
+   function explain(order){
+    const kind = (order.kind || order.draft?.kind || "pdf").toLowerCase();
+    const isPrinted = (kind === "printed" || kind === "print");
+
     el.links.innerHTML = isPrinted
-      ? `<p class="muted">Tryckt bok – vi uppdaterar status automatiskt när tryckeriet rapporterar nytt.</p>`
-      : `<p class="muted">Digital bok – du hittar PDF-filen i ditt kvitto-mail.</p>`;
+      ? `<p class="muted">Tryckt bok – vi uppdaterar status löpande från tryckeriet, du får ett mail när boken är på väg!.</p>`
+      : `<p class="muted">Digital bok – du hittar PDF-filen i ditt kvitto-mail från SagoStugan.</p>`;
   }
 
-  function render(order,id){
+  function render(order, id){
     show(el.box);
-    setText(el.orderId,id);
+    setText(el.orderId, id);
 
-    const raw=order.provider_status||order.gelato_status||order.status||"okänd";
-    setText(el.orderState,raw);
+    const raw =
+      order.provider_status ||
+      order.gelato_status ||
+      order.status ||
+      "okänd";
+    setText(el.orderState, raw);
 
-    const kind=(order.kind||order.draft?.kind||"pdf");
-    setText(el.pill, kind==="printed"?"Tryckt bok":"Digital PDF");
+    const kind = (order.kind || order.draft?.kind || "pdf").toLowerCase();
+    const isPrinted = (kind === "printed" || kind === "print");
+    setText(el.pill, isPrinted ? "Tryckt bok" : "Digital PDF");
 
-    const title = order.book?.title || order.story?.book?.title || "Din bok";
-    setText(el.title,title);
+    // 🔹 Titel: funkar nu även för digitala ordrar (draft.story.book.title)
+    const title =
+      order.book?.title ||
+      order.story?.book?.title ||
+      order.draft?.story?.book?.title ||
+      "Din bok";
+    setText(el.title, title);
 
-    const pageCount = order.book?.pages?.length
-      || order.story?.book?.pages?.length
-      || null;
+    // 🔹 Sidantal: leta på samma ställen
+    const pages =
+      order.book?.pages ??
+      order.story?.book?.pages ??
+      order.draft?.story?.book?.pages;
+    const pageCount = Array.isArray(pages) ? pages.length : null;
 
     const txt = pageCount
       ? `${pageCount} sidor.`
       : "";
     setText(el.info, txt);
 
-    const thumb=order.book?.cover_thumb_url || order.cover_thumb_url;
-    if(thumb){ el.cover.src=thumb; show(el.cover); }
-    else { hide(el.cover); }
+    // 🔹 Thumbnail – vi använder cover_thumb_url som du sätter i backend
+    const thumb =
+      order.book?.cover_thumb_url ||
+      order.cover_thumb_url ||
+      null;
+
+    if (thumb) {
+      el.cover.src = thumb;
+      show(el.cover);
+    } else {
+      el.cover.src = "";
+      hide(el.cover);
+    }
 
     explain(order);
 
     const now = new Date();
-    setText(el.updated, `Senast uppdaterad: ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`);
+    setText(
+      el.updated,
+      `Senast uppdaterad: ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`
+    );
     setText(el.bar, "Status hämtad. Uppdateras vid laddning av sidan.");
   }
+
 
   async function load(id){
     hide(el.err);
