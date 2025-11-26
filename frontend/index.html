@@ -45,10 +45,79 @@
   </div>
 
   <main class="container">
-  <section class="intro" aria-labelledby="pageTitle">
-  <h1 id="pageTitle">Skapa en personlig sagobok på några minuter</h1>
-  <p>Fyll i några detaljer om barnet eller husdjuret – SagoStugan skriver berättelsen, skapar illustrationerna och gör en färdig bok åt dig.</p>
-</section>
+  <!-- HERO / TOPPSEKTION -->
+  <section class="hero">
+    <div class="hero-main">
+      <p class="hero-kicker">Personliga godnattsagor på några minuter</p>
+
+      <h1 class="hero-title">
+        Skapa en magisk sagobok med <span class="hero-highlight">ditt barn eller husdjur</span> som hjälte.
+      </h1>
+
+      <p class="hero-tagline">
+        Fyll i namn, ålder och stil – AI:n skriver sagan, målar bilderna och
+        förbereder både tryckt bok och digital PDF åt dig.
+      </p>
+
+      <div class="hero-pill-row">
+        <span class="hero-pill">🧒 Barn & 🐾 husdjur</span>
+        <span class="hero-pill">📚 Tryckt bok & PDF</span>
+        <span class="hero-pill">✨ AI-illustrationer</span>
+      </div>
+
+      <div class="hero-cta-row">
+        <button
+          type="button"
+          class="btn btn-primary btn-cta"
+          onclick="smoothScrollTo(document.getElementById('storyForm'))">
+          Skapa din sagobok
+        </button>
+
+        <button
+          type="button"
+          class="btn btn-ghost hero-ghost"
+          onclick="smoothScrollTo(document.getElementById('preview'))">
+          Visa exempel
+        </button>
+      </div>
+
+      <ul class="hero-list">
+        <li>1. Fyll i namn, ålder och önskad stil.</li>
+        <li>2. AI skriver sagan & skapar illustrationer sida för sida.</li>
+        <li>3. Beställ tryckt bok eller ladda ner som PDF.</li>
+      </ul>
+    </div>
+
+    <div class="hero-art">
+      <div class="hero-bubble hero-bubble-main">
+        <div class="hero-book-icon">📖</div>
+        <p>
+          “God natt, <span data-hero-name>Nova</span>… idag räddade du hela stjärnhimlen.”
+        </p>
+      </div>
+
+      <div class="hero-bubble hero-badge-card">
+        <span class="hero-badge-label">Ny saga varje gång</span>
+        <span class="hero-badge-sub">AI anpassar berättelsen efter ditt barn</span>
+      </div>
+
+      <div class="hero-floating-tag">
+        ✨ AI-illustrationer i samma stil genom hela boken
+      </div>
+    </div>
+  </section>
+
+  <!-- DIN PANEL MED FORMULÄRET SOM FÖRR -->
+  <section class="panel">
+    <!-- befintligt formulär-innehåll -->
+  </section>
+
+  <!-- Preview / galleri som du redan har -->
+  <section id="preview">
+    <!-- befintligt preview-innehåll -->
+  </section>
+</main>
+
 
 
     <!-- FORMULÄR -->

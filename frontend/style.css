@@ -478,3 +478,237 @@ input:focus, select:focus, textarea:focus {
   .panel{ border:0; box-shadow:none; background:white; }
   .thumb{ page-break-inside:avoid; }
 }
+
+/* ========= HERO – Sagobok-vibb ========= */
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 32px;
+  align-items: center;
+  margin-bottom: 32px;
+}
+
+.hero-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.hero-kicker {
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--brand) 70%, #2a4154);
+  margin: 0;
+}
+
+.hero-title {
+  margin: 0;
+  font-size: clamp(28px, 3.3vw, 40px);
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+}
+
+.hero-highlight {
+  background: linear-gradient(120deg, var(--brand), var(--brand-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.hero-tagline {
+  margin: 6px 0 4px;
+  max-width: 34rem;
+  color: var(--muted);
+}
+
+/* Pillar / badges under texten */
+
+.hero-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0 10px;
+}
+
+.hero-pill {
+  font-size: 0.85rem;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 82%, white);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, var(--brand-2));
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* CTA-rad */
+
+.hero-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 4px 0 6px;
+}
+
+.hero-ghost {
+  font-size: 0.95rem;
+  padding-inline: 14px;
+}
+
+/* Steg-lista */
+
+.hero-list {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.hero-list li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-bottom: 3px;
+}
+
+.hero-list li::before {
+  content: "•";
+  color: var(--brand);
+  font-weight: 900;
+  margin-top: 2px;
+}
+
+/* Höger-sida: “illustration” / kort */
+
+.hero-art {
+  position: relative;
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hero-bubble {
+  position: relative;
+  border-radius: 22px;
+  padding: 16px 18px;
+  background: color-mix(in srgb, white 88%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--border) 70%, var(--brand-2));
+  box-shadow: 0 16px 38px rgba(0,0,0,0.10);
+}
+
+.hero-bubble-main {
+  max-width: 260px;
+}
+
+.hero-bubble-main p {
+  margin: 6px 0 0;
+  font-size: 0.95rem;
+}
+
+.hero-book-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 25% 0%, var(--brand-2), var(--brand));
+  color: white;
+  font-size: 1.3rem;
+  box-shadow: 0 8px 18px rgba(0,0,0,0.18);
+}
+
+/* Liten badge */
+
+.hero-badge-card {
+  position: absolute;
+  right: -10px;
+  bottom: -16px;
+  transform: translateY(0);
+  font-size: 0.8rem;
+  padding: 10px 12px;
+}
+
+.hero-badge-label {
+  display: block;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.hero-badge-sub {
+  display: block;
+  opacity: 0.85;
+}
+
+/* Flytande tag ovanför */
+
+.hero-floating-tag {
+  position: absolute;
+  top: -10px;
+  right: 4px;
+  font-size: 0.78rem;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.9);
+  border: 1px dashed color-mix(in srgb, var(--brand-2) 70%, var(--border));
+  box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+}
+
+/* Små animationer för hero */
+
+.hero-art {
+  animation: heroFloat 16s ease-in-out infinite alternate;
+}
+
+@keyframes heroFloat {
+  0%   { transform: translateY(0px); }
+  50%  { transform: translateY(-4px); }
+  100% { transform: translateY(2px); }
+}
+
+/* ========= Header – lite extra sagokänsla ========= */
+
+.site-header {
+  background: color-mix(in srgb, var(--panel) 70%, white);
+  box-shadow: 0 10px 26px rgba(10,30,40,0.06);
+}
+
+.brand span {
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+/* ========= Responsivitet för hero ========= */
+
+@media (max-width: 900px) {
+  .hero {
+    grid-template-columns: minmax(0,1fr);
+  }
+  .hero-art {
+    order: -1;
+    margin-bottom: 12px;
+  }
+}
+
+@media (max-width: 600px) {
+  .hero {
+    margin-bottom: 24px;
+  }
+  .hero-title {
+    font-size: 1.65rem;
+  }
+  .hero-cta-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .hero-cta-row .btn-cta,
+  .hero-cta-row .hero-ghost {
+    width: 100%;
+    justify-content: center;
+  }
+}
