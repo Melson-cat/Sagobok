@@ -370,7 +370,7 @@ function setCategory(cat, save = true) {
     els.age.value = state.form.age ?? 6;
 
     if (ageLabel) ageLabel.textContent = "Ålder (hjälte)";
-    if (ageHint)  ageHint.textContent  = "Barnets ålder för bibeln (valfritt men hjälper tonen).";
+    if (ageHint)  ageHint.textContent  = "Barnets ålder";
   } else {
     els.age.type = "text";
     els.age.removeAttribute("min");

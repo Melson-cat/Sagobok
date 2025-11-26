@@ -82,7 +82,7 @@ body::before {
   display: flex;
   align-items: center;
   gap: 18px;
-  padding: 10px 16px;
+  padding: 14px 18px;
 }
 
 .brand {
@@ -268,8 +268,8 @@ body::before {
 /* Liten badge */
 .hero-badge-card {
   position: absolute;
-  right: -10px;
-  bottom: -16px;
+  right: -18px;
+  bottom: -28px;
   font-size: 0.8rem;
   padding: 10px 12px;
 }
@@ -293,8 +293,20 @@ body::before {
   border-radius: 999px;
   background: rgba(255,255,255,0.9);
   border: 1px dashed color-mix(in srgb, var(--brand-2) 70%, var(--border));
-  box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.06);
+  opacity: 0.95;
 }
+
+.hero-art::before {
+  content: "";
+  position: absolute;
+  inset: -24px -34px;
+  background: radial-gradient(circle at 30% 0%, rgba(255,255,255,0.9), transparent 60%);
+  filter: blur(10px);
+  z-index: -1;
+}
+
+
 
 /* Små animationer för hero */
 @keyframes heroFloat {
@@ -807,15 +819,18 @@ textarea:focus {
 
   /* CTA-knappar som tydlig stack */
   .hero-cta-row {
-    flex-direction: column;
-    align-items: stretch;
+    flex-direction: row;          /* inte column */
+    flex-wrap: wrap;
+    justify-content: flex-start;
     gap: 8px;
   }
-  .hero-cta-row .btn-cta,
+   .hero-cta-row .btn-cta,
   .hero-cta-row .hero-ghost {
-    width: 100%;
+    flex: 1 1 calc(50% - 6px);    /* två i rad, lite luft */
+    width: auto;
     justify-content: center;
   }
+
 
   .hero-list { font-size: 0.85rem; }
 }
