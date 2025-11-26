@@ -45,10 +45,11 @@
   </div>
 
   <main class="container">
-    <section class="intro" aria-labelledby="pageTitle">
-      <h1 id="pageTitle">Skapa din egen AI-illustrerade bok</h1>
-      <p>Fyll i några detaljer, välj stil och se din berättelse ta form med både text och bilder.</p>
-    </section>
+  <section class="intro" aria-labelledby="pageTitle">
+  <h1 id="pageTitle">Skapa en personlig sagobok på några minuter</h1>
+  <p>Fyll i några detaljer om barnet eller husdjuret – SagoStugan skriver berättelsen, skapar illustrationerna och gör en färdig bok åt dig.</p>
+</section>
+
 
     <!-- FORMULÄR -->
     <section id="bookForm" class="panel" aria-labelledby="formTitle">
@@ -76,7 +77,7 @@
          <div class="field">
   <label for="age" id="ageLabel">Ålder (hjälte)</label>
   <input id="age" type="number" min="1" max="120" value="6" inputmode="numeric" />
-  <p class="hint" id="ageHint">Barnets/djurets ålder för bibeln (frivilligt för husdjur).</p>
+  <p class="hint" id="ageHint">Barnets ålder.</p>
 </div>
 
           
@@ -116,7 +117,7 @@
           <div class="field">
             <label>Sidor</label>
             <input value="Fast: 32 (framsida + 30 blad + baksida)" readonly />
-            <p class="hint">Inlaga: titel + 14 uppslag (bild vänster / text höger) + slut.</p>
+            <p class="hint">Standardformat: titel + 16 uppslag (bild vänster / text höger) + slut.</p>
           </div>
         </div>
 
@@ -129,44 +130,6 @@
               <button type="button" class="seg-btn active" id="refPhotoBtn" role="tab" aria-selected="true">Foto</button>
             </div>
           </div>
-
-          <!-- Fler karaktärer (valfritt) -->
-<div class="form-row">
-  <div class="field col-span-3">
-    <label for="extraCharsToggle">Fler karaktärer (valfritt)</label>
-    <div class="checkbox-row">
-      <input type="checkbox" id="extraCharsToggle" />
-      <span>Lägg till upp till tre extra figurer i storyn.</span>
-    </div>
-    <p class="hint">Exempel: bästis, syskon, husdjur, förälder.</p>
-  </div>
-</div>
-
-<div class="form-row hidden" id="extraCharsContainer" aria-live="polite">
-  <div class="field col-span-3 extra-char" data-extra-char-row="0">
-    <label>Karaktär 1</label>
-    <div class="field-row">
-      <input type="text" placeholder="Namn" data-extra-name />
-      <input type="text" placeholder="Roll (t.ex. bästis)" data-extra-role />
-    </div>
-  </div>
-
-  <div class="field col-span-3 extra-char" data-extra-char-row="1">
-    <label>Karaktär 2</label>
-    <div class="field-row">
-      <input type="text" placeholder="Namn" data-extra-name />
-      <input type="text" placeholder="Roll (t.ex. storebror)" data-extra-role />
-    </div>
-  </div>
-
-  <div class="field col-span-3 extra-char" data-extra-char-row="2">
-    <label>Karaktär 3</label>
-    <div class="field-row">
-      <input type="text" placeholder="Namn" data-extra-name />
-      <input type="text" placeholder="Roll (t.ex. granne)" data-extra-role />
-    </div>
-  </div>
-</div>
 
 
           <!-- Beskrivning -->
@@ -189,7 +152,6 @@
 
         <div class="actions">
           <button type="submit" class="btn btn-primary">Skapa förhandsvisning</button>
-          <button id="demoBtn" type="button" class="btn btn-ghost">Visa demo</button>
         </div>
       </form>
     </section>
@@ -200,13 +162,12 @@
       <div id="statusBar" class="status-bar hidden" aria-live="polite"></div>
 
       <p class="preview-note">
-        Du ser de <strong>4 första</strong> sidorna skarpt först. Resterande låses upp när alla illustrationer är klara.
+        Du ser <strong>alla bilder, och texten</strong> i förhandsvyn. Texten är helt redigerbar, och även bilderna kan du göra om vid behov.
       </p>
 
       <div id="bookPreview" class="thumb-grid" role="list"></div>
 
       <div class="actions" style="margin-top:16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-        <button id="pdfBtn"      type="button" class="btn btn-secondary" aria-describedby="pdfHelp">Skapa PDF</button>
         <button id="buyPdfBtn"   type="button" class="btn btn-primary">Köp digital bok</button>
         <button id="buyPrintBtn" type="button" class="btn btn-accent">Köp tryckt bok</button>
       </div>
@@ -219,10 +180,11 @@
     </section>
 
     
-    <section id="about" class="about" aria-labelledby="aboutTitle">
-      <h3 id="aboutTitle">Om SagoStugan</h3>
-      <p>Vi hjälper dig skapa personliga, AI-illustrerade böcker – snabbt och enkelt.</p>
-    </section>
+   <section id="about" class="about" aria-labelledby="aboutTitle">
+  <h3 id="aboutTitle">Om SagoStugan</h3>
+  <p>SagoStugan hjälper dig att förvandla några korta rader om ett barn eller husdjur till en färdig, illustrerad sagobok – digital eller tryckt.</p>
+</section>
+
   </main>
 
   <footer class="site-footer" role="contentinfo">

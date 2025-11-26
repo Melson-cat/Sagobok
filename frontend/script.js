@@ -323,7 +323,7 @@ const STATUS_QUIPS = [
   "polerar morrhår…",
   "tänder nattlampan…",
   "räknar stjärnor…",
-  "justerar rim light…",
+  "Vässar pennor…",
   "sorterar leksaker…",
 ];
 let quipTimer = null;
@@ -613,7 +613,8 @@ function buildCard(item) {
   btn.className = "regen-btn";
   btn.textContent = "Regenerera";
 
-  btn.onclick = () => regenerateImage(item.page, article);
+  btn.onclick = () => regenerateOne(item.page);
+
 
   over.appendChild(btn);
   imgWrap.appendChild(over);
@@ -1228,26 +1229,19 @@ async function regenerateImage(page, cardEl) {
 
 async function generateCoverAsync() {
   try {
-    const timeoutMs = 25000;
-    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error("cover-timeout")), timeoutMs));
-
-    const covRes = await Promise.race([
-      fetch(`${API}/api/cover`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          style: state.form.style,
-          character_ref_b64: state.ref_b64,   // ← FIX: correct key for backend
-          story: state.story,
-        }),
+    const covRes = await fetch(`${API}/api/cover`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        style: state.form.style,
+        character_ref_b64: state.ref_b64,   // samma som tidigare
+        story: state.story,
       }),
-      timeout,
-    ]);
+    });
 
-    if (!(covRes instanceof Response)) return; // timed out silently
     const cov = await covRes.json().catch(() => ({}));
     if (!covRes.ok || cov?.error) {
-      console.warn("cover generation failed", cov?.error);
+      console.warn("cover generation failed", cov?.error || covRes.status);
       return;
     }
 
@@ -1274,6 +1268,7 @@ async function generateCoverAsync() {
     console.warn("Cover async fail", err);
   }
 }
+
 
 async function fetchOrderIdFromSessionId(sessionId) {
   if (!sessionId) return null;

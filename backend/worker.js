@@ -828,7 +828,7 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
 /* ------------------------------ Styles ------------------------------- */
 function styleHint(style = "cartoon") {
   const s = (style || "cartoon").toLowerCase();
-  if (s === "storybook") return "storybook watercolor, soft edges, paper texture, warm and cozy";
+  if (s === "storybook") return "storybook watercolor, paper texture, gentle grain, warm and cozy";
   if (s === "pixar") return "stylized 3D animated pixar film still (not photographic). Happy and expressive characters.";
   if (s === "comic") return "bold comic style, inked lines, flat colors";
   if (s === "painting") return "soft painterly illustration, visible brushwork";
@@ -845,7 +845,7 @@ function styleGuard(style = "cartoon") {
       ].join(" ");
     case "storybook":
       return [
-        "STYLE: storybook watercolor illustration, soft edges, paper texture, gentle grain.",
+        "STYLE: storybook watercolor illustration, paper texture, gentle grain, warm and cozy.",
         "Do NOT render as 3D/Pixar or photorealistic CGI.",
         "No hard cel-shaded comic inking."
       ].join(" ");
@@ -1270,7 +1270,7 @@ function buildFramePrompt({
     `You receive IMAGE 1, optionally IMAGE 2, and this text prompt.`,
     ``,
     `IMAGE 1: The "MASTER IDENTITY REFERENCE" for the main hero (visual truth).`,
-    `IMAGE 2 (and any additional context images if present): Previous story frame(s) from the SAME book.`,
+    `IMAGE 2: Previous story frame from the SAME book.`,
     ``,
     `Use IMAGE 1 ONLY for the hero's physical appearance and clothing.`,
     `Use IMAGE 2 ONLY for story continuity (environment, lighting, mood, rough composition).`,

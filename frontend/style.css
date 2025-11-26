@@ -440,3 +440,50 @@ input:focus, select:focus, textarea:focus {
   background: rgba(255,255,180,0.35);
   outline: 2px solid #ffd86b;
 }
+
+/* --- Checkout-knappar (CTA) --- */
+
+.checkout-actions {
+  justify-content: flex-start;
+  gap: 12px;
+}
+
+.btn-cta {
+  font-size: 1rem;
+  padding: 14px 22px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 180px;
+}
+
+/* Särskild stil för tryckt bok (accent) */
+.btn-accent {
+  background: linear-gradient(180deg, #f8b54c, #f18b1b);
+  color: #442400;
+  border: 1px solid color-mix(in srgb, #f18b1b 70%, #774000);
+  box-shadow: 0 10px 22px rgba(241, 139, 27, 0.3);
+}
+
+.btn-accent:hover {
+  box-shadow: 0 14px 28px rgba(241, 139, 27, 0.35);
+  transform: translateY(-1px);
+}
+
+.btn-accent:active {
+  box-shadow: 0 6px 14px rgba(241, 139, 27, 0.25);
+  transform: translateY(0);
+}
+
+/* Mobil: knapparna på egen rad, fullbredd */
+@media (max-width: 520px) {
+  .checkout-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .checkout-actions .btn-cta {
+    width: 100%;
+  }
+}
