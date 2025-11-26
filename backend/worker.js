@@ -2471,10 +2471,97 @@ async function handleOrdersDraft(req, env) {
 async function handleOrdersStatus(req, env) {
   const url = new URL(req.url);
   const id = url.searchParams.get("id");
+
+  if (!id) {
+    return err("Missing id", 400);
+  }
+
   const data = await kvGetOrder(env, id);
   if (!data) return err("Not found", 404);
-  return ok(data);
+
+  // 🔑 Lägg på/försök härleda cover_thumb_url innan vi svarar
+  const shaped = attachCoverThumb(data, env);
+
+  return ok(shaped);
 }
+function resolveCfImagesUrl(env, imageId, variant = "public") {
+  // Justera om du har annan variant / annan bas-URL
+  if (!env.CF_IMAGES_BASE_URL && !env.CF_IMAGES_ACCOUNT_HASH) return null;
+
+  if (env.CF_IMAGES_BASE_URL) {
+    // t.ex. "https://imagedelivery.net/ACCOUNT_HASH"
+    return `${env.CF_IMAGES_BASE_URL.replace(/\/+$/, "")}/${imageId}/${variant}`;
+  }
+
+  // fallback om du bara har ACCOUNT_HASH
+  return `https://imagedelivery.net/${env.CF_IMAGES_ACCOUNT_HASH}/${imageId}/${variant}`;
+}
+
+/**
+ * Säkerställ att ordern har cover_thumb_url.
+ * Muterar order-objektet direkt och returnerar det.
+ */
+function attachCoverThumb(order, env) {
+  if (!order || typeof order !== "object") return order;
+
+  // 1) Om det redan finns en thumb – klart
+  let url =
+    order.cover_thumb_url ||
+    order.book?.cover_thumb_url ||
+    null;
+
+  // 2) Kolla om vi har explicit omslags-URL i files
+  if (!url && order.files) {
+    if (order.files.cover_thumb_url) {
+      url = order.files.cover_thumb_url;
+    } else if (order.files.cover_url) {
+      url = order.files.cover_url;
+    } else if (order.files.print_url && /\.(png|jpe?g|webp)$/i.test(order.files.print_url)) {
+      // ifall du någon gång sparar ren bild där
+      url = order.files.print_url;
+    }
+  }
+
+  // 3) Kolla om du sparat info om cover-bild från CF Images
+  //    Justera field-namn här om dina keys heter något annat.
+  if (!url && order.images) {
+    // ex: du har sparat { cover: { image_id, url } }
+    const cov = order.images.cover || order.images["cover"];
+    if (cov) {
+      if (cov.thumb_url) {
+        url = cov.thumb_url;
+      } else if (cov.image_id) {
+        // Bygg en thumbnail-variant via Cloudflare Images
+        url = resolveCfImagesUrl(env, cov.image_id, "thumb");
+      } else if (cov.url) {
+        url = cov.url;
+      }
+    }
+  }
+
+  // 4) Som sista utväg – ta ev. cover-bild på story/book
+  if (!url && order.book && order.book.cover_image_url) {
+    url = order.book.cover_image_url;
+  }
+  if (!url && order.story?.book?.cover_image_url) {
+    url = order.story.book.cover_image_url;
+  }
+
+  // 5) Skriv tillbaka in i order-objektet om vi hittade något
+  if (url) {
+    order.cover_thumb_url = order.cover_thumb_url || url;
+
+    if (order.book) {
+      order.book.cover_thumb_url = order.book.cover_thumb_url || url;
+    } else if (order.story?.book) {
+      order.story.book.cover_thumb_url =
+        order.story.book.cover_thumb_url || url;
+    }
+  }
+
+  return order;
+}
+
 
 /* ====================== CHECKOUT (Stripe) ====================== */
 async function handleCheckoutPing(_req, env) {

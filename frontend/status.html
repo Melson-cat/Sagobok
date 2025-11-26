@@ -7,316 +7,270 @@
   <link rel="icon" href="images/pilot-logo.png">
   <link rel="stylesheet" href="./style.css">
   <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;600;700&display=swap" rel="stylesheet" />
+  <style>
+    .hidden { display:none!important; }
+
+    /* Matcha success-panelens stil */
+    .status-panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--r-xl);
+      box-shadow: var(--shadow);
+      padding: 32px 26px 38px;
+      max-width: 820px;
+      margin: 0 auto;
+    }
+
+    .status-panel h1 { font-size: 1.9rem; margin-bottom: 8px; }
+    .status-panel .muted { color: var(--muted); }
+
+    .spinner-lg {
+      margin-top: 8px;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 4px solid rgba(0,0,0,.08);
+      border-top-color: var(--brand);
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .order-box {
+      background: white;
+      padding: 18px 20px;
+      border-radius: var(--r);
+      border: 1px solid var(--border);
+      box-shadow: 0 4px 16px rgba(0,0,0,.05);
+      margin-top: 22px;
+    }
+
+    .pill {
+      background: color-mix(in srgb, var(--brand-2) 30%, white);
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+      display: inline-block;
+    }
+
+    .order-status-body {
+      display: flex;
+      gap: 18px;
+      margin-top: 14px;
+      align-items: flex-start;
+    }
+
+    .order-cover-thumb img {
+      max-width: 120px;
+      border-radius: 12px;
+      box-shadow: 0 4px 10px rgba(0,0,0,.15);
+    }
+
+    @media(max-width:640px){
+      .order-status-body {
+        flex-direction: column;
+        align-items: center;
+        text-align:center;
+      }
+    }
+  </style>
 </head>
+
 <body data-theme="kids">
-  <!-- Global Header -->
-  <header class="site-header" role="banner">
-    <a href="/index.html" class="brand" aria-label="SagoStugan startsida">
-      <img src="images/pilot-logo.png" alt="SagoStugan" />
-      <span>SagoStugan</span>
-    </a>
-    <nav class="main-nav" aria-label="Huvudmeny">
-      <a href="/index.html" data-nav="home">Hem</a>
-      <a href="/index.html#bookForm" data-nav="create">Skapa bok</a>
-      <a href="/index.html#examples" data-nav="examples">Exempel</a>
-      <a href="/index.html#about" data-nav="about">Om oss</a>
-      <a href="/status.html" data-nav="status" class="active">Status</a>
-    </nav>
-    <button id="navToggle" class="hamburger" aria-label="Meny" aria-expanded="false" aria-controls="mobileMenu">☰</button>
-  </header>
 
-  <div class="mobile-menu" id="mobileMenu" aria-hidden="true">
-    <nav>
-      <a href="/index.html">Hem</a>
-      <a href="/index.html#bookForm">Skapa bok</a>
-      <a href="/index.html#examples">Exempel</a>
-      <a href="/index.html#about">Om oss</a>
-      <a href="/status.html">Status</a>
-    </nav>
-  </div>
+<header class="site-header" role="banner">
+  <a href="/index.html" class="brand">
+    <img src="images/pilot-logo.png" alt="SagoStugan">
+    <span>SagoStugan</span>
+  </a>
+  <nav class="main-nav">
+    <a href="/index.html">Hem</a>
+    <a href="/index.html#bookForm">Skapa bok</a>
+    <a href="/index.html#examples">Exempel</a>
+    <a href="/index.html#about">Om oss</a>
+    <a href="/status.html" class="active">Status</a>
+  </nav>
+  <button id="navToggle" class="hamburger" aria-expanded="false" aria-controls="mobileMenu">☰</button>
+</header>
 
-  <main class="container">
-    <section class="panel" aria-labelledby="statusTitle">
-      <h1 id="statusTitle" style="margin:0 0 8px">Orderstatus</h1>
-      <div id="statusBar" class="status-bar" aria-live="polite">
-        Ange ditt order-ID för att se status på din bok.
-      </div>
+<div class="mobile-menu" id="mobileMenu" aria-hidden="true">
+  <nav>
+    <a href="/index.html">Hem</a>
+    <a href="/index.html#bookForm">Skapa bok</a>
+    <a href="/index.html#examples">Exempel</a>
+    <a href="/index.html#about">Om oss</a>
+    <a href="/status.html">Status</a>
+  </nav>
+</div>
 
-      <!-- Endast Order-ID -->
-      <form id="statusForm" class="form-card" style="margin-top:12px">
-        <div class="form-row">
-          <div class="field">
-            <label for="orderIdInput">Order-ID</label>
-            <input id="orderIdInput" placeholder="t.ex. 996a9557-..." />
-            <p class="hint">
-              Order-ID hittar du i bekräftelsemejlet från Sagostugan/SagoStugan.
-            </p>
-          </div>
-        </div>
-        <div class="actions">
-          <button type="submit" class="btn btn-primary">Visa status</button>
-        </div>
-      </form>
+<main class="container">
+  <section class="status-panel">
+    <h1>Orderstatus</h1>
+    <p id="statusBar" class="muted">Ange ditt order-ID för att se status på din bok.</p>
 
-      <!-- Resultatkort -->
-      <div id="orderBox" class="box hidden" style="margin-top:16px">
-        <div class="order-status-header">
-          <div class="order-status-meta">
-            <span class="pill" id="pillKind">—</span>
-            <span>Order-ID: <strong id="orderId">—</strong></span>
-            <span>Status: <strong id="orderState">—</strong></span>
-          </div>
-          <div class="order-status-time">
-            <small id="lastUpdated" class="muted">—</small>
-          </div>
-        </div>
-
-        <div class="order-status-body">
-          <div class="order-cover-thumb">
-            <!-- miniomslag -->
-            <img id="coverThumb" alt="Omslag för din bok" class="hidden"
-                 style="max-width:120px;border-radius:12px;box-shadow:0 4px 10px rgba(0,0,0,0.15);" />
-          </div>
-          <div class="order-book-info">
-            <h2 id="bookTitle" style="margin:0 0 6px;font-size:1.1rem;">—</h2>
-            <p id="bookInfo" class="muted" style="margin:0 0 8px;font-size:0.9rem;">
-              När status ändras hos tryckeriet uppdateras den här automatiskt när du laddar om sidan.
-            </p>
-            <div class="links" id="downloadLinks"></div>
-          </div>
+    <form id="statusForm" class="form-card" style="margin-top:12px">
+      <div class="form-row">
+        <div class="field">
+          <label for="orderIdInput">Order-ID</label>
+          <input id="orderIdInput" placeholder="t.ex. 996a9557-..." />
+          <p class="hint">Order-ID hittar du i bekräftelsemailet.</p>
         </div>
       </div>
+      <div class="actions">
+        <button type="submit" class="btn btn-primary">Visa status</button>
+      </div>
+    </form>
 
-      <div class="spinner-lg hidden" id="spinner" aria-hidden="true"></div>
-      <p id="err" class="muted hidden"></p>
-    </section>
-  </main>
+    <div id="orderBox" class="order-box hidden">
+      <div class="order-status-header">
+        <span class="pill" id="pillKind">—</span>
+        <span>Order-ID: <strong id="orderId">—</strong></span><br>
+        <span>Status: <strong id="orderState">—</strong></span><br>
+        <small id="lastUpdated" class="muted">—</small>
+      </div>
 
-  <footer class="site-footer" role="contentinfo">
-    <p>© 2025 SagoStugan</p>
-  </footer>
+      <div class="order-status-body">
+        <div class="order-cover-thumb">
+          <img id="coverThumb" class="hidden" alt="Omslag" />
+        </div>
+        <div class="order-book-info">
+          <h2 id="bookTitle" style="margin:0 0 6px;font-size:1.1rem;">—</h2>
+          <p id="bookInfo" class="muted" style="margin:0 0 8px;font-size:0.9rem;">—</p>
+          <div class="links" id="infoLinks"></div>
+        </div>
+      </div>
+    </div>
 
-  <!-- Header controller (delad) -->
-  <script>
-  (function () {
-    const toggle = document.getElementById("navToggle");
-    const menu = document.getElementById("mobileMenu");
-    if (!toggle || !menu) return;
+    <div class="spinner-lg hidden" id="spinner"></div>
+    <p id="err" class="muted hidden"></p>
+  </section>
+</main>
 
-    const setOpen = (open) => {
-      toggle.setAttribute("aria-expanded", String(open));
-      menu.setAttribute("aria-hidden", String(!open));
-      menu.classList.toggle("open", open);
-    };
+<footer class="site-footer">
+  <p>© 2025 SagoStugan</p>
+</footer>
 
-    setOpen(false);
+<script>
+/* Mobile menu */
+(function(){
+  const t=document.getElementById("navToggle");
+  const m=document.getElementById("mobileMenu");
+  if(!t||!m) return;
+  const setOpen=o=>{
+    t.setAttribute("aria-expanded",o);
+    m.setAttribute("aria-hidden",!o);
+    m.classList.toggle("open",o);
+  };
+  t.addEventListener("click",()=>setOpen(t.getAttribute("aria-expanded")!=="true"));
+  m.addEventListener("click",e=>{ if(e.target.tagName==="A") setOpen(false); });
+})();
 
-    toggle.addEventListener("click", () => {
-      const isOpen = toggle.getAttribute("aria-expanded") === "true";
-      setOpen(!isOpen);
-    });
+/* Status Logic */
+(function(){
+  const BACKEND="https://bokpilot-backend.sebastian-runell.workers.dev";
+  const $=id=>document.getElementById(id);
+  const show=el=>el.classList.remove("hidden");
+  const hide=el=>el.classList.add("hidden");
+  const setText=(el,t)=>el.textContent=t;
 
-    menu.addEventListener("click", (e) => {
-      if (e.target && e.target.tagName === "A") setOpen(false);
-    });
-  })();
-  </script>
+  const el={
+    form:$("statusForm"),
+    input:$("orderIdInput"),
+    box:$("orderBox"),
+    pill:$("pillKind"),
+    orderId:$("orderId"),
+    orderState:$("orderState"),
+    updated:$("lastUpdated"),
+    bar:$("statusBar"),
+    spinner:$("spinner"),
+    err:$("err"),
+    cover:$("coverThumb"),
+    title:$("bookTitle"),
+    info:$("bookInfo"),
+    links:$("infoLinks")
+  };
 
-  <!-- Status-logik -->
-  <script>
-  (function () {
-    const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
-    const $ = (id) => document.getElementById(id);
-    const show = (el) => el && el.classList.remove("hidden");
-    const hide = (el) => el && el.classList.add("hidden");
-    const setText = (el, v) => { if (el) el.textContent = v ?? ""; };
+  async function fetchJSON(url){
+    const r=await fetch(url);
+    const ct=r.headers.get("content-type")||"";
+    const isJSON=ct.includes("application/json");
+    const body=isJSON?await r.json():await r.text();
+    if(!r.ok || (isJSON && body.error)) throw new Error(body.error||`HTTP ${r.status}`);
+    return body;
+  }
 
-    const el = {
-      form: $("statusForm"),
-      orderInput: $("orderIdInput"),
-      bar: $("statusBar"),
-      box: $("orderBox"),
-      pillKind: $("pillKind"),
-      orderId: $("orderId"),
-      orderState: $("orderState"),
-      lastUpdated: $("lastUpdated"),
-      links: $("downloadLinks"),
-      spinner: $("spinner"),
-      err: $("err"),
-      coverThumb: $("coverThumb"),
-      bookTitle: $("bookTitle"),
-      bookInfo: $("bookInfo"),
-    };
+  function explain(order){
+    const isPrinted=(order.kind==="printed"||order.kind==="print");
+    el.links.innerHTML = isPrinted
+      ? `<p class="muted">Tryckt bok – vi uppdaterar status automatiskt när tryckeriet rapporterar nytt.</p>`
+      : `<p class="muted">Digital bok – du hittar PDF-filen i ditt kvitto-mail.</p>`;
+  }
 
-    async function fetchJSON(url) {
-      const r = await fetch(url);
-      const ct = r.headers.get("content-type") || "";
-      const isJSON = ct.includes("application/json");
-      const body = isJSON ? await r.json() : await r.text();
-      if (!r.ok || (isJSON && body && body.error)) {
-        const msg = (isJSON && body && body.error) || `HTTP ${r.status}`;
-        throw new Error(msg);
-      }
-      return isJSON ? body : { text: body };
+  function render(order,id){
+    show(el.box);
+    setText(el.orderId,id);
+
+    const raw=order.provider_status||order.gelato_status||order.status||"okänd";
+    setText(el.orderState,raw);
+
+    const kind=(order.kind||order.draft?.kind||"pdf");
+    setText(el.pill, kind==="printed"?"Tryckt bok":"Digital PDF");
+
+    const title = order.book?.title || order.story?.book?.title || "Din bok";
+    setText(el.title,title);
+
+    const pageCount = order.book?.pages?.length
+      || order.story?.book?.pages?.length
+      || null;
+
+    const txt = pageCount
+      ? `${pageCount} sidor.`
+      : "";
+    setText(el.info, txt);
+
+    const thumb=order.book?.cover_thumb_url || order.cover_thumb_url;
+    if(thumb){ el.cover.src=thumb; show(el.cover); }
+    else { hide(el.cover); }
+
+    explain(order);
+
+    const now = new Date();
+    setText(el.updated, `Senast uppdaterad: ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`);
+    setText(el.bar, "Status hämtad. Uppdateras vid laddning av sidan.");
+  }
+
+  async function load(id){
+    hide(el.err);
+    show(el.spinner);
+    try{
+      const o = await fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(id)}`);
+      render(o,id);
+    }catch(e){
+      setText(el.err, e.message || "Kunde inte hämta order.");
+      show(el.err);
+      hide(el.box);
+    }finally{
+      hide(el.spinner);
     }
+  }
 
-    const getOrder = (id) =>
-      fetchJSON(`${BACKEND}/api/orders/status?id=${encodeURIComponent(id)}`);
+  if(new URL(location.href).searchParams.get("id")){
+    const id=new URL(location.href).searchParams.get("id");
+    el.input.value=id;
+    load(id);
+  }
 
-    function renderFiles(files) {
-      el.links.innerHTML = "";
+  el.form.addEventListener("submit",ev=>{
+    ev.preventDefault();
+    const id=el.input.value.trim();
+    if(!id){ setText(el.err,"Ange ett order-ID."); show(el.err); return; }
+    load(id);
+    history.replaceState({}, "", `?id=${encodeURIComponent(id)}`);
+  });
 
-      if (!files) return;
+})();
+</script>
 
-      // Full print-PDF (om du behåller det)
-      if (files.print_url) {
-        const a = document.createElement("a");
-        a.className = "btn";
-        a.href = files.print_url;
-        a.target = "_blank";
-        a.rel = "noopener";
-        a.textContent = "Ladda ner boken (PDF)";
-        el.links.appendChild(a);
-        return; // om du vill att denna ersätter inlaga/cover-länkarna
-      }
-
-      if (files.interior_url) {
-        const a = document.createElement("a");
-        a.className = "btn";
-        a.href = files.interior_url;
-        a.target = "_blank";
-        a.rel = "noopener";
-        a.textContent = "Ladda ner inlagan (PDF)";
-        el.links.appendChild(a);
-      }
-
-      if (files.cover_url) {
-        const a = document.createElement("a");
-        a.className = "btn";
-        a.href = files.cover_url;
-        a.target = "_blank";
-        a.rel = "noopener";
-        a.textContent = "Ladda ner omslaget (PDF)";
-        el.links.appendChild(a);
-      }
-    }
-
-    function setBar(msg) { setText(el.bar, msg); }
-    function showErr(msg) { setText(el.err, msg); show(el.err); }
-    function clearErr() { setText(el.err, ""); hide(el.err); }
-
-    // 🔁 Huvudrendering av orderstatus
-    function renderOrder(order, orderId) {
-      show(el.box);
-
-      setText(el.orderId, orderId);
-
-      // status: försök använda Gelatos/leverantörens status direkt
-      const statusRaw =
-        order?.provider_status ||
-        order?.gelato_status ||
-        order?.status ||
-        "okänd";
-
-      setText(el.orderState, statusRaw);
-
-      // Typ av order
-      const kind = (order?.kind || order?.draft?.kind || "pdf");
-      const isPrinted = kind === "printed" || kind === "print";
-      setText(el.pillKind, isPrinted ? "Tryckt bok" : "Digital PDF");
-
-      // Titel + liten text
-      const title =
-        order?.book?.title ||
-        order?.story?.book?.title ||
-        "Din bok";
-
-      setText(el.bookTitle, title);
-
-      // Här kan du lägga in mer detaljer om du börjar returnera dem från backend
-      const pages = order?.book?.pages ?? order?.story?.book?.pages;
-      const pageCount = Array.isArray(pages) ? pages.length : null;
-      const statusBlurb = isPrinted
-        ? "Statusen speglar vad tryckeriet rapporterar (t.ex. paid, printing, shipped)."
-        : "För digitala böcker kan du ladda ner din PDF direkt här nedan.";
-
-      setText(
-        el.bookInfo,
-        pageCount
-          ? `${pageCount} inlagesidor. ${statusBlurb}`
-          : statusBlurb
-      );
-
-      // Thumb för omslag – backend bör returnera antingen:
-      //   order.book.cover_thumb_url
-      //   eller order.cover_thumb_url
-      const thumbUrl =
-        order?.book?.cover_thumb_url ||
-        order?.cover_thumb_url ||
-        null;
-
-      if (thumbUrl) {
-        el.coverThumb.src = thumbUrl;
-        show(el.coverThumb);
-      } else {
-        el.coverThumb.src = "";
-        hide(el.coverThumb);
-      }
-
-      renderFiles(order.files || {});
-      const now = new Date();
-      setText(
-        el.lastUpdated,
-        `Senast uppdaterad: ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`
-      );
-      setBar("Status hämtad. Ladda om sidan senare om du vill se nästa steg.");
-    }
-
-    async function loadStatus(orderId) {
-      clearErr();
-      show(el.spinner);
-      try {
-        const o = await getOrder(orderId);
-        renderOrder(o, orderId);
-      } catch (e) {
-        showErr(e?.message || "Kunde inte hämta order.");
-        hide(el.box);
-      } finally {
-        hide(el.spinner);
-      }
-    }
-
-    // Om ?id= finns i URL: auto-ladda
-    (async () => {
-      try {
-        const url = new URL(location.href);
-        const id = url.searchParams.get("id");
-        if (id) {
-          el.orderInput.value = id;
-          await loadStatus(id);
-        }
-      } catch {
-        // ignore
-      }
-    })();
-
-    // Submit: endast order-id
-    el.form.addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      const id = el.orderInput.value.trim();
-      if (!id) {
-        showErr("Ange ett order-ID.");
-        return;
-      }
-      await loadStatus(id);
-      // Uppdatera URL så man kan dela/återkomma
-      try {
-        history.replaceState({}, "", `?id=${encodeURIComponent(id)}`);
-      } catch {
-        // no-op
-      }
-    });
-  })();
-  </script>
 </body>
 </html>
