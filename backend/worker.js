@@ -695,7 +695,7 @@ async function callFalFluxEdit(env, payload, { timeoutMs = 70000, attempts = 2 }
   const apiKey = env.FAL_KEY;
   if (!apiKey) throw new Error("FAL_KEY missing");
 
-  const url = "https://fal.run/fal-ai/flux-2/edit"; // exakt endpoint för FLUX.2 [dev] Edit
+  const url = "https://fal.run/fal-ai/flux-2-dev"; // exakt endpoint för FLUX.2 [dev] 
 
   let lastErr = null;
 
@@ -793,7 +793,7 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
     payload.image_urls = imageUrls;
   }
 
-  const endpoint = "https://fal.run/fal-ai/flux-2"; // 🔵 ALLTID T2I nu
+  const endpoint = "https://fal.run/fal-ai/flux-2-dev"; // 🔵 ALLTID T2I nu
 
   let lastError = null;
 
