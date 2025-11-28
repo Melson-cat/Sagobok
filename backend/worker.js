@@ -812,6 +812,7 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
         throw new Error("Gemini: invalid JSON in response");
       }
 
+
       const part = findGeminiImagePart(data);
       if (!part) throw new Error("No image data in response");
 
@@ -859,6 +860,270 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
 }
 
 
+// -------------------------- IMAGE QA (Gemini vision) --------------------------
+
+// Enkel helper: plocka ut texten ur ett Gemini-svar
+function extractGeminiText(resp) {
+  try {
+    const cand = resp?.candidates?.[0];
+    const parts = cand?.content?.parts || [];
+    const texts = parts
+      .map(p => typeof p.text === "string" ? p.text : "")
+      .filter(Boolean);
+    return texts.join("\n").trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Kör en QA på en genererad bild:
+ * - ref_b64  = MASTER-referens (hjältens identitet)
+ * - prev_b64 = föregående sida (miljö/ljus/variation)
+ * - curr_b64 = aktuell sida som precis genererats
+ * - meta     = lite text-kontekst (scene_en, action_visual, page osv)
+ *
+ * Returnerar t.ex:
+ * {
+ *   ok: true/false,
+ *   needs_edit: true/false,
+ *   reasons: [...],
+ *   flags: { identity_mismatch: false, too_similar_to_previous: true, ... },
+ *   suggestion: "Change the pose so the cat is jumping instead of standing still."
+ * }
+ */
+async function runImageQAWithGemini(env, {
+  ref_b64,
+  prev_b64,
+  curr_b64,
+  meta = {},
+}) {
+  const apiKey = env.GEMINI_API_KEY;
+  if (!apiKey) {
+    console.warn("[QA] No GEMINI_API_KEY, skipping QA");
+    return { ok: true, skipped: true, reason: "no_api_key" };
+  }
+
+  if (!ref_b64 || !curr_b64) {
+    console.warn("[QA] Missing ref or current image, skipping QA");
+    return { ok: true, skipped: true, reason: "missing_images" };
+  }
+
+  const modelId = "gemini-1.5-flash"; // text + bild, snabb och billig
+
+  const parts = [];
+
+  // Bild 1 – MASTER REFERENCE
+  parts.push({ text: "IMAGE_REF: This is the master reference for the main hero." });
+  parts.push({
+    inlineData: {
+      mimeType: "image/png",
+      data: ref_b64,
+    },
+  });
+
+  // Bild 2 – PREVIOUS PAGE (om finns)
+  if (prev_b64) {
+    parts.push({
+      text: "IMAGE_PREV: This is the previous page of the story (environment & mood only)."
+    });
+    parts.push({
+      inlineData: {
+        mimeType: "image/png",
+        data: prev_b64,
+      },
+    });
+  }
+
+  // Bild 3 – CURRENT PAGE
+  parts.push({
+    text: "IMAGE_CURR: This is the newly generated page that should be evaluated."
+  });
+  parts.push({
+    inlineData: {
+      mimeType: "image/png",
+      data: curr_b64,
+    },
+  });
+
+  // Text-kontekst
+  const page = meta.page ?? null;
+  const scene_en = meta.scene_en || "";
+  const action_visual = meta.action_visual || "";
+  const category = meta.category || "kids";
+  const style = meta.style || "cartoon";
+
+  parts.push({
+    text: [
+      "You are a VERY STRICT image QA system for a children's picture book.",
+      "You see:",
+      "- IMAGE_REF: the master identity of the hero (face, hair/fur, proportions, clothing).",
+      "- IMAGE_PREV: the previous story frame (if provided).",
+      "- IMAGE_CURR: the current page that must be checked.",
+      "",
+      `Book category: ${category}.`,
+      `Visual style (hint): ${style}.`,
+      page != null ? `Page number: ${page}.` : "",
+      "",
+      "Text for the CURRENT page (IMAGE_CURR):",
+      scene_en ? `SCENE_EN: ${scene_en}` : "",
+      action_visual ? `ACTION_VISUAL: ${action_visual}` : "",
+      "",
+      "TASK:",
+      "1. Check if the hero in IMAGE_CURR matches IMAGE_REF exactly:",
+      "   - same species/child vs pet",
+      "   - same hair/fur color and hairstyle",
+      "   - same facial structure & proportions",
+      "   - same clothing / outfit as described implicitly by IMAGE_REF.",
+      "2. Check environment continuity:",
+      "   - If IMAGE_PREV exists, environment, lighting and color mood should feel like the same world.",
+      "3. Check story progression & variation:",
+      "   - The hero should clearly perform the requested action (ACTION_VISUAL/SCENE_EN).",
+      "   - IMAGE_CURR must NOT be almost identical to IMAGE_PREV (camera angle, pose, expression) unless the text clearly demands it.",
+      "",
+      "Think carefully and return a single JSON object ONLY. No explanation outside JSON.",
+      "JSON shape EXACTLY:",
+      "{",
+      '  "ok": boolean,',
+      '  "needs_edit": boolean,',
+      '  "flags": {',
+      '    "identity_mismatch": boolean,',
+      '    "environment_mismatch": boolean,',
+      '    "too_similar_to_previous": boolean,',
+      '    "missing_action": boolean',
+      "  },",
+      '  "reasons": string[],',
+      '  "suggestion": string',
+      "}",
+      "",
+      "Rules:",
+      "- If any flag is true, then needs_edit must be true.",
+      "- ok must be true ONLY if all flags are false.",
+      "- suggestion should be a short, concrete edit instruction (e.g. 'Change the pose so the cat is jumping, keep the same face and colors').",
+    ].filter(Boolean).join("\n")
+  });
+
+  const body = {
+    contents: [{ role: "user", parts }],
+    generationConfig: {
+      temperature: 0.1,
+      topP: 0.8,
+      // Vi ber om ren JSON tillbaka
+      responseMimeType: "application/json",
+    },
+  };
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+
+    const txt = await res.text();
+    if (!res.ok) {
+      console.error("[QA] Gemini QA HTTP error:", res.status, txt);
+      return { ok: true, skipped: true, reason: `http_${res.status}` };
+    }
+
+    let parsed = null;
+
+    // Om responseMimeType funkar borde txt redan vara JSON:
+    try {
+      parsed = JSON.parse(txt);
+    } catch {
+      // fallback: tolka som vanligt Gemini-svar och plocka text
+      try {
+        const data = JSON.parse(txt);
+        const t = extractGeminiText(data);
+        parsed = JSON.parse(t);
+      } catch (e) {
+        console.error("[QA] Failed to parse QA JSON:", e, txt.slice(0, 300));
+        return { ok: true, skipped: true, reason: "parse_error" };
+      }
+    }
+
+    // Lite sanering
+    const flags = parsed.flags || {};
+    return {
+      ok: !!parsed.ok,
+      needs_edit: !!parsed.needs_edit,
+      flags: {
+        identity_mismatch: !!flags.identity_mismatch,
+        environment_mismatch: !!flags.environment_mismatch,
+        too_similar_to_previous: !!flags.too_similar_to_previous,
+        missing_action: !!flags.missing_action,
+      },
+      reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [],
+      suggestion: parsed.suggestion || "",
+    };
+  } catch (e) {
+    console.error("[QA] Unexpected QA error:", e?.message || e);
+    return { ok: true, skipped: true, reason: "exception" };
+  }
+}
+async function maybeAutoQA(env, {
+  ref_b64,
+  prev_b64,
+  curr_b64,
+  meta,
+  originalImage,
+  regenFn, // async funktion som kan göra en ny bild om QA klagar
+}) {
+  const enabled = String(env.QA_ENABLED || "").toLowerCase() === "1";
+  if (!enabled) return { image: originalImage, qa: { ok: true, skipped: true } };
+
+  // För logg – längder på bilderna
+  console.log("[QA] starting", {
+    page: meta?.page,
+    ref_len: ref_b64 ? ref_b64.length : 0,
+    prev_len: prev_b64 ? prev_b64.length : 0,
+    curr_len: curr_b64 ? curr_b64.length : 0,
+  });
+
+  const qa = await runImageQAWithGemini(env, {
+    ref_b64,
+    prev_b64,
+    curr_b64,
+    meta,
+  });
+
+  console.log("[QA] result", {
+    page: meta?.page,
+    ok: qa.ok,
+    needs_edit: qa.needs_edit,
+    flags: qa.flags,
+    reasons: qa.reasons,
+    suggestion: qa.suggestion,
+  });
+
+  const autoRegen =
+    String(env.QA_AUTO_REGEN || "").toLowerCase() === "1";
+
+  if (!qa.needs_edit || !autoRegen || !regenFn) {
+    // Antingen allt ok, eller så kör vi bara log-läge
+    return { image: originalImage, qa };
+  }
+
+  // AUTO-REGEN: låt regenFn bygga ny prompt och kalla geminiImage igen
+  console.log("[QA] auto-regenerate requested", {
+    page: meta?.page,
+    suggestion: qa.suggestion,
+  });
+
+  try {
+    const regenImage = await regenFn(qa);
+    if (!regenImage) throw new Error("regenFn returned null/undefined");
+    console.log("[QA] auto-regenerate OK", { page: meta?.page });
+    return { image: regenImage, qa: { ...qa, auto_regenerated: true } };
+  } catch (e) {
+    console.error("[QA] auto-regenerate FAILED, keeping original", e?.message || e);
+    return { image: originalImage, qa: { ...qa, auto_regen_failed: true } };
+  }
+}
 
 
 /* ------------------------------ Styles ------------------------------- */
@@ -2959,61 +3224,6 @@ Inga extra fält, inga kommentarer, ingen text utanför JSON.
   }
 }
 
-
-
-async function handleImagesBatch(req, env) {
-  try {
-    const { style="cartoon", ref_image_b64, story, plan, concurrency=4, pages_subset, style_refs_b64, coherence_code, guidance } =
-      await req.json().catch(() => ({}));
-    const allPages = story?.book?.pages || [];
-    const pagesArr = Array.isArray(pages_subset) && pages_subset.length
-      ? allPages.filter((p) => pages_subset.includes(p.page))
-      : allPages;
-    if (!pagesArr.length) return err("No pages", 400);
-    if (!ref_image_b64)  return err("Missing reference image", 400);
-
-    const frames = plan?.plan || [];
-    const pageCount = pagesArr.length;
-    const heroName = story?.book?.bible?.main_character?.name || "Hjälten";
-
-    const jobs = pagesArr.map((pg) => {
-      const f = frames.find((x) => x.page === pg.page) || {};
-      const prompt = buildFramePrompt({
-        style, story, page: pg, pageCount, frame: f,
-        characterName: heroName,
-        wardrobe_signature: deriveWardrobeSignature(story),
-        coherence_code: coherence_code || makeCoherenceCode(story),
-      });
-      return { page: pg.page, prompt };
-    });
-
-    const out = [];
-    const CONC = Math.min(Math.max(parseInt(concurrency || 3, 10), 1), 8);
-    let idx = 0;
-    async function worker() {
-      while (idx < jobs.length) {
-        const i = idx++;
-        const item = jobs[i];
-        try {
-          const payload = {
-            prompt: item.prompt,
-            character_ref_b64: ref_image_b64,
-            ...(Array.isArray(style_refs_b64)&&style_refs_b64.length ? {style_refs_b64} : {}),
-            ...(coherence_code ? {coherence_code} : {}),
-            ...(guidance ? {guidance} : {}),
-          };
-          const g = await geminiImage(env, payload, 75000, 3);
-          out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
-        } catch (e) {
-          out.push({ page: item.page, error: String(e?.message || e) });
-        }
-      }
-    }
-    await Promise.all(Array.from({ length: CONC }, worker));
-    out.sort((a, b) => (a.page || 0) - (b.page || 0));
-    return ok({ images: out });
-  } catch (e) { return err(e?.message || "Images generation failed", 500); }
-}
 async function handleImagesNext(req, env) {
   try {
     const {
@@ -3115,7 +3325,7 @@ async function handleImagesNext(req, env) {
 
     const prompt = promptParts.join("\n\n");
 
-    // (valfritt, bra för debug)
+      // (valfritt, bra för debug)
     console.log("[IMAGES/NEXT] prompt (truncated):", prompt.slice(0, 400));
 
     // --- 7. Payload till geminiImage (samma för Pro och Flash) ---
@@ -3135,12 +3345,45 @@ async function handleImagesNext(req, env) {
 
     if (!g?.image_url) return err("No image from Gemini", 502);
 
+    // ----------------- AUTO-QA LAGER -----------------
+    // Vi skickar med lite meta så QA:n fattar vad som ska hända i scenen
+    const sceneText =
+      pg.scene_en || pg.scene || pg.text || "";
+    const actionVisual = pg.action_visual || "";
+
+    const category = (story?.book?.category || "kids").toLowerCase();
+    const styleUsed = style || story?.book?.style || "cartoon";
+
+    // Om geminiImage returnerar b64 använder vi den, annars försöker vi extrahera
+    const curr_b64 = g.b64 || null;
+
+    const { image: finalImage, qa } = await maybeAutoQA(env, {
+      ref_b64: ref_image_b64,
+      prev_b64: prev_b64 || null,
+      curr_b64,
+      meta: {
+        page,
+        scene_en: sceneText,
+        action_visual: actionVisual,
+        category,
+        style: styleUsed,
+      },
+      originalImage: g,
+      // regenFn är valfri – vi kan låta den vara null i början
+      regenFn: null,
+    });
+
+    // finalImage har samma shape som g: { b64?, image_url, provider }
+    if (!finalImage?.image_url) return err("No image from Gemini (after QA)", 502);
+
     return ok({
       page,
-      image_url: g.image_url,
-      provider: g.provider || "google",
+      image_url: finalImage.image_url,
+      provider: finalImage.provider || g.provider || "google",
+      qa: qa || null, // extra debug-info (frontend kan ignorera)
       // prompt: prompt, // <– bara om du vill returnera den till frontend
     });
+
   } catch (e) {
     return err(e?.message || "images/next failed", 500);
   }

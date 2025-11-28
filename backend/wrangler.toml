@@ -16,7 +16,8 @@ GELATO_PRODUCT_UID = "photobooks-hardcover_pf_200x200-mm-8x8-inch_pt_170-gsm-65l
 GELATO_DEFAULT_COUNTRY = "SE"
 GELATO_DEFAULT_CURRENCY = "SEK"
 EMAIL_FROM = "Sagostugan <no-reply@sagostugan.se>"
-
+QA_ENABLED = "1"
+QA_AUTO_REGEN = "0" 
 
 [observability]
 [observability.logs]
