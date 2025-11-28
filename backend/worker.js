@@ -688,185 +688,174 @@ async function openaiJSON(env, system, user) {
   return JSON.parse(j?.choices?.[0]?.message?.content || "{}");
 }
 
-/* ---------------------- fal.ai – FLUX.2 image helper ---------------------- */
-
-
-async function callFalFluxEdit(env, payload, { timeoutMs = 70000, attempts = 2 } = {}) {
-  const apiKey = env.FAL_KEY;
-  if (!apiKey) throw new Error("FAL_KEY missing");
-
-
-  const url = "https://fal.run/fal-ai/flux-pro/kontext/max/multi"; // exakt endpoint för FLUX.2 [dev] 
-
-
-  let lastErr = null;
-
-  for (let i = 1; i <= attempts; i++) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Key ${apiKey}`,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-      },
-      body: JSON.stringify(payload),
-      // cf-timeout kan du sätta via wrangler config om du vill
-    });
-
-    if (res.ok) {
-      const json = await res.json().catch(() => ({}));
-      return json;
-    }
-
-    const text = await res.text().catch(() => "");
-    lastErr = new Error(`fal.ai ${res.status}: ${text}`);
-    console.warn(`[fal.ai] Attempt ${i} failed: ${lastErr.message}`);
-
-    // liten backoff
-    await new Promise(r => setTimeout(r, 800 * i));
+/* --------------------------- Gemini image ---------------------------- */
+function findGeminiImagePart(json) {
+  const cand = json?.candidates?.[0];
+  const parts = cand?.content?.parts || cand?.content?.[0]?.parts || [];
+  let p = parts.find(
+    (x) => x?.inlineData?.mimeType?.startsWith("image/") && x?.inlineData?.data,
+  );
+  if (p) return { mime: p.inlineData.mimeType, b64: p.inlineData.data };
+  p = parts.find((x) => typeof x?.text === "string" && x.text.startsWith("data:image/"));
+  if (p) {
+    const m = p.text.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+    if (m) return { mime: m[1], b64: m[2] };
   }
-
-  throw lastErr;
+  p = parts.find((x) => typeof x?.text === "string" && /^https?:\/\//.test(x.text));
+  if (p) return { url: p.text };
+  return null;
+}
+function isContextTooLong(errText = "") {
+  const s = String(errText || "").toLowerCase();
+  return s.includes("context") || s.includes("too long") || s.includes("exceeded") || s.includes("413");
 }
 
-// Hjälpare för att göra "ren" base64 → data-URL
-function b64ToDataUrl(b64, mime = "image/png") {
-  const clean = String(b64 || "").trim();
-  if (!clean) return null;
-  return `data:${mime};base64,${clean}`;
+function reducePrompt(p, keepLines = 8) {
+  if (!p || typeof p !== "string") return p;
+  const lines = p.split(/\r?\n/).filter(Boolean);
+  return lines.slice(0, keepLines).join("\n");
 }
-
 async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
-  const apiKey = env.FAL_KEY;
-  if (!apiKey) throw new Error("FAL_KEY missing");
+  const apiKey = env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY missing");
 
-  // 1) Grundprompt (kommer från buildFramePrompt / buildCoverPrompt)
-  const basePrompt = String(item?.prompt || "").trim();
-  if (!basePrompt) throw new Error("Missing prompt for image generation");
+  const PRO_MODEL   = "gemini-3-pro-image-preview";
+  const FLASH_MODEL = "gemini-2.5-flash-image";
 
-  const extraParts = [];
-  if (item?.coherence_code) {
-    extraParts.push(`COHERENCE_CODE:${item.coherence_code}`);
-  }
-  if (item?.guidance) {
-    extraParts.push(item.guidance);
-  }
-
-  const finalPrompt = [basePrompt, ...extraParts].join("\n\n").trim();
-
-  // 2) ONLY identity/style-referenser → hero-bilden + ev stilbilder
-  const imageUrls = [];
-
-  // a) Huvudhjältens referens (din ref_image_b64)
-  if (item?.character_ref_b64) {
-    const url = b64ToDataUrl(item.character_ref_b64, "image/png");
-    if (url) imageUrls.push(url);
-  }
-
-  // b) Eventuella stilreferenser
-  if (Array.isArray(item?.style_refs_b64)) {
-    for (const b64 of item.style_refs_b64) {
-      const url = b64ToDataUrl(b64, "image/png");
-      if (url) imageUrls.push(url);
-      if (imageUrls.length >= 3) break;
-    }
-  }
-
-  // OBS: vi använder INTE längre item.image_b64 eller item.prev_b64 som image_urls
-  // (för att undvika “edit samma bild igen och igen”).
-
-  const payload = {
-    prompt: finalPrompt,
-    guidance_scale: item?.guidance_scale ?? 3.0,   // lite hårdare följsamhet
-    num_inference_steps: item?.num_inference_steps ?? 32,
-    image_size: item?.image_size || "square_hd",
-    num_images: 1,
-    acceleration: item?.acceleration || "regular",
-    enable_safety_checker: true,
-    output_format: "png",
-    sync_mode: true,
-  };
-
-  if (typeof item?.seed === "number") {
-    payload.seed = item.seed;
-  }
-
-  if (imageUrls.length) {
-    payload.image_urls = imageUrls;
-  }
-
-  const endpoint = "https://fal.run/fal-ai/flux-pro/kontext/max/multi"; // 🔵 ALLTID T2I nu
-
+  const baseIsFlash  = item && item.model === "flash";
+  let currentModelId = baseIsFlash ? FLASH_MODEL : PRO_MODEL;
 
   let lastError = null;
 
-  for (let attempt = 0; attempt < (attempts || 1); attempt++) {
+  for (let i = 0; i < attempts; i++) {
+    // --- Bygg parts FÖR VARJE FÖRSÖK (så vi kan ändra prompten mellan attempts) ---
+    const parts = [];
+
+    if (item.prompt) parts.push({ text: item.prompt });
+
+    if (item.image_b64) {
+      const mime = item.image_mime || "image/png";
+      parts.push({ inlineData: { mimeType: mime, data: item.image_b64 } });
+    }
+
+    if (Array.isArray(item.character_refs_b64)) {
+      for (const ref of item.character_refs_b64) {
+        parts.push({ inlineData: { mimeType: "image/png", data: ref } });
+      }
+    } else if (item.character_ref_b64) {
+      parts.push({
+        inlineData: { mimeType: "image/png", data: item.character_ref_b64 },
+      });
+    }
+
+    if (item.prev_b64) {
+      parts.push({ inlineData: { mimeType: "image/png", data: item.prev_b64 } });
+    }
+
+    if (Array.isArray(item.prev_images_b64)) {
+      for (const b64 of item.prev_images_b64) {
+        if (b64) parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
+      }
+    }
+
+    if (Array.isArray(item.style_refs_b64)) {
+      for (const b64 of item.style_refs_b64) {
+        if (b64) parts.push({ inlineData: { mimeType: "image/png", data: b64 } });
+      }
+    }
+
+    if (item.coherence_code)
+      parts.push({ text: `COHERENCE_CODE:${item.coherence_code}` });
+    if (item.guidance) parts.push({ text: item.guidance });
+
+    const generationConfig = {
+      temperature: 0.55,
+      topP: 0.7,
+    };
+
+    const body = {
+      contents: [{ role: "user", parts }],
+      generationConfig,
+    };
+
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
 
     try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Authorization": `Key ${apiKey}`,
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-        },
-        body: JSON.stringify(payload),
-        signal: ctrl.signal,
-      });
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${currentModelId}:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+          signal: ctrl.signal,
+        }
+      );
 
-      clearTimeout(timer);
+      clearTimeout(t);
 
       const txt = await res.text();
       if (!res.ok) {
-        throw new Error(`fal.ai ${res.status}: ${txt || "error"}`);
+        // 429/5xx -> försök igen, ev. model switch
+        if (res.status === 429 || (res.status >= 500 && res.status < 600)) {
+          throw new Error(`Gemini ${res.status}: ${txt || "retryable error"}`);
+        }
+
+        // 4xx (utom 429) -> kasta direkt
+        throw new Error(`Gemini ${res.status}: ${txt}`);
       }
 
       let data = null;
       try {
         data = txt ? JSON.parse(txt) : null;
       } catch {
-        throw new Error("fal.ai: invalid JSON in response");
+        throw new Error("Gemini: invalid JSON in response");
       }
 
-      const img = data?.images?.[0];
-      if (!img) throw new Error("fal.ai: no images in response");
+      const part = findGeminiImagePart(data);
+      if (!part) throw new Error("No image data in response");
 
-      let image_url = null;
-      let b64 = null;
+      const b64 = part.b64 || null;
+      const image_url =
+        part.url || (b64 ? `data:${part.mime || "image/png"};base64,${b64}` : null);
 
-      if (img.file_data) {
-        b64 = img.file_data; // ren base64
-        const mime = img.content_type || "image/png";
-        image_url = `data:${mime};base64,${img.file_data}`;
-      } else if (img.url) {
-        image_url = img.url;
-      }
-
-      if (!image_url) {
-        throw new Error("fal.ai: image has no url/file_data");
-      }
+      if (!image_url) throw new Error("No image URL or base64 from Gemini");
 
       return {
         b64,
         image_url,
-        provider: "fal-flux-2",
+        provider:
+          currentModelId === PRO_MODEL ? "google-pro" : "google-flash",
       };
     } catch (e) {
-      clearTimeout(timer);
+      clearTimeout(t);
+      const msg = String(e?.message || e);
       lastError = e;
       console.warn(
-        `[fal.ai] Attempt ${attempt + 1} failed:`,
-        String(e?.message || e),
+        `[Gemini] Attempt ${i + 1} with ${currentModelId} failed: ${msg}`
       );
-      if (attempt < (attempts || 1) - 1) {
+
+      // 🔻 Om kontext/length-problem -> korta prompten inför nästa försök
+      if (i < attempts - 1 && item.prompt && isContextTooLong(msg)) {
+        console.warn("[Gemini] Context too long – reducing prompt and retrying");
+        item.prompt = reducePrompt(item.prompt, 10);
+      }
+
+      // 🔁 Fallback: om vi inte började på Flash och vi är på Pro, byt till FLASH
+      if (i < attempts - 1 && !baseIsFlash && currentModelId === PRO_MODEL) {
+        console.warn(
+          "[Gemini] Pro failed or timed out – switching to FLASH fallback for next attempt"
+        );
+        currentModelId = FLASH_MODEL;
+      }
+
+      if (i < attempts - 1) {
         await new Promise((r) => setTimeout(r, 500));
       }
     }
   }
 
-  throw lastError || new Error("fal.ai image generation failed");
+  throw lastError || new Error("Gemini failed");
 }
 
 
@@ -1171,7 +1160,15 @@ async function handleRefImage(req, env) {
       return err("Missing photo_b64", 400);
     }
 
-    // (valfritt, men bra logg)
+    // 2) Bygg ref-porträtt-prompt
+    const prompt = buildRefPortraitPrompt({
+      style,
+      bible: bible || null,
+      traits,
+      hasPhoto: !!barePhoto,
+      category,
+    });
+
     console.log(
       "[REF] style:",
       style,
@@ -1182,26 +1179,47 @@ async function handleRefImage(req, env) {
     );
     console.log("[REF] incoming user photo b64 length:", barePhoto.length);
     console.log("[REF] photo mime:", photoMime);
+    console.log("[REF] prompt excerpt:", prompt.slice(0, 300));
 
-    // 2) Ladda upp användarens foto till Cloudflare Images (för caching/debug)
+    // 3) Anropa Gemini 2.5 Flash Image för ref-porträtt
+    const g = await geminiImage(
+      env,
+      {
+        prompt,
+        model: "flash", // tvinga FLASH för ref-bild
+        image_b64: barePhoto,
+        image_mime: photoMime || "image/png",
+        _debugTag: "ref",
+      },
+      70000,
+      2
+    );
+
+    if (!g || !g.b64) {
+      return err("Failed to generate reference image", 500);
+    }
+
+    // 4) För debugging: ladda upp ref-bilden till Cloudflare Images
     let cfImage = null;
     try {
+      const data_url = `data:image/png;base64,${g.b64}`;
       cfImage = await uploadOneToCFImages(env, {
-        data_url: photo_b64,
+        data_url,
         id: `ref-${Date.now()}`,
       });
       console.log("[REF] CF Images upload ok:", cfImage.image_id, cfImage.url);
     } catch (e) {
       console.error("CF Image Upload Failed:", e?.message || e);
-      // låt detta vara soft-fail – inte hela svaret
+      // Viktigt: vi låter INTE detta krascha hela svaret
     }
 
-    // 3) Skicka tillbaka originalfotot som referens
+    // 🔹 Viktigt: skicka ref_image_b64 så frontend blir nöjd
     return ok({
-      ref_image_b64: barePhoto,          // ren base64
-      image_b64: barePhoto,
-      image_url: photo_b64,              // data:image/...;base64,...
-      provider: "user-upload",
+      ref_image_b64: g.b64,             // det script.js läser
+      image_b64: g.b64,                 // ev. kompatibilitet
+      image_url: g.image_url,           // data-url från Gemini
+      provider: g.provider || "google",
+      // Nya fält för dig att inspektera:
       cf_image_id: cfImage?.image_id || null,
       cf_image_url: cfImage?.url || null,
     });
@@ -1210,6 +1228,24 @@ async function handleRefImage(req, env) {
   }
 }
 
+
+
+
+function heroDescriptor({ category, name, age, traits, petSpecies }) {
+  const cat = (category || "kids").toLowerCase();
+
+  if (cat === "pets") {
+    const species = (petSpecies || "katt").trim().toLowerCase();
+    return `HJÄLTE: ett ${species} vid namn ${name || "Nova"}; egenskaper: ${
+      traits || "nyfiken, lekfull"
+    }.`;
+  }
+
+  const a = parseInt(age || 6, 10);
+  return `HJÄLTE: ett barn vid namn ${name || "Nova"} (${a} år), egenskaper: ${
+    traits || "modig, omtänksam"
+  }.`;
+}
 
 
 /* ---------------------- Coherence + Wardrobe helpers ---------------------- */
@@ -2686,23 +2722,6 @@ function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
   ].filter(Boolean).join("\n");
 }
 
-function heroDescriptor({ category, name, age, traits, petSpecies }) {
-  const cat = (category || "kids").toLowerCase();
-
-  if (cat === "pets") {
-    const species = (petSpecies || "katt").trim().toLowerCase();
-    return `HJÄLTE: ett ${species} vid namn ${name || "Nova"}; egenskaper: ${
-      traits || "nyfiken, lekfull"
-    }.`;
-  }
-
-  const a = parseInt(age || 6, 10);
-  return `HJÄLTE: ett barn vid namn ${name || "Nova"} (${a} år), egenskaper: ${
-    traits || "modig, omtänksam"
-  }.`;
-}
-
-
 function buildRefPortraitPrompt({ style, bible, traits, hasPhoto, category }) {
   const mc = bible?.main_character || {};
   const name = mc.name || "Nova";
@@ -2984,7 +3003,7 @@ async function handleImagesBatch(req, env) {
             ...(guidance ? {guidance} : {}),
           };
           const g = await geminiImage(env, payload, 75000, 3);
-          out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "fal-flux-2" });
+          out.push({ page: item.page, image_url: g.image_url, provider: g.provider || "google" });
         } catch (e) {
           out.push({ page: item.page, error: String(e?.message || e) });
         }
@@ -3027,7 +3046,7 @@ async function handleImagesNext(req, env) {
 
     const wardrobe = bibleWardrobe || deriveWardrobeSignature(story);
 
-    // --- 2. Textuell kontext ---
+    // --- 2. Textuell kontext: föregående + senaste 3 sidor ---
     const idx = pages.findIndex((p) => p.page === page);
     const prevPg = idx > 0 ? pages[idx - 1] : null;
     const prevSceneEn =
@@ -3057,7 +3076,7 @@ async function handleImagesNext(req, env) {
       coherence_code,
     });
 
-    // --- 4. Bildinstruktioner ---
+    // --- 4. Bildinstruktioner: exakt VAD bilderna betyder ---
     const imageRefLines = [
       "*** IMAGE REFERENCES ***",
       "IMAGE 1: Main hero identity (MASTER reference).",
@@ -3089,16 +3108,17 @@ async function handleImagesNext(req, env) {
           "This is the first visible moment in the story. Start the visual narrative.",
         ].join("\n");
 
-    // --- 6. Slutlig prompt ---
+    // --- 6. Slutlig prompt: vad vi faktiskt skickar till Gemini ---
     const promptParts = [basePrompt, imageRefsBlock];
     if (storyContextBlock) promptParts.push(storyContextBlock);
     promptParts.push(continuation);
 
     const prompt = promptParts.join("\n\n");
 
+    // (valfritt, bra för debug)
     console.log("[IMAGES/NEXT] prompt (truncated):", prompt.slice(0, 400));
 
-    // --- 7. Payload till Flux (via geminiImage-wrappern) ---
+    // --- 7. Payload till geminiImage (samma för Pro och Flash) ---
     const payload = {
       prompt,
       character_ref_b64: ref_image_b64,             // IMAGE 1
@@ -3110,22 +3130,21 @@ async function handleImagesNext(req, env) {
       payload.style_refs_b64 = style_refs_b64;
     }
 
-    // Kortare timeout & färre försök
+    // Kortare timeout & färre försök för att minska risken att Workern dör
     const g = await geminiImage(env, payload, 35000, 2);
 
-    if (!g?.image_url) return err("No image from Flux", 502);
+    if (!g?.image_url) return err("No image from Gemini", 502);
 
     return ok({
       page,
       image_url: g.image_url,
-      provider: g.provider || "fal-flux-2",
-      // prompt: prompt, // om du vill debugga i frontend
+      provider: g.provider || "google",
+      // prompt: prompt, // <– bara om du vill returnera den till frontend
     });
   } catch (e) {
     return err(e?.message || "images/next failed", 500);
   }
 }
-
 
 async function handleImageRegenerate(req, env) {
   try {
@@ -3235,7 +3254,7 @@ async function handleCover(req, env) {
     else if (g?.data_url) data_url = g.data_url;
     if (!data_url) return err("Cover generation failed (no image data)", 500);
 
-    return ok({ cover_b64: g.b64 || null, data_url, image_url: g.image_url || null, provider: g.provider || "fal-flux-2", prompt });
+    return ok({ cover_b64: g.b64 || null, data_url, image_url: g.image_url || null, provider: g.provider || "google", prompt });
   } catch (e) { return err(e?.message || "Cover generation failed", 500); }
 }
 
