@@ -690,6 +690,43 @@ async function openaiJSON(env, system, user) {
 
 /* ---------------------- fal.ai – FLUX.2 image helper ---------------------- */
 
+
+async function callFalFluxEdit(env, payload, { timeoutMs = 70000, attempts = 2 } = {}) {
+  const apiKey = env.FAL_KEY;
+  if (!apiKey) throw new Error("FAL_KEY missing");
+
+  const url = "https://fal.run/fal-ai/flux-2/edit"; // exakt endpoint för FLUX.2 [dev] Edit
+
+  let lastErr = null;
+
+  for (let i = 1; i <= attempts; i++) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Key ${apiKey}`,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      },
+      body: JSON.stringify(payload),
+      // cf-timeout kan du sätta via wrangler config om du vill
+    });
+
+    if (res.ok) {
+      const json = await res.json().catch(() => ({}));
+      return json;
+    }
+
+    const text = await res.text().catch(() => "");
+    lastErr = new Error(`fal.ai ${res.status}: ${text}`);
+    console.warn(`[fal.ai] Attempt ${i} failed: ${lastErr.message}`);
+
+    // liten backoff
+    await new Promise(r => setTimeout(r, 800 * i));
+  }
+
+  throw lastErr;
+}
+
 // Hjälpare för att göra "ren" base64 → data-URL
 function b64ToDataUrl(b64, mime = "image/png") {
   const clean = String(b64 || "").trim();
@@ -701,13 +738,12 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
   const apiKey = env.FAL_KEY;
   if (!apiKey) throw new Error("FAL_KEY missing");
 
-  // 1) Bygg grundprompten (detta är redan färdigbyggd text från din kod)
+  // 1) Grundprompt
   const basePrompt = String(item?.prompt || "").trim();
   if (!basePrompt) throw new Error("Missing prompt for image generation");
 
   const extraParts = [];
 
-  // COHERENCE-kod och guidance är ren text som vi lägger in i prompten
   if (item?.coherence_code) {
     extraParts.push(`COHERENCE_CODE:${item.coherence_code}`);
   }
@@ -717,46 +753,40 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
 
   const finalPrompt = [basePrompt, ...extraParts].join("\n\n").trim();
 
-  // 2) Bygg upp vilka bilder vi ska skicka in till Flux Edit
-  //    - image_b64: användarens foto (t.ex. i /api/ref-image)
-  //    - character_ref_b64: din sparade referensbild
-  //    - prev_b64: föregående sida (för miljö/mood)
-  //    - style_refs_b64: stilreferenser
+  // 2) Bygg image_urls-array (data-URLs)
   const imageUrls = [];
 
-  // a) Direkt användarfoto (t.ex. från handleRefImage)
+  // a) Direkt användarfoto (t.ex. från /api/ref-image)
   if (item?.image_b64) {
     const url = b64ToDataUrl(item.image_b64, item.image_mime || "image/png");
     if (url) imageUrls.push(url);
   }
 
-  // b) Karaktärsreferens (t.ex. ref_image_b64 / character_ref_b64)
+  // b) Karaktärsreferens
   if (item?.character_ref_b64) {
     const url = b64ToDataUrl(item.character_ref_b64, "image/png");
     if (url) imageUrls.push(url);
   }
 
-  // c) Föregående sida (för kontinuitet i miljö/ljus)
+  // c) Föregående sida
   if (item?.prev_b64) {
     const url = b64ToDataUrl(item.prev_b64, "image/png");
     if (url) imageUrls.push(url);
   }
 
-  // d) Stilreferenser (array)
+  // d) Stilreferenser
   if (Array.isArray(item?.style_refs_b64)) {
     for (const b64 of item.style_refs_b64) {
       const url = b64ToDataUrl(b64, "image/png");
       if (url) imageUrls.push(url);
-      if (imageUrls.length >= 3) break; // Flux Edit behöver inte fler än 3 refs
+      if (imageUrls.length >= 3) break;
     }
   }
 
-  // 3) Välj endpoint:
-  //    - Finns imageUrls -> använd EDIT
-  //    - Annars -> ren text-till-bild
   const hasImages = imageUrls.length > 0;
 
-  const input = {
+  // 3) Payload enligt Fal-schema (INGET "input"-skal!)
+  const payload = {
     prompt: finalPrompt,
     guidance_scale: item?.guidance_scale ?? 2.5,
     num_inference_steps: item?.num_inference_steps ?? 28,
@@ -765,15 +795,15 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
     acceleration: item?.acceleration || "regular",
     enable_safety_checker: true,
     output_format: "png",
-    sync_mode: true, // vi vill få file_data (data-URL) direkt
+    sync_mode: true,
   };
 
   if (typeof item?.seed === "number") {
-    input.seed = item.seed;
+    payload.seed = item.seed;
   }
 
   if (hasImages) {
-    input.image_urls = imageUrls;
+    payload.image_urls = imageUrls;
   }
 
   const endpoint = hasImages
@@ -790,11 +820,11 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
       const res = await fetch(endpoint, {
         method: "POST",
         headers: {
-          // OBS: "Key", inte "Bearer"
-          "Authorization": `Key ${apiKey}`,
+          "Authorization": `Key ${apiKey}`, // OBS: Key, inte Bearer
           "Content-Type": "application/json",
+          "Accept": "application/json",
         },
-        body: JSON.stringify({ input }),
+        body: JSON.stringify(payload),      // 🔴 ingen { input } längre
         signal: ctrl.signal,
       });
 
@@ -815,23 +845,28 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
       const img = data?.images?.[0];
       if (!img) throw new Error("fal.ai: no images in response");
 
-      const fileData = img.file_data || null; // data:image/..;base64,...
-      const url = img.url || fileData || null;
-      if (!url) throw new Error("fal.ai: image has no url/file_data");
-
-      // Plocka ut ren base64 om vi fick en data-URL
+      // Fal/Flux svarar typiskt:
+      // { url, content_type, file_name, file_size, file_data, width, height }
+      let image_url = null;
       let b64 = null;
-      if (fileData && fileData.startsWith("data:image/")) {
-        const m = fileData.match(/^data:([^;]+);base64,(.+)$/i);
-        if (m) {
-          b64 = m[2];
-        }
+
+      if (img.file_data) {
+        // file_data = ren base64
+        b64 = img.file_data;
+        const mime = img.content_type || "image/png";
+        image_url = `data:${mime};base64,${img.file_data}`;
+      } else if (img.url) {
+        image_url = img.url;
+      }
+
+      if (!image_url) {
+        throw new Error("fal.ai: image has no url/file_data");
       }
 
       return {
-        b64,                        // används där du tidigare använde g.b64
-        image_url: fileData || url, // behåll data-URL om den finns
-        provider: "fal-flux-2",     // ny provider-sträng
+        b64,                        // kan vara null om vi bara fick url
+        image_url,                  // data-URL eller http-url
+        provider: "fal-flux-2",
       };
     } catch (e) {
       clearTimeout(timer);
@@ -1171,12 +1206,12 @@ async function handleRefImage(req, env) {
     console.log("[REF] photo mime:", photoMime);
     console.log("[REF] prompt excerpt:", prompt.slice(0, 300));
 
-    // 3) Anropa Gemini 2.5 Flash Image för ref-porträtt
+    // 3) Anropa Flux (via geminiImage-wrappern)
     const g = await geminiImage(
       env,
       {
         prompt,
-        model: "flash", // tvinga FLASH för ref-bild
+        model: "flash", // ignoreras i Flux-varianten, men skadar inte
         image_b64: barePhoto,
         image_mime: photoMime || "image/png",
         _debugTag: "ref",
@@ -1185,56 +1220,50 @@ async function handleRefImage(req, env) {
       2
     );
 
-    if (!g || !g.b64) {
+    if (!g || (!g.b64 && !g.image_url)) {
       return err("Failed to generate reference image", 500);
     }
 
-    // 4) För debugging: ladda upp ref-bilden till Cloudflare Images
-    let cfImage = null;
-    try {
-      const data_url = `data:image/png;base64,${g.b64}`;
-      cfImage = await uploadOneToCFImages(env, {
-        data_url,
-        id: `ref-${Date.now()}`,
-      });
-      console.log("[REF] CF Images upload ok:", cfImage.image_id, cfImage.url);
-    } catch (e) {
-      console.error("CF Image Upload Failed:", e?.message || e);
-      // Viktigt: vi låter INTE detta krascha hela svaret
+    // Försök få fram ren b64 även om vi bara har data-URL
+    let refB64 = g.b64 || null;
+
+    if (!refB64 && g.image_url && g.image_url.startsWith("data:image/")) {
+      const m2 = g.image_url.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
+      if (m2) refB64 = m2[1];
     }
 
-    // 🔹 Viktigt: skicka ref_image_b64 så frontend blir nöjd
+    if (!refB64) {
+      // Som sista utväg kan vi ändå skicka image_url så frontend kan jobba vidare
+      console.warn("[REF] No pure b64, only URL – ref_image_b64 will be null");
+    }
+
+    // 4) Ladda upp ref-bilden till Cloudflare Images för debug / caching
+    let cfImage = null;
+    try {
+      const data_url = g.image_url || `data:image/png;base64,${refB64}`;
+      if (data_url) {
+        cfImage = await uploadOneToCFImages(env, {
+          data_url,
+          id: `ref-${Date.now()}`,
+        });
+        console.log("[REF] CF Images upload ok:", cfImage.image_id, cfImage.url);
+      }
+    } catch (e) {
+      console.error("CF Image Upload Failed:", e?.message || e);
+      // låt detta vara soft-fail
+    }
+
     return ok({
-      ref_image_b64: g.b64,             // det script.js läser
-      image_b64: g.b64,                 // ev. kompatibilitet
-      image_url: g.image_url,           // data-url från Gemini
+      ref_image_b64: refB64,                   // det script.js använder
+      image_b64: refB64,
+      image_url: g.image_url,                  // kan vara data-URL eller http-url
       provider: g.provider || "fal-flux-2",
-      // Nya fält för dig att inspektera:
       cf_image_id: cfImage?.image_id || null,
       cf_image_url: cfImage?.url || null,
     });
   } catch (e) {
     return err(e?.message || "Ref image failed", 500);
   }
-}
-
-
-
-
-function heroDescriptor({ category, name, age, traits, petSpecies }) {
-  const cat = (category || "kids").toLowerCase();
-
-  if (cat === "pets") {
-    const species = (petSpecies || "katt").trim().toLowerCase();
-    return `HJÄLTE: ett ${species} vid namn ${name || "Nova"}; egenskaper: ${
-      traits || "nyfiken, lekfull"
-    }.`;
-  }
-
-  const a = parseInt(age || 6, 10);
-  return `HJÄLTE: ett barn vid namn ${name || "Nova"} (${a} år), egenskaper: ${
-    traits || "modig, omtänksam"
-  }.`;
 }
 
 
@@ -3036,7 +3065,7 @@ async function handleImagesNext(req, env) {
 
     const wardrobe = bibleWardrobe || deriveWardrobeSignature(story);
 
-    // --- 2. Textuell kontext: föregående + senaste 3 sidor ---
+    // --- 2. Textuell kontext ---
     const idx = pages.findIndex((p) => p.page === page);
     const prevPg = idx > 0 ? pages[idx - 1] : null;
     const prevSceneEn =
@@ -3066,7 +3095,7 @@ async function handleImagesNext(req, env) {
       coherence_code,
     });
 
-    // --- 4. Bildinstruktioner: exakt VAD bilderna betyder ---
+    // --- 4. Bildinstruktioner ---
     const imageRefLines = [
       "*** IMAGE REFERENCES ***",
       "IMAGE 1: Main hero identity (MASTER reference).",
@@ -3098,17 +3127,16 @@ async function handleImagesNext(req, env) {
           "This is the first visible moment in the story. Start the visual narrative.",
         ].join("\n");
 
-    // --- 6. Slutlig prompt: vad vi faktiskt skickar till Gemini ---
+    // --- 6. Slutlig prompt ---
     const promptParts = [basePrompt, imageRefsBlock];
     if (storyContextBlock) promptParts.push(storyContextBlock);
     promptParts.push(continuation);
 
     const prompt = promptParts.join("\n\n");
 
-    // (valfritt, bra för debug)
     console.log("[IMAGES/NEXT] prompt (truncated):", prompt.slice(0, 400));
 
-    // --- 7. Payload till geminiImage (samma för Pro och Flash) ---
+    // --- 7. Payload till Flux (via geminiImage-wrappern) ---
     const payload = {
       prompt,
       character_ref_b64: ref_image_b64,             // IMAGE 1
@@ -3120,22 +3148,22 @@ async function handleImagesNext(req, env) {
       payload.style_refs_b64 = style_refs_b64;
     }
 
-    // Kortare timeout & färre försök för att minska risken att Workern dör
+    // Kortare timeout & färre försök
     const g = await geminiImage(env, payload, 35000, 2);
 
-    if (!g?.image_url) return err("No image from Gemini", 502);
+    if (!g?.image_url) return err("No image from Flux", 502);
 
     return ok({
       page,
       image_url: g.image_url,
-     provider: g.provider || "fal-flux-2",
-
-      // prompt: prompt, // <– bara om du vill returnera den till frontend
+      provider: g.provider || "fal-flux-2",
+      // prompt: prompt, // om du vill debugga i frontend
     });
   } catch (e) {
     return err(e?.message || "images/next failed", 500);
   }
 }
+
 
 async function handleImageRegenerate(req, env) {
   try {
