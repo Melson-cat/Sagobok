@@ -868,7 +868,7 @@ function extractGeminiText(resp) {
     const cand = resp?.candidates?.[0];
     const parts = cand?.content?.parts || [];
     const texts = parts
-      .map(p => typeof p.text === "string" ? p.text : "")
+      .map((p) => (typeof p.text === "string" ? p.text : ""))
       .filter(Boolean);
     return texts.join("\n").trim();
   } catch {
@@ -881,14 +881,20 @@ function extractGeminiText(resp) {
  * - ref_b64  = MASTER-referens (hjältens identitet)
  * - prev_b64 = föregående sida (miljö/ljus/variation)
  * - curr_b64 = aktuell sida som precis genererats
- * - meta     = lite text-kontekst (scene_en, action_visual, page osv)
+ * - meta     = lite text-context (scene_en, action_visual, page osv)
  *
  * Returnerar t.ex:
  * {
  *   ok: true/false,
  *   needs_edit: true/false,
  *   reasons: [...],
- *   flags: { identity_mismatch: false, too_similar_to_previous: true, ... },
+ *   flags: {
+ *     identity_mismatch: boolean,
+ *     environment_mismatch: boolean,
+ *     too_similar_to_previous: boolean,
+ *     missing_action: boolean,
+ *     wardrobe_mismatch: boolean,
+ *   },
  *   suggestion: "Change the pose so the cat is jumping instead of standing still."
  * }
  */
@@ -909,7 +915,8 @@ async function runImageQAWithGemini(env, {
     return { ok: true, skipped: true, reason: "missing_images" };
   }
 
-  const modelId = "gemini-2.5-flash"; // text + bild, snabb och billig
+  // 👇 multimodal + billig
+  const modelId = "gemini-2.5-flash";
 
   const parts = [];
 
@@ -925,7 +932,7 @@ async function runImageQAWithGemini(env, {
   // Bild 2 – PREVIOUS PAGE (om finns)
   if (prev_b64) {
     parts.push({
-      text: "IMAGE_PREV: This is the previous page of the story (environment & mood only)."
+      text: "IMAGE_PREV: This is the previous page of the story (environment & mood only).",
     });
     parts.push({
       inlineData: {
@@ -937,7 +944,7 @@ async function runImageQAWithGemini(env, {
 
   // Bild 3 – CURRENT PAGE
   parts.push({
-    text: "IMAGE_CURR: This is the newly generated page that should be evaluated."
+    text: "IMAGE_CURR: This is the newly generated page that should be evaluated.",
   });
   parts.push({
     inlineData: {
@@ -955,9 +962,9 @@ async function runImageQAWithGemini(env, {
 
   parts.push({
     text: [
-      "You are a VERY STRICT image QA system for a children's picture book.",
+      "You are a **VERY STRICT** image QA system for a children's picture book.",
       "You see:",
-      "- IMAGE_REF: the master identity of the hero (face, hair/fur, proportions, clothing).",
+      "- IMAGE_REF: the master identity of the hero (face, hair/fur, proportions, CLOTHING).",
       "- IMAGE_PREV: the previous story frame (if provided).",
       "- IMAGE_CURR: the current page that must be checked.",
       "",
@@ -970,37 +977,50 @@ async function runImageQAWithGemini(env, {
       action_visual ? `ACTION_VISUAL: ${action_visual}` : "",
       "",
       "TASK:",
-      "1. Check if the hero in IMAGE_CURR matches IMAGE_REF exactly:",
-      "   - same species/child vs pet",
-      "   - same hair/fur color and hairstyle",
-      "   - same facial structure & proportions",
-      "   - same clothing / outfit as described implicitly by IMAGE_REF.",
-      "2. Check environment continuity:",
-      "   - If IMAGE_PREV exists, environment, lighting and color mood should feel like the same world.",
-      "3. Check story progression & variation:",
-      "   - The hero should clearly perform the requested action (ACTION_VISUAL/SCENE_EN).",
-      "   - IMAGE_CURR must NOT be almost identical to IMAGE_PREV (camera angle, pose, expression) unless the text clearly demands it.",
+      "1. HERO IDENTITY CHECK:",
+      "   - The hero in IMAGE_CURR must match IMAGE_REF:",
+      "     * same species (pet vs child, cat vs dog etc.)",
+      "     * same hair/fur color and hairstyle",
+      "     * same facial structure & proportions",
+      "     * same base clothing / outfit as IMAGE_REF (collar, shirt, dress etc.).",
+      "2. WARDROBE CONSISTENCY:",
+      "   - If IMAGE_CURR adds new major garments (e.g. overalls, jacket, dress, hat, shoes)",
+      "     that are NOT present in IMAGE_REF, this is a **wardrobe_mismatch**.",
+      "   - Small pose-related changes (slight folds, movement) are okay.",
+      "3. ENVIRONMENT CONTINUITY:",
+      "   - If IMAGE_PREV exists, environment, lighting and color mood should feel like the SAME WORLD.",
+      "   - It does NOT need to be the exact same background, but it must be compatible.",
+      "4. STORY PROGRESSION & VARIATION:",
+      "   - The hero should clearly perform the action requested by SCENE_EN / ACTION_VISUAL.",
+      "   - IMAGE_CURR must NOT be almost identical to IMAGE_PREV (camera angle, pose, expression)",
+      "     unless the text clearly demands it.",
       "",
-      "Think carefully and return a single JSON object ONLY. No explanation outside JSON.",
+      "Return a SINGLE JSON object ONLY. No explanation outside JSON.",
       "JSON shape EXACTLY:",
       "{",
-      '  "ok": boolean,',
-      '  "needs_edit": boolean,',
-      '  "flags": {',
-      '    "identity_mismatch": boolean,',
-      '    "environment_mismatch": boolean,',
-      '    "too_similar_to_previous": boolean,',
-      '    "missing_action": boolean',
+      '  \"ok\": boolean,',
+      '  \"needs_edit\": boolean,',
+      '  \"flags\": {',
+      '    \"identity_mismatch\": boolean,',
+      '    \"environment_mismatch\": boolean,',
+      '    \"too_similar_to_previous\": boolean,',
+      '    \"missing_action\": boolean,',
+      '    \"wardrobe_mismatch\": boolean',
       "  },",
-      '  "reasons": string[],',
-      '  "suggestion": string',
+      '  \"reasons\": string[],',
+      '  \"suggestion\": string',
       "}",
       "",
       "Rules:",
-      "- If any flag is true, then needs_edit must be true.",
+      "- If ANY flag is true, then needs_edit must be true.",
       "- ok must be true ONLY if all flags are false.",
-      "- suggestion should be a short, concrete edit instruction (e.g. 'Change the pose so the cat is jumping, keep the same face and colors').",
-    ].filter(Boolean).join("\n")
+      "- If you are uncertain or cannot see clearly, set needs_edit = true.",
+      "- suggestion should be a short, concrete edit instruction",
+      "  (e.g. \"Remove the overalls, keep the same green collar and cat face;",
+      "   change the pose so the cat is jumping instead of standing still.\")",
+    ]
+      .filter(Boolean)
+      .join("\n"),
   });
 
   const body = {
@@ -1046,25 +1066,55 @@ async function runImageQAWithGemini(env, {
       }
     }
 
-    // Lite sanering
-    const flags = parsed.flags || {};
+    const rawFlags = parsed.flags || {};
+    const flags = {
+      identity_mismatch: !!rawFlags.identity_mismatch,
+      environment_mismatch: !!rawFlags.environment_mismatch,
+      too_similar_to_previous: !!rawFlags.too_similar_to_previous,
+      missing_action: !!rawFlags.missing_action,
+      wardrobe_mismatch: !!rawFlags.wardrobe_mismatch,
+    };
+
+    const reasons = Array.isArray(parsed.reasons) ? parsed.reasons : [];
+    let suggestion = parsed.suggestion || "";
+
+    // 🔒 STRIKT LOGIK: om någon flag är true → needs_edit = true
+    const anyFlagTrue = Object.values(flags).some(Boolean);
+
+    let needs_edit = !!parsed.needs_edit || anyFlagTrue;
+    let ok = !!parsed.ok && !needs_edit;
+
+    // Om modellen säger ok: false men inga flaggor – vi fäller ändå
+    if (!ok && !needs_edit) {
+      needs_edit = true;
+      if (!reasons.length) {
+        reasons.push("model_uncertain");
+      }
+      if (!suggestion) {
+        suggestion =
+          "Keep the hero identical to the reference image (same face and outfit); adjust pose and background to better match the story text.";
+      }
+    }
+
     return {
-      ok: !!parsed.ok,
-      needs_edit: !!parsed.needs_edit,
-      flags: {
-        identity_mismatch: !!flags.identity_mismatch,
-        environment_mismatch: !!flags.environment_mismatch,
-        too_similar_to_previous: !!flags.too_similar_to_previous,
-        missing_action: !!flags.missing_action,
-      },
-      reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [],
-      suggestion: parsed.suggestion || "",
+      ok,
+      needs_edit,
+      flags,
+      reasons,
+      suggestion,
     };
   } catch (e) {
     console.error("[QA] Unexpected QA error:", e?.message || e);
     return { ok: true, skipped: true, reason: "exception" };
   }
 }
+
+/**
+ * Wrapper som:
+ *  - kollar om QA är påslaget (env.QA_ENABLED / env.QA_AUTO_REGEN)
+ *  - loggar allt
+ *  - kan autoskicka till regenFn (t.ex. Flux Edit) om QA vill ändra
+ */
 async function maybeAutoQA(env, {
   ref_b64,
   prev_b64,
@@ -1074,7 +1124,9 @@ async function maybeAutoQA(env, {
   regenFn, // async funktion som kan göra en ny bild om QA klagar
 }) {
   const enabled = String(env.QA_ENABLED || "").toLowerCase() === "1";
-  if (!enabled) return { image: originalImage, qa: { ok: true, skipped: true } };
+  if (!enabled) {
+    return { image: originalImage, qa: { ok: true, skipped: true, reason: "disabled" } };
+  }
 
   // För logg – längder på bilderna
   console.log("[QA] starting", {
@@ -1100,29 +1152,32 @@ async function maybeAutoQA(env, {
     suggestion: qa.suggestion,
   });
 
-  const autoRegen =
-    String(env.QA_AUTO_REGEN || "").toLowerCase() === "1";
+  const autoRegen = String(env.QA_AUTO_REGEN || "").toLowerCase() === "1";
 
-  if (!qa.needs_edit || !autoRegen || !regenFn) {
-    // Antingen allt ok, eller så kör vi bara log-läge
-    return { image: originalImage, qa };
+  // Om QA säger "behöver fixas" OCH autoRegen är på – skicka vidare till regenFn
+  if (qa.needs_edit && autoRegen && typeof regenFn === "function") {
+    console.log("[QA] auto-regenerate requested", {
+      page: meta?.page,
+      suggestion: qa.suggestion,
+      flags: qa.flags,
+    });
+
+    try {
+      const regenImage = await regenFn(qa);
+      if (!regenImage) throw new Error("regenFn returned null/undefined");
+      console.log("[QA] auto-regenerate OK", { page: meta?.page });
+      return { image: regenImage, qa: { ...qa, auto_regenerated: true } };
+    } catch (e) {
+      console.error(
+        "[QA] auto-regenerate FAILED, keeping original",
+        e?.message || e,
+      );
+      return { image: originalImage, qa: { ...qa, auto_regen_failed: true } };
+    }
   }
 
-  // AUTO-REGEN: låt regenFn bygga ny prompt och kalla geminiImage igen
-  console.log("[QA] auto-regenerate requested", {
-    page: meta?.page,
-    suggestion: qa.suggestion,
-  });
-
-  try {
-    const regenImage = await regenFn(qa);
-    if (!regenImage) throw new Error("regenFn returned null/undefined");
-    console.log("[QA] auto-regenerate OK", { page: meta?.page });
-    return { image: regenImage, qa: { ...qa, auto_regenerated: true } };
-  } catch (e) {
-    console.error("[QA] auto-regenerate FAILED, keeping original", e?.message || e);
-    return { image: originalImage, qa: { ...qa, auto_regen_failed: true } };
-  }
+  // Antingen allt ok, eller QA är bara i logg-läge
+  return { image: originalImage, qa };
 }
 
 
