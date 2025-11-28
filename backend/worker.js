@@ -2741,6 +2741,23 @@ function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
   ].filter(Boolean).join("\n");
 }
 
+function heroDescriptor({ category, name, age, traits, petSpecies }) {
+  const cat = (category || "kids").toLowerCase();
+
+  if (cat === "pets") {
+    const species = (petSpecies || "katt").trim().toLowerCase();
+    return `HJÄLTE: ett ${species} vid namn ${name || "Nova"}; egenskaper: ${
+      traits || "nyfiken, lekfull"
+    }.`;
+  }
+
+  const a = parseInt(age || 6, 10);
+  return `HJÄLTE: ett barn vid namn ${name || "Nova"} (${a} år), egenskaper: ${
+    traits || "modig, omtänksam"
+  }.`;
+}
+
+
 function buildRefPortraitPrompt({ style, bible, traits, hasPhoto, category }) {
   const mc = bible?.main_character || {};
   const name = mc.name || "Nova";
