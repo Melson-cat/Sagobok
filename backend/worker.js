@@ -899,17 +899,11 @@ async function runImageQAWithGemini(env, {
   meta = {},
 }) {
   const apiKey = env.GEMINI_API_KEY;
-  if (!apiKey) {
-    console.warn("[QA] No GEMINI_API_KEY, skipping QA");
-    return { ok: true, skipped: true, reason: "no_api_key" };
-  }
+  // Använd 1.5-flash (standard) eller pro (bättre syn).
+  const modelId = "gemini-2.5-flash"; 
 
-  if (!ref_b64 || !curr_b64) {
-    console.warn("[QA] Missing ref or current image, skipping QA");
-    return { ok: true, skipped: true, reason: "missing_images" };
-  }
-
-  const modelId = "gemini-1.5-flash"; // text + bild, snabb och billig
+  // HJÄLPFUNKTION: Ta bort "data:image/png;base64," om det finns
+  const cleanB64 = (str) => str ? str.replace(/^data:image\/\w+;base64,/, "") : "";
 
   const parts = [];
 
@@ -918,97 +912,66 @@ async function runImageQAWithGemini(env, {
   parts.push({
     inlineData: {
       mimeType: "image/png",
-      data: ref_b64,
+      data: cleanB64(ref_b64),
     },
   });
 
-  // Bild 2 – PREVIOUS PAGE (om finns)
+  // Bild 2 – PREVIOUS PAGE
   if (prev_b64) {
     parts.push({
-      text: "IMAGE_PREV: This is the previous page of the story (environment & mood only)."
+      text: "IMAGE_PREV: This is the previous page (for continuity context)."
     });
     parts.push({
       inlineData: {
         mimeType: "image/png",
-        data: prev_b64,
+        data: cleanB64(prev_b64),
       },
     });
   }
 
   // Bild 3 – CURRENT PAGE
   parts.push({
-    text: "IMAGE_CURR: This is the newly generated page that should be evaluated."
+    text: "IMAGE_CURR: This is the newly generated page to evaluate."
   });
   parts.push({
     inlineData: {
       mimeType: "image/png",
-      data: curr_b64,
+      data: cleanB64(curr_b64),
     },
   });
 
-  // Text-kontekst
-  const page = meta.page ?? null;
-  const scene_en = meta.scene_en || "";
-  const action_visual = meta.action_visual || "";
-  const category = meta.category || "kids";
-  const style = meta.style || "cartoon";
-
-  parts.push({
-    text: [
-      "You are a VERY STRICT image QA system for a children's picture book.",
-      "You see:",
-      "- IMAGE_REF: the master identity of the hero (face, hair/fur, proportions, clothing).",
-      "- IMAGE_PREV: the previous story frame (if provided).",
-      "- IMAGE_CURR: the current page that must be checked.",
+  // Din prompt var bra, jag har tajtat till den lite för Flash
+  const promptText = [
+      "You are a STRICT Image QA System for a children's book.",
+      `Context: Category=${meta.category || 'kids'}, Style=${meta.style || 'cartoon'}.`,
+      meta.scene_en ? `Required Action: ${meta.scene_en}` : "",
       "",
-      `Book category: ${category}.`,
-      `Visual style (hint): ${style}.`,
-      page != null ? `Page number: ${page}.` : "",
+      "Compare IMAGE_CURR against IMAGE_REF (identity) and IMAGE_PREV (continuity).",
+      "Fail the image if:",
+      "1. IDENTITY: The hero looks like a different character/species/breed compared to IMAGE_REF.",
+      "2. CONSISTENCY: The artistic style changes drastically.",
+      "3. ACTION: The hero is NOT doing the required action.",
+      "4. DUPLICATE: The image is nearly identical to IMAGE_PREV (same pose/angle) unless action requires it.",
       "",
-      "Text for the CURRENT page (IMAGE_CURR):",
-      scene_en ? `SCENE_EN: ${scene_en}` : "",
-      action_visual ? `ACTION_VISUAL: ${action_visual}` : "",
-      "",
-      "TASK:",
-      "1. Check if the hero in IMAGE_CURR matches IMAGE_REF exactly:",
-      "   - same species/child vs pet",
-      "   - same hair/fur color and hairstyle",
-      "   - same facial structure & proportions",
-      "   - same clothing / outfit as described implicitly by IMAGE_REF.",
-      "2. Check environment continuity:",
-      "   - If IMAGE_PREV exists, environment, lighting and color mood should feel like the same world.",
-      "3. Check story progression & variation:",
-      "   - The hero should clearly perform the requested action (ACTION_VISUAL/SCENE_EN).",
-      "   - IMAGE_CURR must NOT be almost identical to IMAGE_PREV (camera angle, pose, expression) unless the text clearly demands it.",
-      "",
-      "Think carefully and return a single JSON object ONLY. No explanation outside JSON.",
-      "JSON shape EXACTLY:",
+      "Output JSON ONLY:",
       "{",
       '  "ok": boolean,',
       '  "needs_edit": boolean,',
       '  "flags": {',
       '    "identity_mismatch": boolean,',
-      '    "environment_mismatch": boolean,',
-      '    "too_similar_to_previous": boolean,',
+      '    "style_mismatch": boolean,',
       '    "missing_action": boolean',
-      "  },",
-      '  "reasons": string[],',
-      '  "suggestion": string',
-      "}",
-      "",
-      "Rules:",
-      "- If any flag is true, then needs_edit must be true.",
-      "- ok must be true ONLY if all flags are false.",
-      "- suggestion should be a short, concrete edit instruction (e.g. 'Change the pose so the cat is jumping, keep the same face and colors').",
-    ].filter(Boolean).join("\n")
-  });
+      '  },',
+      '  "suggestion": "string (short instruction to fix the issue, max 50 words)"',
+      "}"
+  ].join("\n");
+
+  parts.push({ text: promptText });
 
   const body = {
     contents: [{ role: "user", parts }],
     generationConfig: {
-      temperature: 0.1,
-      topP: 0.8,
-      // Vi ber om ren JSON tillbaka
+      temperature: 0.2, // Låg temp för mer logiska beslut
       responseMimeType: "application/json",
     },
   };
@@ -1018,50 +981,40 @@ async function runImageQAWithGemini(env, {
       `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`,
       {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-      },
+      }
     );
 
-    const txt = await res.text();
     if (!res.ok) {
-      console.error("[QA] Gemini QA HTTP error:", res.status, txt);
+      const errTxt = await res.text();
+      console.error("[QA] API Error:", res.status, errTxt);
       return { ok: true, skipped: true, reason: `http_${res.status}` };
     }
 
-    let parsed = null;
-
-    // Om responseMimeType funkar borde txt redan vara JSON:
-    try {
-      parsed = JSON.parse(txt);
-    } catch {
-      // fallback: tolka som vanligt Gemini-svar och plocka text
-      try {
-        const data = JSON.parse(txt);
-        const t = extractGeminiText(data);
-        parsed = JSON.parse(t);
-      } catch (e) {
-        console.error("[QA] Failed to parse QA JSON:", e, txt.slice(0, 300));
-        return { ok: true, skipped: true, reason: "parse_error" };
-      }
+    const rawResponse = await res.json();
+    
+    // VIKTIGT: Hämta ut JSON-texten från API-strukturen
+    // Flash kan ibland returnera null om safety filtret kickar in
+    const candidate = rawResponse.candidates?.[0];
+    if (!candidate || !candidate.content) {
+        console.warn("[QA] Blocked by safety filter or empty response");
+        return { ok: true, skipped: true, reason: "safety_block" };
     }
 
-    // Lite sanering
-    const flags = parsed.flags || {};
+    const jsonString = candidate.content.parts[0].text;
+    const parsed = JSON.parse(jsonString);
+
     return {
       ok: !!parsed.ok,
       needs_edit: !!parsed.needs_edit,
-      flags: {
-        identity_mismatch: !!flags.identity_mismatch,
-        environment_mismatch: !!flags.environment_mismatch,
-        too_similar_to_previous: !!flags.too_similar_to_previous,
-        missing_action: !!flags.missing_action,
-      },
-      reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [],
+      flags: parsed.flags || {},
       suggestion: parsed.suggestion || "",
     };
+
   } catch (e) {
-    console.error("[QA] Unexpected QA error:", e?.message || e);
+    console.error("[QA] Exception:", e);
+    // Vid fel, släpp igenom bilden hellre än att krascha flödet
     return { ok: true, skipped: true, reason: "exception" };
   }
 }
@@ -1419,7 +1372,7 @@ async function handleRefImage(req, env) {
       }
       photoMime = m[1].toLowerCase();
       barePhoto = m[2];
-    }
+
 
     if (!barePhoto) {
       return err("Missing photo_b64", 400);
