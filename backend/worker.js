@@ -905,7 +905,7 @@ async function runImageQAMasterWithGPT(env, {
   hashes = {},
   meta = {},
 }) {
-  const apiKey = env.OPENAI_API_KEY;
+  const apiKey = env.API_KEY;
   const model = env.QA_MASTER_MODEL || "gpt-5-nano"; // sätt korrekt modell i ENV
 
   if (!apiKey) {
