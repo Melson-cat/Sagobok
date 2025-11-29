@@ -1315,16 +1315,16 @@ INPUT: En outline med dramaturgi (home → departure → adventure → trial →
 
 • Skriv en engagerande berättelse på svenska.
 • EXAKT 16 sidor.
-• Varje sida: 5–7 meningar ("text").
-• Storyn måste följa outline faser i rätt ordning.
+• Varje sida: 5–7 meningar i fältet "text".
+• Storyn måste följa outline-faserna i rätt ordning.
 
-HÅRD SIDFÖRDELNING:
+HÅRD SIDFÖRDELNING (MÅSTE FÖLJAS):
 - Page 1–2 = "home" + "departure"
 - Page 3–15 = äventyr:
    • introduction till platsen
    • incident/problem
    • trial (något går fel)
-   • klimax (svåraste momente)
+   • climax (svåraste momentet)
    • resolution
 - Page 16 = epilog
 Ingen sida utanför denna struktur.
@@ -1341,49 +1341,98 @@ VIKTIGT:
 
 • Skapa en visuell plan (“bible”) + bildinstruktioner för varje page.
 • Alla scener måste vara visuellt distinkta.
-• Scene/scene_en/action_visual måste vara direkt kopplat till handlingen på sidan.
+• "scene", "scene_en" och "action_visual" måste vara direkt kopplade till handlingen på sidan.
 
 WARDROBE (kritisk):
 • "wardrobe" i bible ska vara en konsekvent, konkret engelsk outfitbeskrivning
   (fungerar som en direkt prompt till AI-bildgeneratorn).
+• Wardrobe får inte ändras mellan sidorna, om inget annat uttryckligen motiveras i texten.
 
 SCENE_EN:
-• Måste börja med hjälten
+• Måste börja med hjälten.
 • Får inte beskriva färg/utseende – bara miljö, ljus, handling, rörelse.
+• Engelska, 1–2 meningar.
 
 ACTION_VISUAL:
 • EN tydlig fysisk handling per sida.
-• 3–10 ord, engelska, direkt från sidans text.
+• 3–10 ord, engelska, direkt kopplat till sidans text.
 
 CAMERA:
 • EN av: "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
 
 BIROLLER:
-• Om en karaktär förekommer i 3+ sidor ska de ligga i bible.secondary_characters.
+• Om en karaktär förekommer i 3+ sidor ska de ligga i "bible.secondary_characters".
 • Deras roll + relation + igenkänning ska vara konsekvent.
 
 ===========================
  JSON-STRUKTUR (OBLIGATORISKT)
 ===========================
 
+Du MÅSTE returnera giltig JSON med följande struktur:
+
 {
   "book": {
-    ... (oförändrat, exakt som tidigare)
+    "title": string,
+    "logline": string,
+    "bible": {
+      "main_character": {
+        "name": string,
+        "description": string,
+        "wardrobe": string  // engelsk, konsekvent outfitbeskrivning för hjälten
+      },
+      "secondary_characters": [
+        {
+          "name": string,
+          "role": string,
+          "relation": string,
+          "wardrobe": string
+        }
+      ],
+      "setting": {
+        "location": string,
+        "description": string
+      }
+    },
+    "pages": [
+      {
+        "page": number,            // HÅRD REGEL: heltal 1–16, 1-baserad ordning
+        "phase": string,           // t.ex. "home", "departure", "adventure", "trial", "climax", "resolution", "epilogue"
+        "text": string,            // 5–7 meningar på svenska
+        "scene": string,           // kort scenbeskrivning på svenska
+        "scene_en": string,        // kort scenbeskrivning på engelska, börjar med hjälten
+        "camera": string,          // EN av: "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder"
+        "action_visual": string,   // EN tydlig fysisk handling, engelska, 3–10 ord
+        "location": string,        // plats/miljö för scenen
+        "time_of_day": string,     // t.ex. "morning", "afternoon", "sunset", "night"
+        "weather": string          // t.ex. "sunny", "cloudy", "rainy", "stormy", "snowy"
+      }
+    ]
   }
 }
+
+HÅRDA KRAV PÅ "pages":
+• "pages" MÅSTE innehålla EXAKT 16 objekt.
+• Varje objekt i "pages" MÅSTE ha fältet "page".
+• "page" MÅSTE vara ett heltal 1–16.
+• "page"-numren MÅSTE vara unika och spegla den faktiska ordningen:
+  - page 1 och 2: home + departure
+  - page 3 till 15: äventyr på platsen (ingen hemmascen)
+  - page 16: epilog
+• Fältet "text" MÅSTE finnas på alla 16 sidor.
 
 ===========================
  HÅRDA REGLER
 ===========================
 
 • Exakt 16 sidor.
-• Följ outline faserna i ordning.
-• Max 2 hemma-sidor + 1 epilog. Resten måste vara äventyr på platsen.
-• Tydlig handling i varje sida (inte upprepning).
-• Varje sida ska vara visuellt unik.
-• Endast giltig JSON.
-
+• Följ outline-faserna i ordning.
+• Max 2 hemma-sidor (home + departure) + 1 epilog. Resten måste vara äventyr på platsen.
+• Tydlig handling på varje sida (inte upprepning, inte utfyllnad).
+• Varje sida ska vara visuellt unik (miljö, vinkel, handling).
+• "page"-fältet är obligatoriskt på varje sida och får aldrig utelämnas.
+• Endast giltig JSON i svaret – ingen extra text, ingen förklaring utanför JSON.
 `;
+
 
 
 async function handleRefImage(req, env) {
@@ -3157,6 +3206,17 @@ Inga extra fält, inga kommentarer, ingen text utanför JSON.
 `.trim();
 
     const story = await openaiJSON(env, STORY_SYS, storyUser);
+
+    if (Array.isArray(story?.book?.pages)) {
+  story.book.pages = story.book.pages.map((pg, idx) => {
+    if (!pg || typeof pg !== "object") return pg;
+    return {
+      ...pg,
+      page: Number.isFinite(pg.page) ? pg.page : idx + 1,
+    };
+  });
+}
+
 
     // 4) Efterarbete: Säkra kategori + fixa "det lilla barnet" för husdjur
     const cat = (category || "kids").toLowerCase();
