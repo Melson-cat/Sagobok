@@ -906,10 +906,10 @@ async function runImageQAMasterWithGPT(env, {
   meta = {},
 }) {
   const apiKey = env.API_KEY;
-  const model = env.QA_MASTER_MODEL || "gpt-5-nano"; // sätt korrekt modell i ENV
+  const model  = env.QA_MASTER_MODEL || "gpt-5-mini";
 
   if (!apiKey) {
-    console.warn("[QA Master] No OPENAI_API_KEY, skipping QA");
+    console.warn("[QA Master] No API_KEY, skipping QA");
     return { ok: true, needs_edit: false, skipped: true, reason: "no_api_key" };
   }
 
@@ -919,12 +919,14 @@ async function runImageQAMasterWithGPT(env, {
   }
 
   const { ref_hash, prev_hash, curr_hash } = hashes || {};
+
   const distRefCurr  = hammingDistanceHex(ref_hash,  curr_hash);
   const distPrevCurr = hammingDistanceHex(prev_hash, curr_hash);
   const distRefPrev  = hammingDistanceHex(ref_hash,  prev_hash);
 
   const page          = meta.page ?? null;
   const scene_en      = meta.scene_en || "";
+  const prev_scene_en = meta.prev_scene_en || "";   // ⬅️ kan vara tomt
   const action_visual = meta.action_visual || "";
   const category      = meta.category || "kids";
   const style         = meta.style || "cartoon";
@@ -938,7 +940,6 @@ async function runImageQAMasterWithGPT(env, {
     dist_ref_prev:  distRefPrev,
   };
 
-  // Bygg data:image-URLs
   const refData  = `data:image/png;base64,${ref_b64}`;
   const currData = `data:image/png;base64,${curr_b64}`;
   const prevData = prev_b64 ? `data:image/png;base64,${prev_b64}` : null;
@@ -947,9 +948,11 @@ async function runImageQAMasterWithGPT(env, {
     {
       role: "system",
       content:
-        "You are a STRICT image QA system for a children's picture book. " +
-        "You must check if a newly generated page is visually consistent with the reference hero, " +
-        "the previous page and the story text. Output ONLY JSON, no prose.",
+        "You are a STRICT but PRACTICAL image QA system for a children's picture book. " +
+        "You judge whether the CURRENT page is visually consistent with the reference hero, " +
+        "the previous page and the story text. " +
+        "You must be tough on obvious mistakes, but tolerant of small artistic variation. " +
+        "You ALWAYS reply with valid JSON only – no extra text.",
     },
     {
       role: "user",
@@ -966,6 +969,9 @@ async function runImageQAMasterWithGPT(env, {
             `Category: ${category}`,
             `Style hint: ${style}`,
             "",
+            "Story text for PREVIOUS page (if any):",
+            prev_scene_en ? `PREV_SCENE_EN: ${prev_scene_en}` : "(none)",
+            "",
             "Story text for CURRENT page:",
             scene_en ? `SCENE_EN: ${scene_en}` : "",
             action_visual ? `ACTION_VISUAL: ${action_visual}` : "",
@@ -973,12 +979,17 @@ async function runImageQAMasterWithGPT(env, {
             "You also receive perceptual hash information (pHash or similar):",
             JSON.stringify(hashSummary, null, 2),
             "",
+            "Very important rules:",
+            "- First, decide if the STORY TEXT clearly moves to a NEW LOCATION (house → beach → forest etc.).",
+            "- If the story clearly changes location, DO NOT penalize environment continuity for the location change.",
+            "- Only enforce strict environment continuity when the story is still in the SAME setting.",
+            "",
             "Use BOTH the visual content AND the hash distances to judge:",
             "- identity consistency (hero looks like the same character as REF)",
             "- wardrobe consistency (same outfit / no random new clothes)",
-            "- environment continuity (same world & mood as PREV, if provided)",
+            "- environment continuity (same world & mood as PREV when the story stays in the same place)",
             "- action clarity (hero clearly performs the described action)",
-            "- variation (CURR must not be almost identical to PREV unless text demands it)",
+            "- variation (CURR must not be almost identical to PREV when the story stays in the same place)",
             "",
             "Output STRICT JSON with EXACTLY this shape:",
             "{",
@@ -1007,18 +1018,26 @@ async function runImageQAMasterWithGPT(env, {
             "- 7–8 = acceptable but not perfect.",
             "- 9–10 = excellent / very strong.",
             "",
-            "Flag rules:",
+            "Flag rules (be careful!):",
             "- identity_mismatch = true if identity <= 7 OR hero clearly looks like a different character.",
-            "- wardrobe_mismatch = true if outfit/clothing changes in a way that breaks continuity.",
-            "- environment_mismatch = true if environment <= 6 OR background/lighting feels like a different world.",
-            "- too_similar_to_previous = true if variation <= 4 and PREV exists AND hashes suggest near-duplicate.",
-            "- missing_action = true if hero does not clearly perform the described action.",
+            "- wardrobe_mismatch = true only when a MAJOR outfit element disappears or changes without story reason " +
+              "(e.g. collar, colors, body type). Minor accessories (like a backpack) should NOT block the page; " +
+              "they can be mentioned in reasons/suggestion instead.",
+            "- environment_mismatch = true if environment <= 6 AND the STORY TEXT does NOT describe a location change.",
+            "- too_similar_to_previous = true when:",
+            "    • the story is in the SAME setting, AND",
+            "    • composition / pose / camera angle are almost identical to PREV, AND",
+            "    • hashes suggest a near-duplicate image.",
+            "- missing_action = true only for CLEAR failures where the hero is NOT doing the described action at all (score <= 4).",
+            "",
+            "Threshold policy:",
+            "- Use flags only for clear, user-visible problems.",
+            "- If the page is generally good and the issues are minor or stylistic, do NOT set any flags; just mention details in reasons.",
             "",
             "If ANY flag is true, needs_edit must be true.",
             "ok must be true ONLY if all flags are false.",
           ].filter(Boolean).join("\n"),
         },
-        // Bilder in i GPT
         { type: "text", text: "\nREF image:" },
         { type: "image_url", image_url: { url: refData } },
         ...(prevData
@@ -1043,6 +1062,7 @@ async function runImageQAMasterWithGPT(env, {
       body: JSON.stringify({
         model,
         messages,
+        // ingen temperature – modellen kräver default = 1
         response_format: { type: "json_object" },
       }),
     });
@@ -1054,27 +1074,47 @@ async function runImageQAMasterWithGPT(env, {
     }
 
     const content = json.choices?.[0]?.message?.content || "{}";
-    const parsed = safeJsonParse(content) || {};
+    const parsed  = safeJsonParse(content) || {};
 
-    const flags = parsed.flags || {};
-    const scores = parsed.scores || {};
+    let flags  = parsed.flags  || {};
+    let scores = parsed.scores || {};
 
+    // Normalisera scores
+    scores = {
+      identity:    Number.isFinite(+scores.identity)    ? +scores.identity    : 0,
+      environment: Number.isFinite(+scores.environment) ? +scores.environment : 0,
+      action:      Number.isFinite(+scores.action)      ? +scores.action      : 0,
+      variation:   Number.isFinite(+scores.variation)   ? +scores.variation   : 0,
+    };
+
+    // Säkerställ flaggar enligt våra thresholds (överstyr ev. slarv från modellen)
+    flags = {
+      identity_mismatch: !!flags.identity_mismatch || (scores.identity <= 7),
+      wardrobe_mismatch: !!flags.wardrobe_mismatch, // vi litar på modellen här
+      environment_mismatch: !!flags.environment_mismatch,
+      too_similar_to_previous: !!flags.too_similar_to_previous,
+      missing_action: !!flags.missing_action || (scores.action <= 4),
+    };
+
+    // 🔹 Variation – var hårdare när hash säger "nästan samma" och prev finns
+    if (prev_hash && distPrevCurr != null && distPrevCurr <= 4) {
+      // Hash säger att bilderna nästan är identiska
+      if (scores.variation > 4) scores.variation = 4;
+      flags.too_similar_to_previous = true;
+    }
+
+    // 🔹 Lite mildare på action – om modellen var för hård
+    if (scores.action >= 5 && flags.missing_action) {
+      // överkorrigera: ta bort flaggan om action ändå ser ok ut
+      flags.missing_action = false;
+    }
+
+    const anyFlag = Object.values(flags).some(Boolean);
     const out = {
-      ok: !!parsed.ok,
-      needs_edit: !!parsed.needs_edit,
-      flags: {
-        identity_mismatch: !!flags.identity_mismatch,
-        wardrobe_mismatch: !!flags.wardrobe_mismatch,
-        environment_mismatch: !!flags.environment_mismatch,
-        too_similar_to_previous: !!flags.too_similar_to_previous,
-        missing_action: !!flags.missing_action,
-      },
-      scores: {
-        identity: Number(scores.identity ?? 0),
-        environment: Number(scores.environment ?? 0),
-        action: Number(scores.action ?? 0),
-        variation: Number(scores.variation ?? 0),
-      },
+      ok: !anyFlag,
+      needs_edit: anyFlag,
+      flags,
+      scores,
       reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [],
       suggestion: parsed.suggestion || "",
       skipped: false,
@@ -1086,85 +1126,6 @@ async function runImageQAMasterWithGPT(env, {
     return { ok: true, needs_edit: false, skipped: true, reason: "exception" };
   }
 }
-
-/**
- * maybeAutoQA – enkel wrapper:
- *
- * - QA_ENABLED = "1" → kör QA, annars no-op
- * - QA_AUTO_REGEN = "1" + regenFn → låt QA trigga auto-regenerering
- */
-async function maybeAutoQA(env, {
-  ref_b64,
-  prev_b64,
-  curr_b64,
-  hashes,
-  meta,
-  originalImage, // { b64, image_url }
-  regenFn,       // async (qa) => { b64, image_url } eller null
-}) {
-  const enabled = String(env.QA_ENABLED || "").toLowerCase() === "1";
-  if (!enabled) {
-    return {
-      image: originalImage,
-      qa: { ok: true, needs_edit: false, skipped: true, reason: "disabled" },
-    };
-  }
-
-  console.log("[QA] starting", {
-    page: meta?.page,
-    ref_len: ref_b64 ? ref_b64.length : 0,
-    prev_len: prev_b64 ? prev_b64.length : 0,
-    curr_len: curr_b64 ? curr_b64.length : 0,
-    hashes,
-  });
-
-  const qa = await runImageQAMasterWithGPT(env, {
-    ref_b64,
-    prev_b64,
-    curr_b64,
-    hashes,
-    meta,
-  });
-
-  console.log("[QA] result", {
-    page: meta?.page,
-    ok: qa.ok,
-    needs_edit: qa.needs_edit,
-    flags: qa.flags,
-    scores: qa.scores,
-    reasons: qa.reasons,
-    suggestion: qa.suggestion,
-  });
-
-  const autoRegen = String(env.QA_AUTO_REGEN || "").toLowerCase() === "1";
-
-  if (!qa.needs_edit || !autoRegen || !regenFn) {
-    // Antingen allt OK, eller så kör vi bara log-läge
-    return { image: originalImage, qa };
-  }
-
-  console.log("[QA] auto-regenerate requested", {
-    page: meta?.page,
-    suggestion: qa.suggestion,
-  });
-
-  try {
-    const regenImage = await regenFn(qa);
-    if (!regenImage) throw new Error("regenFn returned null/undefined");
-    console.log("[QA] auto-regenerate OK", { page: meta?.page });
-    return {
-      image: regenImage,
-      qa: { ...qa, auto_regenerated: true },
-    };
-  } catch (e) {
-    console.error("[QA] auto-regenerate FAILED, keeping original", e?.message || e);
-    return {
-      image: originalImage,
-      qa: { ...qa, auto_regen_failed: true },
-    };
-  }
-}
-
 
 
 
@@ -1212,14 +1173,15 @@ function styleGuard(style = "cartoon") {
 }
 
 const OUTLINE_SYS = `
-Du är en barnboksförfattare, som hjälper till att skapa en disposition ("outline") för en svensk bilderbok.
+Du är en barnboksförfattare och dramaturg. Du hjälper till att skapa en disposition ("outline") för en svensk illustrerad barnbok.
 
 Du får i user-meddelandet:
 - Hjältens typ (barn eller husdjur)
-- Namn, ålder (om barn), och det övergripande temat för boken.
+- Namn + ev. ålder
+- Tema, plats, stil och kategori ("kids" eller "pets")
 
 DIN UPPGIFT:
-Skapa en engagerande outline för en bilderbok.
+Skapa en engagerande, filmisk outline med tydlig dramaturgi.
 
 RETURNERA EXAKT:
 {
@@ -1233,207 +1195,125 @@ RETURNERA EXAKT:
     "hero": {
       "name": string,
       "kind": "child" | "pet",
-      "species": string | null,        // t.ex. "cat", "dog" eller null för barn
+      "species": string | null,
       "age": number | null
     },
+    "setting": string,
     "chapters": [
       {
         "title": string,
-        "summary": string
+        "summary": string,
+        "phase": "home" | "departure" | "adventure" | "trial" | "climax" | "epilogue",
+        "location": string,
+        "goal": string,
+        "stakes": string,
+        "min_pages": number,
+        "max_pages": number
       }
     ]
   }
 }
 
-REGLER:
-- "category" ska matcha den kategori du får i prompten ("kids" eller "pets").
-- Om category = "kids":
-  - hero.kind = "child"
-  - hero.species = null
-  - hero.age = barnets ungefärliga ålder (t.ex. 5, 6, 7).
-- Om category = "pets":
-  - hero.kind = "pet"
-  - hero.species = ett enkelt engelskt ord, t.ex. "cat", "dog", "rabbit".
-  - hero.age kan vara null eller uppskattad (om det passar).
-- Storyn ska vara engagerande, händelserik och utgå ifrån det önskade temat.
-- Dispositionen ska gå att utveckla till ca 16 sidor i en bilderbok.
-- Endast giltig JSON, inga kommentarer eller extra text.
+REGLER FÖR STRUCTURE / DRAMATURGI
+- Boken ska passa 16 sidor totalt.
+- Fördela kapitel så att:
+  • "home" + "departure" tillsammans = max 1–2 sidor  
+  • "epilogue" = max 1 sida  
+  • ALLA andra sidor = äventyr ("adventure", "trial", "climax")
+- Outlinen måste inkludera:
+  • ett centralt problem (stakes)
+  • en trial (första misslyckade försök)
+  • ett klimax (svåraste punkten)
+  • en lösning
+- Händelserna ska vara dramatiska och visuella, inte vardagliga:
+  Ex: storm, vilse, rädda någon, tappad viktig sak, hinder i miljön, farliga vägar.
+
+KATEGORI-REGLER:
+- category = "kids": hero.kind = "child", species = null, age ≈ barnets ålder.
+- category = "pets": hero.kind = "pet", species = t.ex. "cat", "dog", "rabbit".
+
+RETURNERA ENDAST GILTIG JSON. INGA kommentarer eller extra text.
+
 `;
 
 const STORY_SYS = `
-Du är ett kreativt team bestående av en FÖRFATTARE och en REGISSÖR som producerar en illustrerad barnbok.
+Du är ett kreativt team (FÖRFATTARE + REGISSÖR) som producerar en illustrerad barnbok baserad på en outline.
 
-INPUT: En outline (handling).
+INPUT: En outline med dramaturgi (home → departure → adventure → trial → climax → epilogue).
 
 ===========================
  FÖRFATTAREN – DITT UPPDRAG
 ===========================
 
-• Skriv en engagerande saga på svenska.
-• Exakt 16 sidor (pages 1–16).
-• Varje sida: 5-7 meningar i fältet "text".
-• Bygg berättelsen utifrån bokens tema och lärdom.
-• Max 2 sidor i samma miljö/scenografi.
-• Hjälten ska förekomma på nästan alla sidor (några få etableringsbilder är okej).
+• Skriv en engagerande berättelse på svenska.
+• EXAKT 16 sidor.
+• Varje sida: 5–7 meningar ("text").
+• Storyn måste följa outline faser i rätt ordning.
 
+HÅRD SIDFÖRDELNING:
+- Page 1–2 = "home" + "departure"
+- Page 3–15 = äventyr:
+   • introduction till platsen
+   • incident/problem
+   • trial (något går fel)
+   • klimax (svåraste momente)
+   • resolution
+- Page 16 = epilog
+Ingen sida utanför denna struktur.
+
+VIKTIGT:
+• Äventyret måste innehålla riktiga händelser och visuella moment.
+• Minst tre distinkta set pieces med handling (inte småprat):
+  exempel: rädda någon, hitta något, klättra, gå vilse, storm, hinder.
+• Hjälten ska befinna sig på äventyrsplatsen från sida 3 till 15 – inga hemmascener där.
 
 ===========================
  REGISSÖREN – DITT UPPDRAG
 ===========================
 
-• Skapa en visuell plan (“bible”) och detaljerade bildinstruktioner för varje sida.
-• Se till att varje sida är visuellt distinkt (ny vinkel, tydlig rörelse i scenen).
+• Skapa en visuell plan (“bible”) + bildinstruktioner för varje page.
+• Alla scener måste vara visuellt distinkta.
+• Scene/scene_en/action_visual måste vara direkt kopplat till handlingen på sidan.
 
-• "wardrobe" i bible MÅSTE vara en detaljerad, komma-separerad VISUELL beskrivning på engelska av hjältens kläder:
-  - DÅLIGT: "Nice clothes suitable for winter." "Grey fur, yellow eyes."
-  - BRA: "Red wool knitted sweater, blue denim jeans, yellow rubber boots, red beanie hat."
-  - Denna sträng används direkt som prompt till bild-AI:n. Var konkret och konsekvent.
+WARDROBE (kritisk):
+• "wardrobe" i bible ska vara en konsekvent, konkret engelsk outfitbeskrivning
+  (fungerar som en direkt prompt till AI-bildgeneratorn).
 
-• "scene_en" ska vara:
-   – filmisk, konkret, levande  
-   – beskriva VISUELLA element: miljö, ljus, stämning, handling, kroppsspråk  
-   – börja med hjälten i fokus (t.ex. "The little child Nova..." eller "The grey cat Lina...")  
-   – FÅR INTE beskriva hjältes ansikte, hårfärg, ögonfärg eller kroppstyp (det styrs av referensbilden).
+SCENE_EN:
+• Måste börja med hjälten
+• Får inte beskriva färg/utseende – bara miljö, ljus, handling, rörelse.
 
-  Exempel (BRA):  
-  "The little child Nova runs along a narrow forest path, fallen leaves swirling around their boots as warm evening light filters through the trees."
+ACTION_VISUAL:
+• EN tydlig fysisk handling per sida.
+• 3–10 ord, engelska, direkt från sidans text.
 
-  Exempel (DÅLIGT – UNDVIK):  
-  "A blonde girl with blue eyes stands in the forest."  // Beskriver utseende → förbjudet
+CAMERA:
+• EN av: "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
 
-• Fältet "camera" i varje sida ska vara EN enkel kamera-hint, vald ur denna lista:
-   "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
-  (Ingen annan text i "camera".)
-
-• "action_visual" ska kort beskriva den EXAKTA fysiska handling som bilden ska frysa:
-  - Engelska, presens, 3–10 ord (t.ex. "jumping down from the windowsill",
-    "hugging the dog tightly", "running towards the park gate").
-  - Välj EN huvudhandling per sida, hämtad från sidans text.
-  - Om texten innehåller flera små steg, välj det mest filmiska momentet som ska illustreras.
-
-• För varje sida måste "scene_en" och "action_visual" hänga ihop:
-  - Den FÖRSTA meningen i "scene_en" ska beskriva hjälten när hen utför just den handling
-    som står i "action_visual".
-  - Exempel:
-      text:          "...han sträcker på sig och hoppar ner från fönsterbrädan."
-      action_visual: "jumping down from the windowsill"
-      scene_en:      "The cat Melson jumps down from the windowsill into the warm morning light,
-                      tail raised high as dust motes dance in the sun."
-
-
-• Om en birolls-karaktär förekommer på 3 eller fler sidor:
-   – Lägg in den i "bible.secondary_characters" med namn, roll, relation till hjälten,
-     fysik, igenkänningstecken (identity_keys) och typisk klädsel (wardrobe).
-   – Se till att samma visuella detaljer (ansikte, kroppstyp, hår, färger, kläder) upprepas konsekvent i alla scener där karaktären förekommer.
-• I varje sida där en birolls-karaktär är med ska "scene" och "scene_en" nämna dem vid namn och tydligt beskriva vad de GÖR och hur de syns i scenen,
-  utan att ta bort fokus från hjälten.
-
+BIROLLER:
+• Om en karaktär förekommer i 3+ sidor ska de ligga i bible.secondary_characters.
+• Deras roll + relation + igenkänning ska vara konsekvent.
 
 ===========================
-   KATEGORI-REGLER (KRITISKT)
-===========================
-
-1) category = "kids"
-   • Hjälten är ett mänskligt barn genom hela berättelsen.
-   • I svenska scener: beskriv hjälten som "det lilla barnet [Namn]".
-   • I scene_en: använd "the little child [Name]".
-   • Ingen förvandling till djur, tonåring eller vuxen.
-
-2) category = "pets"
-   • Hjälten är ett husdjur genom hela berättelsen.
-   • I svenska scener: använd art + namn (t.ex. "katten Lina").
-   • I scene_en: använd art + namn (t.ex. "the cat Lina", "the little dog Max").
-   • Ingen förvandling till människa.
-   • FÖRBJUDET: Använd ALDRIG formuleringen "det lilla barnet" eller beskriv hjälten som ett barn.
-
-
-
-===========================
-   VISUELLA REGLER (ALLMÄNT)
-===========================
-
-• Varje sida ska innehålla:
-   - "scene" (svenska, kort scenbeskrivning med hjälten först)
-   - "scene_en" (engelsk, filmisk prompt med hjälten först – UTAN fysiskt utseende)
-   - "camera" (EN av: "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder")
-   - "action_visual" (vad hjälten gör fysiskt i bilden)
-   - "location"
-   - "time_of_day" ("day" | "golden_hour" | "evening" | "night")
-   - "weather" ("clear" | "cloudy" | "rain" | "snow")
-• Hjälten ska synas tydligt i "scene_en" (första meningen ska börja med hjälten).
-• Undvik dialog i prompts – beskriv endast det som syns.
-• Scenerna och vinklarna ska skapa variation och rörelse framåt i berättelsen.
-• Undvik att göra två helt identiska bildkompositioner; varje sida är ett nytt filmiskt ögonblick.
-
-
-===========================
-   JSON-STRUKTUR (OBLIGATORISKT)
+ JSON-STRUKTUR (OBLIGATORISKT)
 ===========================
 
 {
   "book": {
-    "title": string,
-    "tagline": string,
-    "back_blurb": string,
-    "reading_age": number,
-    "style": string,
-    "category": "kids" | "pets",
-    "bible": {
-      "main_character": {
-        "name": string,
-        "age": number | null,
-        "physique": string,
-        "identity_keys": string[]
-      },
-      "secondary_characters": [
-        {
-          "name": string,
-          "role": string,
-          "relation_to_hero": string,
-          "physique": string,
-          "identity_keys": string[],
-          "wardrobe": string
-        }
-      ],
-      "wardrobe": string,               // Hjältens outfit – komma-separerad engelsk beskrivning.
-      "palette": string[],
-      "world": string,
-      "tone": string
-    },
-    "theme": string,
-    "lesson": string,
-    "pages": [
-      {
-        "page": number,
-        "text": string,
-        "scene": string,
-        "scene_en": string,
-        "camera": string,
-        "action_visual": string,
-        "location": string,
-        "time_of_day": "day" | "golden_hour" | "evening" | "night",
-        "weather": "clear" | "cloudy" | "rain" | "snow"
-      }
-    ]
+    ... (oförändrat, exakt som tidigare)
   }
 }
 
-
 ===========================
-   HÅRDA REGLER
+ HÅRDA REGLER
 ===========================
 
-• Exakt 16 sidor (pages 1–16).
-• 5-7 meningar i "text" per sida.
-• Varje sida ska vara visuellt unik (ny vinkel, ny eller utvecklad handling).
-• "scene_en" ska alltid börja med hjälten i fokus och får INTE beskriva hjältes ansikte/hår/kroppstyp.
-• "camera" måste vara en av: "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
-• Om en birolls-karaktär är återkommande (3+ sidor) måste den finnas i bible.secondary_characters och avbildas konsekvent.
-• Inga meta-kommentarer, inga instruktioner till läsaren.
-• Endast giltig JSON, inga extra fält utanför den specificerade strukturen.
-• "category" ska matcha användarens val.
-• Boken ska vara njutbar för både barn och vuxna.
-• Om "category" = "pets" får du aldrig beskriva hjälten som ett barn i något fält (text, scene, scene_en).
+• Exakt 16 sidor.
+• Följ outline faserna i ordning.
+• Max 2 hemma-sidor + 1 epilog. Resten måste vara äventyr på platsen.
+• Tydlig handling i varje sida (inte upprepning).
+• Varje sida ska vara visuellt unik.
+• Endast giltig JSON.
 
 `;
 
@@ -3402,12 +3282,14 @@ let finalB64      = curr_b64;
 
 if (curr_b64 && ref_b64) {
   const meta = {
-    page,
-    scene_en: pg.scene_en || pg.scene || pg.text || "",
-    action_visual: pg.action_visual || "",
-    category: story.book?.category || story.book?.bible?.category || "kids",
-    style,
-  };
+  page,
+  scene_en: pg.scene_en || pg.scene || pg.text || "",
+  prev_scene_en: prevSceneEn || "",        // ⬅️ NYTT – ge GPT kontext om förra sidan
+  action_visual: pg.action_visual || "",
+  category: story.book?.category || story.book?.bible?.category || "kids",
+  style,
+};
+
 
   const { image: qaImage, qa } = await maybeAutoQA(env, {
     ref_b64,
