@@ -1078,7 +1078,8 @@ async function runImageQAMasterWithGPT(env, {
 
     const json = await res.json();
     if (!res.ok) {
-      console.error("[QA Master] HTTP error:", res.status, json);
+     console.error("[QA Master] HTTP error:", res.status, json?.error || json?.message || null);
+
       return { ok: true, needs_edit: false, skipped: true, reason: `http_${res.status}` };
     }
 
@@ -3618,9 +3619,11 @@ const { image: qaImage, qa } = await maybeAutoQA(env, {
 return ok({
   page,
   image_url: finalImageUrl,
-  provider: g.provider || "gemini",
-  // optional: debug
-  // qa_scores: qa?.scores,
+  provider,
+  qa_ok: qa?.ok ?? null,
+  qa_needs_edit: qa?.needs_edit ?? null,
+  qa_flags: qa?.flags ?? null,
+  qa_scores: qa?.scores ?? null,
 });
 
 
