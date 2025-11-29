@@ -947,7 +947,7 @@ async function runImageQAMasterWithGPT(env, {
     {
       role: "system",
       content:
-        "You are a VERY STRICT image QA system for a children's picture book. " +
+        "You are a STRICT image QA system for a children's picture book. " +
         "You must check if a newly generated page is visually consistent with the reference hero, " +
         "the previous page and the story text. Output ONLY JSON, no prose.",
     },
@@ -1043,7 +1043,6 @@ async function runImageQAMasterWithGPT(env, {
       body: JSON.stringify({
         model,
         messages,
-        temperature: 0.1,
         response_format: { type: "json_object" },
       }),
     });
