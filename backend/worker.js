@@ -3335,6 +3335,12 @@ async function handleImagesNext(req, env) {
 const g = await geminiImage(env, payload, 35000, 2);
 if (!g?.image_url) return err("No image from Gemini", 502);
 
+console.log("[IMAGES/NEXT] PAGE", page, {
+  g_url: g.image_url,
+  g_b64_len: g.b64 ? g.b64.length : null,
+  same_as_ref: !!(g.b64 && g.b64 === ref_image_b64),
+});
+
 // base64 för aktuella sidan (behövs för QA + ev. senare edit)
 const curr_b64 = g.b64 || null;
 const ref_b64  = ref_image_b64 || null;        // från request body
