@@ -1008,10 +1008,19 @@ async function runImageQAMasterWithGPT(env, {
             '    \"action\": number,',
             '    \"variation\": number',
             "  },",
-            '  \"reasons\": string[],',
-            '  \"suggestion\": string',
-            "}",
-            "",
+           '  "reasons": string[],',
+'  "suggestion": string',
+"}",
+"",
+"Field semantics:",
+"- reasons: short bullet-style explanations for why flags were set.",
+'- suggestion: ONE concise, imperative edit instruction in English that says EXACTLY what to change in CURR.',
+'- suggestion MUST follow this template:',
+'  "KEEP: <what must stay the same>. CHANGE: <the minimal visual changes needed>."',
+"- Do NOT mention scores, flags or long commentary in suggestion.",
+"- Do NOT ask the user anything. Just state the concrete edit.",
+"",
+
             "Scoring rules (0–10):",
             "- 0–3 = very bad / clearly wrong.",
             "- 4–6 = noticeable problems.",
@@ -1126,6 +1135,138 @@ async function runImageQAMasterWithGPT(env, {
     return { ok: true, needs_edit: false, skipped: true, reason: "exception" };
   }
 }
+
+async function fluxEditWithFal(env, { curr_b64, qa, meta }) {
+  const falKey = env.FAL_KEY;
+  if (!falKey) {
+    console.log("[FLUX] Skipping – no FAL_KEY");
+    return null;
+  }
+  if (!curr_b64) return null;
+
+  const page          = meta?.page ?? null;
+  const scene_en      = (meta?.scene_en || "").trim();
+  const action_visual = (meta?.action_visual || "").trim();
+  const category      = (meta?.category || "kids").toLowerCase();
+  const suggestion    = (qa?.suggestion || "").trim();
+
+  const keepLine = [
+    "KEEP: same hero identity (species, face, fur/skin, eyes, body shape), same illustration style, same general camera/framing unless the edit explicitly says otherwise."
+  ].join(" ");
+
+  const changeLine = suggestion
+    ? `CHANGE: ${suggestion.replace(/^KEEP:/i, "").replace(/^CHANGE:/i, "").trim()}`
+    : "CHANGE: fix any issues so the image clearly shows the described action and environment.";
+
+  const promptParts = [
+    `You are editing ONE existing illustration for a children's picture book (category: ${category}).`,
+    page != null ? `This is page ${page} in the story.` : null,
+    scene_en ? `STORY SCENE: ${scene_en}` : null,
+    action_visual ? `ACTION: ${action_visual}` : null,
+    "",
+    "You MUST preserve the character's identity and style – this is an EDIT, not a new image.",
+    keepLine,
+    changeLine,
+  ].filter(Boolean);
+
+  const prompt = promptParts.join("\n");
+
+  const dataUrl = `data:image/png;base64,${curr_b64}`;
+
+  const res = await fetch("https://fal.run/fal-ai/flux-2-pro/edit", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Key ${falKey}`,
+    },
+    body: JSON.stringify({
+      input: {
+        prompt,
+        image_size: "square",        // eller "auto" om du vill
+        output_format: "png",
+        sync_mode: true,
+        image_urls: [dataUrl],       // du KAN lägga till fler refs här senare
+        safety_tolerance: "2",
+        enable_safety_checker: true,
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    console.error("[FLUX] HTTP error", res.status, txt);
+    return null;
+  }
+
+  let json = null;
+  try {
+    json = await res.json();
+  } catch (e) {
+    console.error("[FLUX] JSON parse error", e);
+    return null;
+  }
+
+  const img = json?.images && json.images[0];
+  if (!img) {
+    console.error("[FLUX] No images in response");
+    return null;
+  }
+
+  // Fal brukar ge både url och ev. base64 (file_data) när sync_mode=true
+  return {
+    image_url: img.url || null,
+    b64: img.file_data || null,
+  };
+}
+
+
+async function geminiEditFallback(env, { ref_b64, curr_b64, prev_b64, qa, meta }) {
+  if (!curr_b64) return null;
+
+  const scene_en      = (meta?.scene_en || "").trim();
+  const action_visual = (meta?.action_visual || "").trim();
+  const suggestion    = (qa?.suggestion || "").trim();
+
+  const editLine = suggestion
+    ? suggestion
+    : "KEEP: keep the same hero identity and style. CHANGE: fix the action and environment so it clearly matches the story.";
+
+  const promptParts = [
+    "You are editing an EXISTING illustration for a children's book.",
+    "DO NOT create a new character; keep the hero identical.",
+    scene_en ? `STORY SCENE: ${scene_en}` : null,
+    action_visual ? `ACTION: ${action_visual}` : null,
+    "",
+    "Apply ONLY the following change instructions to the CURRENT image:",
+    editLine,
+  ].filter(Boolean);
+
+  const prompt = promptParts.join("\n");
+
+  const item = {
+    prompt,
+    image_b64: curr_b64,       // gamla bilden som bas
+    character_ref_b64: ref_b64 || null,
+    prev_b64: prev_b64 || null,
+    model: "pro",              // eller "flash" om du vill testa
+  };
+
+  try {
+    const g = await geminiImage(env, item, 70000, 2);
+    if (!g || (!g.image_url && !g.b64)) {
+      console.error("[Gemini-edit] No image in response");
+      return null;
+    }
+    return {
+      image_url: g.image_url || null,
+      b64: g.b64 || null,
+    };
+  } catch (e) {
+    console.error("[Gemini-edit] error:", e?.message || e);
+    return null;
+  }
+}
+
 async function maybeAutoQA(env, {
   ref_b64,
   prev_b64,
@@ -3425,16 +3566,42 @@ if (curr_b64 && ref_b64) {
 };
 
 
-  const { image: qaImage, qa } = await maybeAutoQA(env, {
-    ref_b64,
-    prev_b64: prevBare,
-    curr_b64,
-    hashes: hashesFromReq || {},
-    meta,
-    originalImage: { b64: curr_b64, image_url: g.image_url },
-    // regenFn: null  // tills du vill auto-editera via Flux/Gemini
-    regenFn: null,
-  });
+const { image: qaImage, qa } = await maybeAutoQA(env, {
+  ref_b64,
+  prev_b64: prevBare,
+  curr_b64,
+  hashes: hashesFromReq || {},
+  meta,
+  originalImage: { b64: curr_b64, image_url: g.image_url },
+  regenFn: async ({ ref_b64, prev_b64, curr_b64, qa, meta }) => {
+    // 1) Försök FLUX.2 Pro edit via fal
+    let edited = null;
+    try {
+      edited = await fluxEditWithFal(env, { curr_b64, qa, meta });
+    } catch (e) {
+      console.error("[QA->FLUX] error:", e?.message || e);
+    }
+
+    // 2) Om FLUX misslyckas → fallback till Gemini-edit
+    if (!edited || (!edited.image_url && !edited.b64)) {
+      try {
+        edited = await geminiEditFallback(env, {
+          ref_b64,
+          curr_b64,
+          prev_b64,
+          qa,
+          meta,
+        });
+      } catch (e) {
+        console.error("[QA->GeminiFallback] error:", e?.message || e);
+      }
+    }
+
+    // Om ALLT faller → null, så maybeAutoQA returnerar originalet
+    return edited || null;
+  },
+});
+
 
   if (qaImage?.image_url) finalImageUrl = qaImage.image_url;
   if (qaImage?.b64)       finalB64      = qaImage.b64;
