@@ -1126,6 +1126,74 @@ async function runImageQAMasterWithGPT(env, {
     return { ok: true, needs_edit: false, skipped: true, reason: "exception" };
   }
 }
+async function maybeAutoQA(env, {
+  ref_b64,
+  prev_b64,
+  curr_b64,
+  hashes = {},
+  meta = {},
+  originalImage,
+  regenFn = null,
+}) {
+  // Om vi inte har modell eller API-nyckel → hoppa över QA
+  if (!env.QA_MASTER_MODEL || !env.API_KEY) {
+    console.log("[QA] skipped – no model or key");
+    return {
+      image: originalImage,
+      qa: {
+        ok: true,
+        needs_edit: false,
+        flags: {},
+        scores: {},
+        skipped: true,
+        reason: "no_model_or_key",
+      },
+    };
+  }
+
+  // Om vi saknar ref eller current → hoppa över QA
+  if (!ref_b64 || !curr_b64) {
+    console.log("[QA] skipped – missing images");
+    return {
+      image: originalImage,
+      qa: {
+        ok: true,
+        needs_edit: false,
+        flags: {},
+        scores: {},
+        skipped: true,
+        reason: "missing_images",
+      },
+    };
+  }
+
+  // Kör själva QA-analysen
+  const qa = await runImageQAMasterWithGPT(env, {
+    ref_b64,
+    prev_b64,
+    curr_b64,
+    hashes,
+    meta,
+  });
+
+  // Om vi inte ska auto-editera → returnera originalbilden + QA-resultat
+  if (!qa.needs_edit || !regenFn) {
+    return { image: originalImage, qa };
+  }
+
+  // (framtida flöde: auto-edit via Flux/Gemini)
+  let edited = null;
+  try {
+    edited = await regenFn({ ref_b64, prev_b64, curr_b64, qa, meta });
+  } catch (e) {
+    console.error("[QA] regenFn failed:", e?.message || e);
+  }
+
+  return {
+    image: edited || originalImage,
+    qa,
+  };
+}
 
 
 
