@@ -1285,8 +1285,8 @@ INPUT: En outline (handling).
 • Skapa en visuell plan (“bible”) och detaljerade bildinstruktioner för varje sida.
 • Se till att varje sida är visuellt distinkt (ny vinkel, tydlig rörelse i scenen).
 
-• "wardrobe" i bible MÅSTE vara en detaljerad, komma-separerad VISUELL beskrivning på engelska av hjälten:
-  - DÅLIGT: "Nice clothes suitable for winter."
+• "wardrobe" i bible MÅSTE vara en detaljerad, komma-separerad VISUELL beskrivning på engelska av hjältens kläder:
+  - DÅLIGT: "Nice clothes suitable for winter." "Grey fur, yellow eyes."
   - BRA: "Red wool knitted sweater, blue denim jeans, yellow rubber boots, red beanie hat."
   - Denna sträng används direkt som prompt till bild-AI:n. Var konkret och konsekvent.
 
@@ -3277,6 +3277,7 @@ async function handleImagesNext(req, env) {
       prev_b64,      // IMAGE 2 – senaste sida (om finns)
       coherence_code,
       style_refs_b64,
+      hashes = null,   // 🔹 NYTT: plocka ut hashes direkt
     } = await req.json().catch(() => ({}));
 
     // --- 0. Grundkoll ---
@@ -3394,7 +3395,8 @@ const prevBare = prev_b64 || null;             // du skickar in bare b64 som pre
 
 // Hashes – KOMMER från frontend eller annat lager
 // (t.ex. som en del av body: { hashes: { ref_hash, prev_hash, curr_hash } })
-const hashesFromReq = body.hashes || null;
+const hashesFromReq = hashes || null;
+
 
 let finalImageUrl = g.image_url;
 let finalB64      = curr_b64;
