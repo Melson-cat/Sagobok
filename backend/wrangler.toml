@@ -18,7 +18,7 @@ GELATO_DEFAULT_CURRENCY = "SEK"
 EMAIL_FROM = "Sagostugan <no-reply@sagostugan.se>"
 QA_ENABLED = "1"
 QA_AUTO_REGEN = "0" 
-QA_MASTER_MODEL = "gpt-5-mini"
+QA_MASTER_MODEL = "gpt-5-nano"
 
 [observability]
 [observability.logs]
