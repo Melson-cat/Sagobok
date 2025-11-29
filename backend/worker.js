@@ -859,290 +859,271 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
   throw lastError || new Error("Gemini failed");
 }
 
+// -------------------------- IMAGE QA – GPT-5 mini + hash --------------------------
 
-// -------------------------- IMAGE QA (Gemini vision) --------------------------
-
-
-// -------------------------- IMAGE QA (Gemini vision) --------------------------
-
-// Enkel helper: plocka ut texten ur ett Gemini-svar
-function extractGeminiText(resp) {
-  try {
-    const cand = resp?.candidates?.[0];
-    const parts = cand?.content?.parts || [];
-    const texts = parts
-      .map((p) => (typeof p.text === "string" ? p.text : ""))
-      .filter(Boolean);
-    return texts.join("\n").trim();
-  } catch {
-    return "";
-  }
+// Trygg JSON-parse
+function safeJsonParse(str) {
+  try { return JSON.parse(str); } catch { return null; }
 }
 
-function clampScore(v, fb = 10) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return fb;
-  return Math.max(0, Math.min(10, n));
+// Hamming-distance för hex-strängar (för dina pHash/liknande)
+function hammingDistanceHex(a, b) {
+  if (!a || !b) return null;
+  const la = a.length;
+  const lb = b.length;
+  const len = Math.max(la, lb);
+  const sa = a.padStart(len, "0");
+  const sb = b.padStart(len, "0");
+
+  let dist = 0;
+  for (let i = 0; i < len; i++) {
+    const va = parseInt(sa[i], 16);
+    const vb = parseInt(sb[i], 16);
+    if (Number.isNaN(va) || Number.isNaN(vb)) continue;
+    const xor = va ^ vb;
+    // räkna bitar i nibble
+    dist += ((xor >> 0) & 1) + ((xor >> 1) & 1) + ((xor >> 2) & 1) + ((xor >> 3) & 1);
+  }
+  return dist;
 }
 
 /**
- * Kör en QA på en genererad bild:
- *  - ref_b64  = MASTER-referens (hjältens identitet)
- *  - prev_b64 = föregående sida (miljö/ljus/variation)
- *  - curr_b64 = aktuell sida som precis genererats
- *  - meta     = text-kontekst (scene_en, action_visual, wardrobe_signature, page, category, style)
+ * Master QA med GPT (ingen Gemini alls).
  *
- * Returnerar:
- * {
- *   ok: true/false,
- *   needs_edit: true/false,
- *   flags: { identity_mismatch, environment_mismatch, too_similar_to_previous, missing_action, wardrobe_mismatch },
- *   scores: { identity, environment, action, variation },
- *   reasons: [...],
- *   suggestion: "..."
- * }
+ * - ref_b64, prev_b64, curr_b64 = rena base64-strängar (utan data:image-prefix)
+ * - hashes = { ref_hash, prev_hash, curr_hash } som hex-strängar (pHash eller liknande)
+ * - meta = { page, scene_en, action_visual, category, style }
+ *
+ * Kräver:
+ * - env.OPENAI_API_KEY
+ * - env.QA_MASTER_MODEL (t.ex. "gpt-5-mini") – annars fallback
  */
-async function runImageQAWithGemini(env, { ref_b64, prev_b64, curr_b64, meta = {} }) {
-  const apiKey = env.GEMINI_API_KEY;
+async function runImageQAMasterWithGPT(env, {
+  ref_b64,
+  prev_b64,
+  curr_b64,
+  hashes = {},
+  meta = {},
+}) {
+  const apiKey = env.OPENAI_API_KEY;
+  const model = env.QA_MASTER_MODEL || "gpt-5-mini"; // sätt korrekt modell i ENV
+
   if (!apiKey) {
-    console.warn("[QA] No GEMINI_API_KEY, skipping QA");
-    return { ok: true, skipped: true, reason: "no_api_key" };
+    console.warn("[QA Master] No OPENAI_API_KEY, skipping QA");
+    return { ok: true, needs_edit: false, skipped: true, reason: "no_api_key" };
   }
 
   if (!ref_b64 || !curr_b64) {
-    console.warn("[QA] Missing ref or current image, skipping QA");
-    return { ok: true, skipped: true, reason: "missing_images" };
+    console.warn("[QA Master] Missing ref or curr image, skipping QA");
+    return { ok: true, needs_edit: false, skipped: true, reason: "missing_images" };
   }
 
-  const modelId = "gemini-2.5-flash"; // text + bild, snabb och billig
+  const { ref_hash, prev_hash, curr_hash } = hashes || {};
+  const distRefCurr  = hammingDistanceHex(ref_hash,  curr_hash);
+  const distPrevCurr = hammingDistanceHex(prev_hash, curr_hash);
+  const distRefPrev  = hammingDistanceHex(ref_hash,  prev_hash);
 
-  const parts = [];
-
-  // Bild 1 – MASTER REFERENCE
-  parts.push({ text: "IMAGE_REF: This is the master reference for the main hero." });
-  parts.push({
-    inlineData: {
-      mimeType: "image/png",
-      data: ref_b64,
-    },
-  });
-
-  // Bild 2 – PREVIOUS PAGE (om finns)
-  if (prev_b64) {
-    parts.push({
-      text: "IMAGE_PREV: This is the previous page of the story (environment & mood only).",
-    });
-    parts.push({
-      inlineData: {
-        mimeType: "image/png",
-        data: prev_b64,
-      },
-    });
-  }
-
-  // Bild 3 – CURRENT PAGE
-  parts.push({ text: "IMAGE_CURR: This is the newly generated page that should be evaluated." });
-  parts.push({
-    inlineData: {
-      mimeType: "image/png",
-      data: curr_b64,
-    },
-  });
-
-  // Text-kontekst
-  const page = meta.page ?? null;
-  const scene_en = meta.scene_en || "";
+  const page          = meta.page ?? null;
+  const scene_en      = meta.scene_en || "";
   const action_visual = meta.action_visual || "";
-  const category = meta.category || "kids";
-  const style = meta.style || "cartoon";
-  const wardrobeSignature = meta.wardrobe_signature || "";
+  const category      = meta.category || "kids";
+  const style         = meta.style || "cartoon";
 
-  parts.push({
-    text: [
-      "You are a VERY STRICT image QA system for a children's picture book.",
-      "",
-      "You see:",
-      "- IMAGE_REF: the master identity of the hero (face, fur/skin, proportions, clothing/outfit).",
-      "- IMAGE_PREV: the previous story frame (if provided).",
-      "- IMAGE_CURR: the current page that must be checked.",
-      "",
-      `Book category: ${category}.`,
-      `Visual style (hint): ${style}.`,
-      page != null ? `Page number: ${page}.` : "",
-      wardrobeSignature
-        ? `Wardrobe / outfit signature that MUST be preserved: ${wardrobeSignature}`
-        : "",
-      "",
-      "Text for the CURRENT page (IMAGE_CURR):",
-      scene_en ? `SCENE_EN: ${scene_en}` : "",
-      action_visual ? `ACTION_VISUAL: ${action_visual}` : "",
-      "",
-      "TASK:",
-      "1. Compare IMAGE_CURR to IMAGE_REF for identity:",
-      "   - same species (cat vs dog, kid vs adult)",
-      "   - same fur/skin color and pattern",
-      "   - same facial structure and proportions",
-      "   - same clothing / outfit (especially collar, color, accessories).",
-      "2. Compare environment continuity:",
-      "   - If IMAGE_PREV exists, environment, lighting, and mood should feel like the same world.",
-      "3. Check story progression & variation:",
-      "   - The hero should clearly perform the requested action (ACTION_VISUAL / SCENE_EN).",
-      "   - IMAGE_CURR must NOT be almost identical to IMAGE_PREV (camera angle, pose, expression) unless the text explicitly demands it.",
-      "",
-      "Return a SINGLE JSON object ONLY, no extra text.",
-      "JSON SHAPE (exact):",
-      "{",
-      '  "scores": {',
-      '    "identity": number,   // 0-10, 10 = perfect identity match with IMAGE_REF',
-      '    "environment": number,// 0-10, 10 = perfect continuity with previous page/world',
-      '    "action": number,     // 0-10, 10 = perfectly matches the described action',
-      '    "variation": number   // 0-10, 10 = clearly a NEW moment, not a near-duplicate of IMAGE_PREV',
-      "  },",
-      '  "flags": {',
-      '    "identity_mismatch": boolean,',
-      '    "environment_mismatch": boolean,',
-      '    "too_similar_to_previous": boolean,',
-      '    "missing_action": boolean,',
-      '    "wardrobe_mismatch": boolean',
-      "  },",
-      '  "reasons": string[],',
-      '  "suggestion": string',
-      "}",
-      "",
-      "IMPORTANT:",
-      "- Do NOT invent fields like 'model_uncertain' or 'ok' or 'needs_edit'.",
-      "- If you are unsure, give mid-range scores (4-7) but still fill all fields.",
-      "- Be EXTRA STRICT on identity and wardrobe: even medium changes (different fur color, missing collar, different eye shape) should lower the identity score.",
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  });
-
-  const body = {
-    contents: [{ role: "user", parts }],
-    generationConfig: {
-      temperature: 0.1,
-      topP: 0.8,
-      responseMimeType: "application/json",
-    },
+  const hashSummary = {
+    ref_hash:   ref_hash  || null,
+    prev_hash:  prev_hash || null,
+    curr_hash:  curr_hash || null,
+    dist_ref_curr:  distRefCurr,
+    dist_prev_curr: distPrevCurr,
+    dist_ref_prev:  distRefPrev,
   };
 
+  // Bygg data:image-URLs
+  const refData  = `data:image/png;base64,${ref_b64}`;
+  const currData = `data:image/png;base64,${curr_b64}`;
+  const prevData = prev_b64 ? `data:image/png;base64,${prev_b64}` : null;
+
+  const messages = [
+    {
+      role: "system",
+      content:
+        "You are a VERY STRICT image QA system for a children's picture book. " +
+        "You must check if a newly generated page is visually consistent with the reference hero, " +
+        "the previous page and the story text. Output ONLY JSON, no prose.",
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: [
+            "You receive three images and metadata:",
+            "- REF: master identity of the hero (must stay consistent across all pages).",
+            "- PREV: previous page (environment, mood, composition). May be null.",
+            "- CURR: current page to evaluate.",
+            "",
+            `Page: ${page ?? "unknown"}`,
+            `Category: ${category}`,
+            `Style hint: ${style}`,
+            "",
+            "Story text for CURRENT page:",
+            scene_en ? `SCENE_EN: ${scene_en}` : "",
+            action_visual ? `ACTION_VISUAL: ${action_visual}` : "",
+            "",
+            "You also receive perceptual hash information (pHash or similar):",
+            JSON.stringify(hashSummary, null, 2),
+            "",
+            "Use BOTH the visual content AND the hash distances to judge:",
+            "- identity consistency (hero looks like the same character as REF)",
+            "- wardrobe consistency (same outfit / no random new clothes)",
+            "- environment continuity (same world & mood as PREV, if provided)",
+            "- action clarity (hero clearly performs the described action)",
+            "- variation (CURR must not be almost identical to PREV unless text demands it)",
+            "",
+            "Output STRICT JSON with EXACTLY this shape:",
+            "{",
+            '  \"ok\": boolean,',
+            '  \"needs_edit\": boolean,',
+            '  \"flags\": {',
+            '    \"identity_mismatch\": boolean,',
+            '    \"wardrobe_mismatch\": boolean,',
+            '    \"environment_mismatch\": boolean,',
+            '    \"too_similar_to_previous\": boolean,',
+            '    \"missing_action\": boolean',
+            "  },",
+            '  \"scores\": {',
+            '    \"identity\": number,',
+            '    \"environment\": number,',
+            '    \"action\": number,',
+            '    \"variation\": number',
+            "  },",
+            '  \"reasons\": string[],',
+            '  \"suggestion\": string',
+            "}",
+            "",
+            "Scoring rules (0–10):",
+            "- 0–3 = very bad / clearly wrong.",
+            "- 4–6 = noticeable problems.",
+            "- 7–8 = acceptable but not perfect.",
+            "- 9–10 = excellent / very strong.",
+            "",
+            "Flag rules:",
+            "- identity_mismatch = true if identity <= 7 OR hero clearly looks like a different character.",
+            "- wardrobe_mismatch = true if outfit/clothing changes in a way that breaks continuity.",
+            "- environment_mismatch = true if environment <= 6 OR background/lighting feels like a different world.",
+            "- too_similar_to_previous = true if variation <= 4 and PREV exists AND hashes suggest near-duplicate.",
+            "- missing_action = true if hero does not clearly perform the described action.",
+            "",
+            "If ANY flag is true, needs_edit must be true.",
+            "ok must be true ONLY if all flags are false.",
+          ].filter(Boolean).join("\n"),
+        },
+        // Bilder in i GPT
+        { type: "text", text: "\nREF image:" },
+        { type: "image_url", image_url: { url: refData } },
+        ...(prevData
+          ? [
+              { type: "text", text: "\nPREV image:" },
+              { type: "image_url", image_url: { url: prevData } },
+            ]
+          : []),
+        { type: "text", text: "\nCURR image:" },
+        { type: "image_url", image_url: { url: currData } },
+      ],
+    },
+  ];
+
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
       },
-    );
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: 0.1,
+        response_format: { type: "json_object" },
+      }),
+    });
 
-    const txt = await res.text();
+    const json = await res.json();
     if (!res.ok) {
-      console.error("[QA] Gemini QA HTTP error:", res.status, txt);
-      return { ok: true, skipped: true, reason: `http_${res.status}` };
+      console.error("[QA Master] HTTP error:", res.status, json);
+      return { ok: true, needs_edit: false, skipped: true, reason: `http_${res.status}` };
     }
 
-    let data;
-    try {
-      data = JSON.parse(txt);
-    } catch {
-      // Fallback: vanligt Gemini-svar, plocka TEXT och parse JSON därifrån
-      try {
-        const raw = JSON.parse(txt);
-        const t = extractGeminiText(raw);
-        data = JSON.parse(t);
-      } catch (e) {
-        console.error("[QA] Failed to parse QA JSON:", e, txt.slice(0, 300));
-        return { ok: true, skipped: true, reason: "parse_error" };
-      }
-    }
+    const content = json.choices?.[0]?.message?.content || "{}";
+    const parsed = safeJsonParse(content) || {};
 
-    const scores = data.scores || {};
-    const rawFlags = data.flags || {};
+    const flags = parsed.flags || {};
+    const scores = parsed.scores || {};
 
-    const identity = clampScore(scores.identity, 10);
-    const environment = clampScore(scores.environment, 10);
-    const action = clampScore(scores.action, 10);
-    const variation = clampScore(scores.variation, 7);
-
-    // 🔧 Våra egna hårda trösklar
-    const flags = {
-      identity_mismatch:
-        identity < 8 || !!rawFlags.identity_mismatch || !!rawFlags.wardrobe_mismatch,
-      environment_mismatch: environment < 6 || !!rawFlags.environment_mismatch,
-      missing_action: action < 7 || !!rawFlags.missing_action,
-      too_similar_to_previous:
-        variation < 4 || !!rawFlags.too_similar_to_previous,
-      wardrobe_mismatch: !!rawFlags.wardrobe_mismatch,
+    const out = {
+      ok: !!parsed.ok,
+      needs_edit: !!parsed.needs_edit,
+      flags: {
+        identity_mismatch: !!flags.identity_mismatch,
+        wardrobe_mismatch: !!flags.wardrobe_mismatch,
+        environment_mismatch: !!flags.environment_mismatch,
+        too_similar_to_previous: !!flags.too_similar_to_previous,
+        missing_action: !!flags.missing_action,
+      },
+      scores: {
+        identity: Number(scores.identity ?? 0),
+        environment: Number(scores.environment ?? 0),
+        action: Number(scores.action ?? 0),
+        variation: Number(scores.variation ?? 0),
+      },
+      reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [],
+      suggestion: parsed.suggestion || "",
+      skipped: false,
     };
 
-    const reasons = Array.isArray(data.reasons) ? data.reasons.slice() : [];
-
-    // Lägg till default-reasons baserat på våra flaggor om modellen inte gav något
-    if (!reasons.length) {
-      if (flags.identity_mismatch) {
-        reasons.push("identity_mismatch");
-      }
-      if (flags.environment_mismatch) {
-        reasons.push("environment_mismatch");
-      }
-      if (flags.missing_action) {
-        reasons.push("missing_action");
-      }
-      if (flags.too_similar_to_previous) {
-        reasons.push("too_similar_to_previous");
-      }
-      if (flags.wardrobe_mismatch) {
-        reasons.push("wardrobe_mismatch");
-      }
-    }
-
-    const needs_edit =
-      flags.identity_mismatch ||
-      flags.environment_mismatch ||
-      flags.missing_action ||
-      flags.too_similar_to_previous ||
-      flags.wardrobe_mismatch;
-
-    const ok = !needs_edit;
-
-    return {
-      ok,
-      needs_edit,
-      flags,
-      scores: { identity, environment, action, variation },
-      reasons,
-      suggestion: data.suggestion || "",
-    };
+    return out;
   } catch (e) {
-    console.error("[QA] Unexpected QA error:", e?.message || e);
-    return { ok: true, skipped: true, reason: "exception" };
+    console.error("[QA Master] Unexpected error:", e?.message || e);
+    return { ok: true, needs_edit: false, skipped: true, reason: "exception" };
   }
 }
 
+/**
+ * maybeAutoQA – enkel wrapper:
+ *
+ * - QA_ENABLED = "1" → kör QA, annars no-op
+ * - QA_AUTO_REGEN = "1" + regenFn → låt QA trigga auto-regenerering
+ */
 async function maybeAutoQA(env, {
   ref_b64,
   prev_b64,
   curr_b64,
+  hashes,
   meta,
-  originalImage,
-  regenFn, // async funktion som kan göra en ny bild om QA klagar
+  originalImage, // { b64, image_url }
+  regenFn,       // async (qa) => { b64, image_url } eller null
 }) {
   const enabled = String(env.QA_ENABLED || "").toLowerCase() === "1";
-  if (!enabled) return { image: originalImage, qa: { ok: true, skipped: true } };
+  if (!enabled) {
+    return {
+      image: originalImage,
+      qa: { ok: true, needs_edit: false, skipped: true, reason: "disabled" },
+    };
+  }
 
   console.log("[QA] starting", {
     page: meta?.page,
     ref_len: ref_b64 ? ref_b64.length : 0,
     prev_len: prev_b64 ? prev_b64.length : 0,
     curr_len: curr_b64 ? curr_b64.length : 0,
+    hashes,
   });
 
-  const qa = await runImageQAWithGemini(env, {
+  const qa = await runImageQAMasterWithGPT(env, {
     ref_b64,
     prev_b64,
     curr_b64,
+    hashes,
     meta,
   });
 
@@ -1158,12 +1139,11 @@ async function maybeAutoQA(env, {
 
   const autoRegen = String(env.QA_AUTO_REGEN || "").toLowerCase() === "1";
 
-  // Om QA säger att bilden är okej eller om vi bara kör log-läge → returnera originalet
   if (!qa.needs_edit || !autoRegen || !regenFn) {
+    // Antingen allt OK, eller så kör vi bara log-läge
     return { image: originalImage, qa };
   }
 
-  // AUTO-REGEN: låt regenFn bygga ny prompt och kalla image-generatorn igen
   console.log("[QA] auto-regenerate requested", {
     page: meta?.page,
     suggestion: qa.suggestion,
@@ -1172,16 +1152,20 @@ async function maybeAutoQA(env, {
   try {
     const regenImage = await regenFn(qa);
     if (!regenImage) throw new Error("regenFn returned null/undefined");
-    console.log("[QA] auto-regenerate OK", {
-      page: meta?.page,
-      provider: regenImage.provider,
-    });
-    return { image: regenImage, qa: { ...qa, auto_regenerated: true } };
+    console.log("[QA] auto-regenerate OK", { page: meta?.page });
+    return {
+      image: regenImage,
+      qa: { ...qa, auto_regenerated: true },
+    };
   } catch (e) {
     console.error("[QA] auto-regenerate FAILED, keeping original", e?.message || e);
-    return { image: originalImage, qa: { ...qa, auto_regen_failed: true } };
+    return {
+      image: originalImage,
+      qa: { ...qa, auto_regen_failed: true },
+    };
   }
 }
+
 
 
 
@@ -3399,49 +3383,62 @@ async function handleImagesNext(req, env) {
       payload.style_refs_b64 = style_refs_b64;
     }
 
-    // Kortare timeout & färre försök för att minska risken att Workern dör
-    const g = await geminiImage(env, payload, 35000, 2);
+    // ... efter att du fått g = geminiImage(...) (eller vad du nu använder för bildmodell)
+const g = await geminiImage(env, payload, 35000, 2);
+if (!g?.image_url) return err("No image from Gemini", 502);
 
-    if (!g?.image_url) return err("No image from Gemini", 502);
+// base64 för aktuella sidan (behövs för QA + ev. senare edit)
+const curr_b64 = g.b64 || null;
+const ref_b64  = ref_image_b64 || null;        // från request body
+const prevBare = prev_b64 || null;             // du skickar in bare b64 som prev_b64
 
-    // ----------------- AUTO-QA LAGER -----------------
-    // Vi skickar med lite meta så QA:n fattar vad som ska hända i scenen
-    const sceneText =
-      pg.scene_en || pg.scene || pg.text || "";
-    const actionVisual = pg.action_visual || "";
+// Hashes – KOMMER från frontend eller annat lager
+// (t.ex. som en del av body: { hashes: { ref_hash, prev_hash, curr_hash } })
+const hashesFromReq = body.hashes || null;
 
-    const category = (story?.book?.category || "kids").toLowerCase();
-    const styleUsed = style || story?.book?.style || "cartoon";
+let finalImageUrl = g.image_url;
+let finalB64      = curr_b64;
 
-    // Om geminiImage returnerar b64 använder vi den, annars försöker vi extrahera
-    const curr_b64 = g.b64 || null;
+if (curr_b64 && ref_b64) {
+  const meta = {
+    page,
+    scene_en: pg.scene_en || pg.scene || pg.text || "",
+    action_visual: pg.action_visual || "",
+    category: story.book?.category || story.book?.bible?.category || "kids",
+    style,
+  };
 
-    const { image: finalImage, qa } = await maybeAutoQA(env, {
-      ref_b64: ref_image_b64,
-      prev_b64: prev_b64 || null,
-      curr_b64,
-      meta: {
-        page,
-        scene_en: sceneText,
-        action_visual: actionVisual,
-        category,
-        style: styleUsed,
-      },
-      originalImage: g,
-      // regenFn är valfri – vi kan låta den vara null i början
-      regenFn: null,
-    });
+  const { image: qaImage, qa } = await maybeAutoQA(env, {
+    ref_b64,
+    prev_b64: prevBare,
+    curr_b64,
+    hashes: hashesFromReq || {},
+    meta,
+    originalImage: { b64: curr_b64, image_url: g.image_url },
+    // regenFn: null  // tills du vill auto-editera via Flux/Gemini
+    regenFn: null,
+  });
 
-    // finalImage har samma shape som g: { b64?, image_url, provider }
-    if (!finalImage?.image_url) return err("No image from Gemini (after QA)", 502);
+  if (qaImage?.image_url) finalImageUrl = qaImage.image_url;
+  if (qaImage?.b64)       finalB64      = qaImage.b64;
 
-    return ok({
-      page,
-      image_url: finalImage.image_url,
-      provider: finalImage.provider || g.provider || "google",
-      qa: qa || null, // extra debug-info (frontend kan ignorera)
-      // prompt: prompt, // <– bara om du vill returnera den till frontend
-    });
+  console.log("[IMAGES/NEXT] QA summary", {
+    page,
+    ok: qa.ok,
+    needs_edit: qa.needs_edit,
+    flags: qa.flags,
+    scores: qa.scores,
+  });
+}
+
+return ok({
+  page,
+  image_url: finalImageUrl,
+  provider: g.provider || "gemini",
+  // optional: debug
+  // qa_scores: qa?.scores,
+});
+
 
   } catch (e) {
     return err(e?.message || "images/next failed", 500);

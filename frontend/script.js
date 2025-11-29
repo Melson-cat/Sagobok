@@ -95,12 +95,14 @@ const state = {
   plan: null,
 
   ref_b64: null,
+   ref_hash: null,   
 
   // local preview
   cover_preview_url: null, // can be data_url/http
   cover_image_id: null,
 
-  images_by_page: new Map(), // page -> {image_url|data_url|image_id}
+  images_by_page: new Map(),
+  hashes_by_page: new Map(),  
 };
 
 async function fetchJSON(url, init) {
@@ -189,6 +191,55 @@ function dataUrlToBareB64(dataUrl){
   const m = dataUrl.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
   return m ? m[1] : null;
 }
+
+// Enkel "perceptual" hash (aHash) → 64-bit → 16 hex-tecken
+async function imageDataUrlToHashHex(dataUrl, size = 8) {
+  if (!dataUrl || !dataUrl.startsWith("data:image/")) return null;
+
+  const img = await new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => resolve(im);
+    im.onerror = reject;
+    im.src = dataUrl;
+  });
+
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  // Rita ner till liten ruta
+  ctx.drawImage(img, 0, 0, size, size);
+  const { data } = ctx.getImageData(0, 0, size, size);
+
+  const gray = [];
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    // enkel luma
+    gray.push(0.299 * r + 0.587 * g + 0.114 * b);
+  }
+
+  const avg =
+    gray.reduce((sum, v) => sum + v, 0) / Math.max(1, gray.length);
+
+  // Bygg 64-bit hash
+  let bits = "";
+  for (const g of gray) {
+    bits += g >= avg ? "1" : "0";
+  }
+
+  // Konvertera till hex (8 bytes = 16 hex)
+  let hex = "";
+  for (let i = 0; i < 64; i += 4) {
+    const nibble = bits.slice(i, i + 4);
+    hex += parseInt(nibble, 2).toString(16);
+  }
+  return hex;
+}
+
 
 function saveOrderId(id){ try { sessionStorage.setItem(ORDER_ID_KEY, id); } catch {} }
 function loadOrderId(){ try { return sessionStorage.getItem(ORDER_ID_KEY) || null; } catch { return null; } }
@@ -779,12 +830,15 @@ async function onSubmit(e) {
 
 
    // full reset
-  state.story = null;
+   state.story = null;
   state.plan = null;
   state.ref_b64 = null;
+  state.ref_hash = null;              
   state.images_by_page.clear();
+  state.hashes_by_page = new Map();  
   state.cover_preview_url = null;
   state.cover_image_id = null;
+
 
   els.previewGrid.innerHTML = "";
   setStatus(null);
@@ -881,6 +935,19 @@ const refPreviewUrl =
 
 if (refPreviewUrl) {
   console.log("[BokPiloten] Ref image preview URL:", refPreviewUrl);
+
+  // 🔹 Beräkna hash för hjältereferensen
+  try {
+    const du = refPreviewUrl.startsWith("data:")
+      ? refPreviewUrl
+      : await urlToDataURL(refPreviewUrl);
+    const hashHex = await imageDataUrlToHashHex(du);
+    state.ref_hash = hashHex || null;
+    console.log("[BokPiloten] Ref hash:", hashHex);
+  } catch (err) {
+    console.warn("[BokPiloten] Kunde inte beräkna ref-hash", err);
+    state.ref_hash = null;
+  }
 }
 
    // 3) INTERIOR IMAGES — SEKVENSIELLT (Kedjan)
@@ -901,40 +968,64 @@ let prevBareFrames = [];
       }
 
       try {
+
+        const prevPageNum = pg.page - 1;
+const prev_hash =
+  (state.hashes_by_page && state.hashes_by_page.get(prevPageNum)) || null;
+
         // ANROPET: Skicka med prev_b64 (om det finns)
         const res = await fetch(`${API}/api/images/next`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-            style: state.form.style,
-            story: state.story,
-            page: pg.page,
-            ref_image_b64: state.ref_b64,
-            // ➜ endast SENASTE ramen som prev_b64
-            prev_b64:
-              prevBareFrames.length
-                ? prevBareFrames[prevBareFrames.length - 1]
-                : null,
-          }),
+    body: JSON.stringify({
+  style: state.form.style,
+  story: state.story,
+  page: pg.page,
+  ref_image_b64: state.ref_b64,
+  prev_b64:
+    prevBareFrames.length
+      ? prevBareFrames[prevBareFrames.length - 1]
+      : null,
+  hashes: {
+    ref_hash: state.ref_hash || null,
+    prev_hash,
+    curr_hash: null, // backend kan räkna själv om det vill
+  },
+}),
+
         });
         
-        const j = await res.json().catch(() => ({}));
-        if (!res.ok || j?.error || !j?.image_url) throw new Error(j?.error || `HTTP ${res.status}`);
+      const j = await res.json().catch(() => ({}));
+if (!res.ok || j?.error || !j?.image_url) throw new Error(j?.error || `HTTP ${res.status}`);
 
-        // Visa bilden direkt
-        fillCard(pg.page, j.image_url, "Gemini");
-        state.images_by_page.set(pg.page, { image_url: j.image_url });
+// Visa bilden direkt
+fillCard(pg.page, j.image_url, "Gemini");
+state.images_by_page.set(pg.page, { image_url: j.image_url });
 
-       const du = await urlToDataURL(j.image_url);
+const du = await urlToDataURL(j.image_url);
 const bare = dataUrlToBareB64(du);
+
+// 🔹 Beräkna hash för den här sidan
+let hashHex = null;
+if (du) {
+  try {
+    hashHex = await imageDataUrlToHashHex(du);
+  } catch (err) {
+    console.warn("Kunde inte beräkna hash för page", pg.page, err);
+  }
+}
+if (hashHex) {
+  if (!state.hashes_by_page) state.hashes_by_page = new Map();
+  state.hashes_by_page.set(pg.page, hashHex);
+}
 
 if (bare) {
   prevBareFrames.push(bare);
-  // Håll bara de senaste 3 (eller 4) för token-budget och relevans
   if (prevBareFrames.length > 3) {
     prevBareFrames.shift();
   }
 }
+
 
 
         // Ladda upp till Cloudflare i bakgrunden
@@ -1068,16 +1159,26 @@ async function regenerateOne(page) {
   }
 
   try {
+
+    const prevHash =
+  (state.hashes_by_page && state.hashes_by_page.get(page - 1)) || null;
+
     const res = await fetch(`${API}/api/image/regenerate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        page,
-        story: state.story,
-        ref_image_b64: state.ref_b64,
-        prev_b64: prevB64,
-        style: state.form.style,
-      }),
+     body: JSON.stringify({
+  page,
+  story: state.story,
+  ref_image_b64: state.ref_b64,
+  prev_b64: prevB64,
+  style: state.form.style,
+  hashes: {
+    ref_hash: state.ref_hash || null,
+    prev_hash: prevHash,
+    curr_hash: null,
+  },
+}),
+
     });
 
     const j = await res.json().catch(() => ({}));
@@ -1089,11 +1190,25 @@ async function regenerateOne(page) {
     sk.remove();
     await fillCard(page, j.image_url, j.provider || "Gemini");
 
-    // Uppdatera state
-    state.images_by_page.set(page, {
-      image_url: j.image_url,
-      provider: j.provider || "Gemini",
-    });
+   
+   // Uppdatera state (bild)
+state.images_by_page.set(page, {
+  image_url: j.image_url,
+  provider: j.provider || "Gemini",
+});
+
+// 🔹 Uppdatera hash för sidan
+try {
+  const du = await urlToDataURL(j.image_url);
+  if (du) {
+    const hashHex = await imageDataUrlToHashHex(du);
+    if (!state.hashes_by_page) state.hashes_by_page = new Map();
+    state.hashes_by_page.set(page, hashHex || null);
+  }
+} catch (err) {
+  console.warn("Kunde inte uppdatera hash för regen page", page, err);
+}
+
   } catch (e) {
     console.error("regenerateOne error", e);
     sk.remove();
