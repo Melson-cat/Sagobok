@@ -3619,7 +3619,7 @@ const { image: qaImage, qa } = await maybeAutoQA(env, {
 return ok({
   page,
   image_url: finalImageUrl,
-  provider,
+   provider: g.provider || "gemini",
   qa_ok: qa?.ok ?? null,
   qa_needs_edit: qa?.needs_edit ?? null,
   qa_flags: qa?.flags ?? null,
