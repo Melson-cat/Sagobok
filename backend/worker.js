@@ -3426,12 +3426,13 @@ async function handleImagesNext(req, env) {
       prev_b64,      // IMAGE 2 – senaste sida (om finns)
       coherence_code,
       style_refs_b64,
-      hashes = null,   // 🔹 NYTT: plocka ut hashes direkt
+      hashes = null, // kommer från frontend
     } = await req.json().catch(() => ({}));
 
     // --- 0. Grundkoll ---
     if (!story?.book?.pages) return err("Missing story.pages", 400);
     if (!ref_image_b64)      return err("Missing ref_image_b64", 400);
+    if (!Number.isFinite(page)) return err("Missing/invalid page", 400);
 
     const pages = story.book.pages;
     const pg = pages.find((p) => p.page === page);
@@ -3470,16 +3471,17 @@ async function handleImagesNext(req, env) {
       : "";
 
     // --- 3. Bas-prompt (SCENE_EN + metadata) ---
+    // OBS: här ska vi skicka sidnummer, inte hela page-objektet
     const basePrompt = buildFramePrompt({
       style,
       story,
-      page: pg,
+      page, // numeric page index
       characterName: heroName,
       wardrobe_signature: wardrobe,
       coherence_code,
     });
 
-    // --- 4. Bildinstruktioner: exakt VAD bilderna betyder ---
+    // --- 4. Bildinstruktioner ---
     const imageRefLines = [
       "*** IMAGE REFERENCES ***",
       "IMAGE 1: Main hero identity (MASTER reference).",
@@ -3511,17 +3513,17 @@ async function handleImagesNext(req, env) {
           "This is the first visible moment in the story. Start the visual narrative.",
         ].join("\n");
 
-    // --- 6. Slutlig prompt: vad vi faktiskt skickar till Gemini ---
+    // --- 6. Slutlig prompt ---
     const promptParts = [basePrompt, imageRefsBlock];
     if (storyContextBlock) promptParts.push(storyContextBlock);
     promptParts.push(continuation);
 
     const prompt = promptParts.join("\n\n");
 
-      // (valfritt, bra för debug)
+    // (valfritt, bra för debug men kan kortas)
     console.log("[IMAGES/NEXT] prompt (truncated):", prompt.slice(0, 400));
 
-    // --- 7. Payload till geminiImage (samma för Pro och Flash) ---
+    // --- 7. Payload till geminiImage ---
     const payload = {
       prompt,
       character_ref_b64: ref_image_b64,             // IMAGE 1
@@ -3533,104 +3535,113 @@ async function handleImagesNext(req, env) {
       payload.style_refs_b64 = style_refs_b64;
     }
 
-    // ... efter att du fått g = geminiImage(...) (eller vad du nu använder för bildmodell)
-const g = await geminiImage(env, payload, 35000, 2);
-if (!g?.image_url) return err("No image from Gemini", 502);
+    const g = await geminiImage(env, payload, 35000, 2);
+    if (!g?.image_url) return err("No image from Gemini", 502);
 
-console.log("[IMAGES/NEXT] PAGE", page, {
-  g_url: g.image_url,
-  g_b64_len: g.b64 ? g.b64.length : null,
-  same_as_ref: !!(g.b64 && g.b64 === ref_image_b64),
-});
+    console.log("[IMAGES/NEXT] PAGE", page, {
+      g_url: g.image_url,
+      g_b64_len: g.b64 ? g.b64.length : null,
+    });
 
-// base64 för aktuella sidan (behövs för QA + ev. senare edit)
-const curr_b64 = g.b64 || null;
-const ref_b64  = ref_image_b64 || null;        // från request body
-const prevBare = prev_b64 || null;             // du skickar in bare b64 som prev_b64
+    // --- 8. Grundresultat (innan QA) ---
+    const curr_b64 = g.b64 || null;
+    const ref_b64  = ref_image_b64 || null;
+    const prevBare = prev_b64 || null;
 
-// Hashes – KOMMER från frontend eller annat lager
-// (t.ex. som en del av body: { hashes: { ref_hash, prev_hash, curr_hash } })
-const hashesFromReq = hashes || null;
+    const hashesFromReq = hashes || null;
 
+    let finalImageUrl = g.image_url;
+    let finalB64      = curr_b64;
+    let provider      = g.provider || "gemini";
 
-let finalImageUrl = g.image_url;
-let finalB64      = curr_b64;
+    let qa = null;
 
-if (curr_b64 && ref_b64) {
-  const meta = {
-  page,
-  scene_en: pg.scene_en || pg.scene || pg.text || "",
-  prev_scene_en: prevSceneEn || "",        // ⬅️ NYTT – ge GPT kontext om förra sidan
-  action_visual: pg.action_visual || "",
-  category: story.book?.category || story.book?.bible?.category || "kids",
-  style,
-};
+    // --- 9. QA + ev. auto-regen ---
+    const QA_ENABLED     = env.QA_ENABLED === "1";
+    const QA_AUTO_REGEN  = env.QA_AUTO_REGEN === "1";
 
+    if (QA_ENABLED && curr_b64 && ref_b64) {
+      const meta = {
+        page,
+        scene_en: pg.scene_en || pg.scene || pg.text || "",
+        prev_scene_en: prevSceneEn || "",
+        action_visual: pg.action_visual || "",
+        category: story.book?.category || story.book?.bible?.category || "kids",
+        style,
+      };
 
-const { image: qaImage, qa } = await maybeAutoQA(env, {
-  ref_b64,
-  prev_b64: prevBare,
-  curr_b64,
-  hashes: hashesFromReq || {},
-  meta,
-  originalImage: { b64: curr_b64, image_url: g.image_url },
-  regenFn: async ({ ref_b64, prev_b64, curr_b64, qa, meta }) => {
-    // 1) Försök FLUX.2 Pro edit via fal
-    let edited = null;
-    try {
-      edited = await fluxEditWithFal(env, { curr_b64, qa, meta });
-    } catch (e) {
-      console.error("[QA->FLUX] error:", e?.message || e);
-    }
+      const { image: qaImage, qa: qaResult } = await maybeAutoQA(env, {
+        ref_b64,
+        prev_b64: prevBare,
+        curr_b64,
+        hashes: hashesFromReq || {},
+        meta,
+        originalImage: { b64: curr_b64, image_url: g.image_url },
+        regenFn: QA_AUTO_REGEN
+          ? async ({ ref_b64, prev_b64, curr_b64, qa, meta }) => {
+              // 1) Försök FLUX.2 Pro edit via Fal
+              let edited = null;
+              try {
+                edited = await fluxEditWithFal(env, { curr_b64, qa, meta });
+              } catch (e) {
+                console.error("[QA->FLUX] error:", e?.message || e);
+              }
 
-    // 2) Om FLUX misslyckas → fallback till Gemini-edit
-    if (!edited || (!edited.image_url && !edited.b64)) {
-      try {
-        edited = await geminiEditFallback(env, {
-          ref_b64,
-          curr_b64,
-          prev_b64,
-          qa,
-          meta,
-        });
-      } catch (e) {
-        console.error("[QA->GeminiFallback] error:", e?.message || e);
+              // 2) Om FLUX misslyckas → fallback till Gemini-edit
+              if (!edited || (!edited.image_url && !edited.b64)) {
+                try {
+                  edited = await geminiEditFallback(env, {
+                    ref_b64,
+                    curr_b64,
+                    prev_b64,
+                    qa,
+                    meta,
+                  });
+                } catch (e) {
+                  console.error("[QA->GeminiFallback] error:", e?.message || e);
+                }
+              }
+
+              return edited || null;
+            }
+          : null,
+      });
+
+      qa = qaResult || null;
+
+      if (qaImage?.image_url) finalImageUrl = qaImage.image_url;
+      if (qaImage?.b64)       finalB64      = qaImage.b64;
+
+      if (qaImage?.provider) {
+        provider = qaImage.provider;
       }
+
+      console.log("[IMAGES/NEXT] QA summary", {
+        page,
+        ok: qa?.ok,
+        needs_edit: qa?.needs_edit,
+        flags: qa?.flags,
+        scores: qa?.scores,
+      });
     }
 
-    // Om ALLT faller → null, så maybeAutoQA returnerar originalet
-    return edited || null;
-  },
-});
-
-
-  if (qaImage?.image_url) finalImageUrl = qaImage.image_url;
-  if (qaImage?.b64)       finalB64      = qaImage.b64;
-
-  console.log("[IMAGES/NEXT] QA summary", {
-    page,
-    ok: qa.ok,
-    needs_edit: qa.needs_edit,
-    flags: qa.flags,
-    scores: qa.scores,
-  });
-}
-
-return ok({
-  page,
-  image_url: finalImageUrl,
-   provider: g.provider || "gemini",
-  qa_ok: qa?.ok ?? null,
-  qa_needs_edit: qa?.needs_edit ?? null,
-  qa_flags: qa?.flags ?? null,
-  qa_scores: qa?.scores ?? null,
-});
-
+    // --- 10. Response till frontend (synligt i Network) ---
+    return ok({
+      page,
+      image_url: finalImageUrl,
+      provider,
+      qa_ok: qa?.ok ?? null,
+      qa_needs_edit: qa?.needs_edit ?? null,
+      qa_flags: qa?.flags ?? null,
+      qa_scores: qa?.scores ?? null,
+    });
 
   } catch (e) {
+    console.error("[IMAGES/NEXT] error:", e?.message || e);
     return err(e?.message || "images/next failed", 500);
   }
 }
+
 
 async function handleImageRegenerate(req, env) {
   try {
