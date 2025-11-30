@@ -1151,9 +1151,8 @@ async function fluxEditWithFal(env, { curr_b64, qa, meta }) {
   const category      = (meta?.category || "kids").toLowerCase();
   const suggestion    = (qa?.suggestion || "").trim();
 
-  const keepLine = [
-    "KEEP: same hero identity (species, face, fur/skin, eyes, body shape), same illustration style, same general camera/framing unless the edit explicitly says otherwise."
-  ].join(" ");
+  const keepLine =
+    "KEEP: same hero identity (species, face, fur/skin, eyes, body shape), same illustration style, same general camera/framing unless the edit explicitly says otherwise.";
 
   const changeLine = suggestion
     ? `CHANGE: ${suggestion.replace(/^KEEP:/i, "").replace(/^CHANGE:/i, "").trim()}`
@@ -1172,7 +1171,8 @@ async function fluxEditWithFal(env, { curr_b64, qa, meta }) {
 
   const prompt = promptParts.join("\n");
 
-  const dataUrl = `data:image/png;base64,${curr_b64}`;
+  // Gemini ger i praktiken jpeg – men FAL bryr sig mest om korrekt data-URI-etikett
+  const dataUrl = `data:image/jpeg;base64,${curr_b64}`;
 
   const res = await fetch("https://fal.run/fal-ai/flux-2-pro/edit", {
     method: "POST",
@@ -1183,10 +1183,10 @@ async function fluxEditWithFal(env, { curr_b64, qa, meta }) {
     body: JSON.stringify({
       input: {
         prompt,
-        image_size: "square",        // eller "auto" om du vill
-        output_format: "png",
-        sync_mode: true,
-        image_urls: [dataUrl],       // du KAN lägga till fler refs här senare
+        image_size: "square",           // eller "auto"
+        output_format: "jpeg",
+        sync_mode: true,                // returnera data direkt
+        image_urls: [dataUrl],          // Data URI är OK enligt docs
         safety_tolerance: "2",
         enable_safety_checker: true,
       },
@@ -1207,16 +1207,17 @@ async function fluxEditWithFal(env, { curr_b64, qa, meta }) {
     return null;
   }
 
+  // Schema: { images: [ { url, file_data, ... } ], seed: ... }
   const img = json?.images && json.images[0];
   if (!img) {
     console.error("[FLUX] No images in response");
     return null;
   }
 
-  // Fal brukar ge både url och ev. base64 (file_data) när sync_mode=true
   return {
     image_url: img.url || null,
     b64: img.file_data || null,
+    provider: "flux-edit",
   };
 }
 
@@ -1261,12 +1262,14 @@ async function geminiEditFallback(env, { ref_b64, curr_b64, prev_b64, qa, meta }
     return {
       image_url: g.image_url || null,
       b64: g.b64 || null,
+      provider: "gemini-edit",
     };
   } catch (e) {
     console.error("[Gemini-edit] error:", e?.message || e);
     return null;
   }
 }
+
 
 async function maybeAutoQA(env, {
   ref_b64,
@@ -3472,14 +3475,14 @@ async function handleImagesNext(req, env) {
 
     // --- 3. Bas-prompt (SCENE_EN + metadata) ---
     // OBS: här ska vi skicka sidnummer, inte hela page-objektet
-    const basePrompt = buildFramePrompt({
-      style,
-      story,
-      page, // numeric page index
-      characterName: heroName,
-      wardrobe_signature: wardrobe,
-      coherence_code,
-    });
+   const basePrompt = buildFramePrompt({
+  style,
+  story,
+  page: pg, // 👈 hela sid-objektet
+  characterName: heroName,
+  wardrobe_signature: wardrobe,
+  coherence_code,
+});
 
     // --- 4. Bildinstruktioner ---
     const imageRefLines = [
