@@ -2869,25 +2869,31 @@ async function handleDiagRequest(_req, env) {
   }
   return ok({ font_base: base, has_fontkit: !!fontkit, checks });
 }
-
 // === PRINTED CHECKOUT (Stripe) ===
 async function handleCheckoutPrinted(req, env) {
   try {
-    if (!env.ORDERS) return err("ORDERS KV not bound", 500, { where: "handleCheckoutPrinted" });
-    if (!env.STRIPE_SECRET_KEY) return err("STRIPE_SECRET_KEY missing", 500, { where: "handleCheckoutPrinted" });
+    if (!env.ORDERS) {
+      return err("ORDERS KV not bound", 500, { where: "handleCheckoutPrinted" });
+    }
+    if (!env.STRIPE_SECRET_KEY) {
+      return err("STRIPE_SECRET_KEY missing", 500, { where: "handleCheckoutPrinted" });
+    }
 
-  const { price_id, customer_email, draft, order_id } = await req.json().catch(()=> ({}));
+    const { price_id, customer_email, draft, order_id } = await req.json().catch(() => ({}));
 
-// ✅ Säkerställ att PRINTED använder rätt pris
-const PRICE = price_id || env.STRIPE_PRICE_PRINTED;
-if (!PRICE) {
-  return err(
-    "Missing printed price: pass `price_id` in body OR configure STRIPE_PRICE_PRINTED in ENV",
-    400,
-    { where: "handleCheckoutPrinted" }
-  );
-}
+    // ✅ Säkerställ att PRINTED använder rätt pris
+    const PRICE = price_id || env.STRIPE_PRICE_PRINTED;
+    if (!PRICE) {
+      return err(
+        "Missing printed price: pass `price_id` in body OR configure STRIPE_PRICE_PRINTED in ENV",
+        400,
+        { where: "handleCheckoutPrinted" }
+      );
+    }
 
+    // 🔹 Frakt-rate (shipping_rate-id från Stripe)
+    // Lägg t.ex. STRIPE_SHIPPING_RATE_SE="shr_xxx" som env-var
+    const SHIPPING_RATE = env.STRIPE_SHIPPING_RATE_SE || env.STRIPE_SHIPPING_RATE || null;
 
     // 1) Säkerställ order i KV
     let oid = order_id;
@@ -2908,8 +2914,10 @@ if (!PRICE) {
 
     // 2) Stripe checkout (metadata viktig!)
     const FRONTEND_ORIGIN = env.FRONTEND_ORIGIN || "https://example.com";
-    const success = (env.SUCCESS_URL || `${FRONTEND_ORIGIN}/success.html`) + `?session_id={CHECKOUT_SESSION_ID}`;
-    const cancel  = env.CANCEL_URL  || `${FRONTEND_ORIGIN}/`;
+    const success =
+      (env.SUCCESS_URL || `${FRONTEND_ORIGIN}/success.html`) +
+      `?session_id={CHECKOUT_SESSION_ID}`;
+    const cancel = env.CANCEL_URL || `${FRONTEND_ORIGIN}/`;
 
     const base = {
       mode: "payment",
@@ -2918,11 +2926,25 @@ if (!PRICE) {
       success_url: success,
       cancel_url: cancel,
       allow_promotion_codes: "true",
+
       // viktigt för att veta vad detta är i webhook + success
       "metadata[order_id]": oid,
       "metadata[kind]": "printed",
     };
-    if (customer_email) base.customer_email = customer_email;
+
+    // ✅ Kundens mail om vi har det
+    if (customer_email) {
+      base.customer_email = customer_email;
+    }
+
+    // ✅ Frakt: visa 249 + frakt i Stripe + på kvitto
+    if (SHIPPING_RATE) {
+      // Be Stripe samla in leveransadress (endast Sverige här)
+      base["shipping_address_collection[allowed_countries][0]"] = "SE";
+
+      // Koppla shipping rate (shr_...)
+      base["shipping_options[0][shipping_rate]"] = SHIPPING_RATE;
+    }
 
     const body = formEncode(base);
 
@@ -2935,12 +2957,18 @@ if (!PRICE) {
       });
     }
 
-    await kvUpdateStatus(env, oid, "pending", { stripe_session_id: session.id, kind: "printed", customer_email: customer_email || null });
+    await kvUpdateStatus(env, oid, "pending", {
+      stripe_session_id: session.id,
+      kind: "printed",
+      customer_email: customer_email || null,
+    });
     await kvMapSessionToOrder(env, session.id, oid);
 
     return ok({ url: session.url, id: session.id, order_id: oid });
   } catch (e) {
-    return err(e?.message || "checkout printed failed", 500, { where: "handleCheckoutPrinted" });
+    return err(e?.message || "checkout printed failed", 500, {
+      where: "handleCheckoutPrinted",
+    });
   }
 }
 

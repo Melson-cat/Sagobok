@@ -19,6 +19,7 @@ EMAIL_FROM = "Sagostugan <no-reply@sagostugan.se>"
 QA_ENABLED = "1"
 QA_AUTO_REGEN = "1" 
 QA_MASTER_MODEL = "gpt-5-nano"
+STRIPE_SHIPPING_RATE_SE = "shr_1SZDQLLrEazOnLLmD46db7nP"
 
 [observability]
 [observability.logs]
@@ -34,3 +35,4 @@ id = "0e26ac0291c741708ba2b02394b163db"
 [[r2_buckets]]
 binding = "PDF_BUCKET"
 bucket_name = "pdf-bucket"
+ 

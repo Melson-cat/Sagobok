@@ -339,49 +339,6 @@ function updateHeroFieldForCategory() {
 }
 
 
-function formatStripeAmount(unit_amount, currency) {
-  if (typeof unit_amount !== "number") return "";
-  const amount = unit_amount / 100;
-  return new Intl.NumberFormat("sv-SE", {
-    style: "currency",
-    currency: (currency || "SEK").toUpperCase(),
-  }).format(amount);
-}
-
-async function fetchStripePrice(id) {
-  const res = await fetch(`/api/checkout/price-lookup?id=${encodeURIComponent(id)}`);
-  if (!res.ok) throw new Error("Price lookup failed");
-  return res.json();
-}
-
-async function initPricingUI() {
-  try {
-    const [pdf, printed] = await Promise.all([
-      fetchStripePrice(PDF_PRICE_ID),
-      fetchStripePrice(PRINT_PRICE_ID),
-    ]);
-
-    const pdfText     = formatStripeAmount(pdf.unit_amount, pdf.currency);
-    const printText   = formatStripeAmount(printed.unit_amount, printed.currency);
-
-    // Hero-raden
-    const heroPdf = document.getElementById("heroPdfPrice");
-    const heroPrint = document.getElementById("heroPrintPrice");
-    if (heroPdf) heroPdf.textContent = pdfText;
-    if (heroPrint) heroPrint.textContent = printText;
-
-    // Knapparna vid förhandsvisning
-    const pdfLabel   = document.getElementById("buyPdfPriceLabel");
-    const printLabel = document.getElementById("buyPrintPriceLabel");
-    if (pdfLabel) pdfLabel.textContent = `– ${pdfText}`;
-    if (printLabel) printLabel.textContent = `– ${printText}`;
-  } catch (e) {
-    console.warn("Could not init pricing UI:", e);
-    // valfritt: fallback till hårdkodad text
-  }
-}
-
-document.addEventListener("DOMContentLoaded", initPricingUI);
 
 
 /* --------------------------- Status/Progress --------------------------- */
