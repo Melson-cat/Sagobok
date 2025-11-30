@@ -72,11 +72,17 @@
         </button>
       </div>
 
-      <ul class="hero-list">
-        <li>1. Fyll i namn, ålder och önskad stil.</li>
-        <li>2. AI skriver sagan & skapar illustrationer sida för sida.</li>
-        <li>3. Beställ tryckt bok eller ladda ner som PDF.</li>
-      </ul>
+     <ul class="hero-list">
+  <li>1. Fyll i namn, ålder och önskad stil.</li>
+  <li>2. AI skriver sagan & skapar illustrationer sida för sida.</li>
+  <li>3. Beställ tryckt bok eller ladda ner som PDF.</li>
+</ul>
+
+<p class="hero-pricing">
+  Digital bok: <strong id="heroPdfPrice">–</strong>
+  &nbsp;•&nbsp;
+  Tryckt bok: <strong id="heroPrintPrice">–</strong> (+ frakt)
+</p>
     </div>
 
     <div class="hero-art">
@@ -220,9 +226,17 @@
       <div id="bookPreview" class="thumb-grid" role="list"></div>
 
       <div class="actions" style="margin-top:16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-        <button id="buyPdfBtn"   type="button" class="btn btn-primary">Köp digital bok</button>
-        <button id="buyPrintBtn" type="button" class="btn btn-accent">Köp tryckt bok</button>
-      </div>
+  <button id="buyPdfBtn"   type="button" class="btn btn-primary">
+    Köp digital bok
+    <span id="buyPdfPriceLabel" class="btn-price-label"></span>
+  </button>
+
+  <button id="buyPrintBtn" type="button" class="btn btn-accent">
+    Köp tryckt bok
+    <span id="buyPrintPriceLabel" class="btn-price-label"></span>
+  </button>
+</div>
+
     </section>
 
     <!-- Dummy-ankare för menyn -->

@@ -78,29 +78,23 @@
 </head>
 
 <body data-theme="kids">
-
+  <!-- Global Header -->
 <header class="site-header" role="banner">
-  <a href="/index.html" class="brand">
-    <img src="images/logo.png" alt="SagoStugan">
-    <span>SagoStugan</span>
-  </a>
-  <nav class="main-nav">
-    <a href="/index.html">Hem</a>
-    <a href="/index.html#bookForm">Skapa bok</a>
-    <a href="/index.html#examples">Exempel</a>
-    <a href="/status.html" class="active">Orderstatus</a>
-  </nav>
-  <button id="navToggle" class="hamburger" aria-expanded="false" aria-controls="mobileMenu">☰</button>
+  <div class="header-inner">
+    <a href="/index.html" class="brand" aria-label="SagoStugan startsida">
+      <img src="images/logo.png" alt="SagoStugan" />
+      <span>SagoStugan</span>
+    </a>
+
+    <nav class="main-nav" aria-label="Huvudmeny">
+      <a href="/index.html" data-nav="home">Hem</a>
+      <a href="#bookForm" data-nav="create">Skapa bok</a>
+      <a href="#examples" data-nav="examples">Exempel</a>
+      <a href="/status.html" data-nav="status">Orderstatus</a>
+    </nav>
+  </div>
 </header>
 
-<div class="mobile-menu" id="mobileMenu" aria-hidden="true">
-  <nav>
-    <a href="/index.html">Hem</a>
-    <a href="/index.html#bookForm">Skapa bok</a>
-    <a href="/index.html#examples">Exempel</a>
-    <a href="/status.html">Orderstatus</a>
-  </nav>
-</div>
 
 <main class="container">
   <section class="status-panel">
