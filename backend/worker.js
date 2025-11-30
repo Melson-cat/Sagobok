@@ -1578,131 +1578,103 @@ HÅRDA KRAV PÅ "pages":
 • Endast giltig JSON i svaret – ingen extra text, ingen förklaring utanför JSON.
 `;
 
-function buildRefPortraitPrompt({
-  style,
-  bible,
-  traits = "",
-  hasPhoto,
-  category,
-}) {
-  const bookCategory = (category || bible?.category || "kids").toLowerCase();
-  const isPet = bookCategory === "pets" || bookCategory === "animals";
 
-  const mainChar = bible?.main_character || {};
-  const name = mainChar.name || "the hero";
-  const age = mainChar.age || 5;
-  const gender = mainChar.gender || null;
 
-  const wardrobe = bible?.wardrobe
-    ? (Array.isArray(bible.wardrobe)
-        ? bible.wardrobe.join(", ")
-        : bible.wardrobe)
-    : "simple, comfortable clothes suitable for a young child";
+async function handleRefImage(req, env) {
+  try {
+    const {
+      style = "cartoon",
+      photo_b64,
+      bible,
+      traits = "",
+      category,
+    } = await req.json().catch(() => ({}));
 
-  const styleLabel = styleGuard(style || "cartoon");
+    // 1) Plocka ut kundfoto som ren base64 + mime-type
+    let barePhoto = null;
+    let photoMime = null;
 
-  const intro = [
-    "*** ROLE ***",
-    "You are a professional character designer for a children's picture book.",
-    "Your ONLY task is to create ONE clean reference portrait for the MAIN HERO,",
-    "based directly on the provided PHOTO.",
-  ].join("\n");
+    if (photo_b64) {
+      const m = String(photo_b64).match(
+        /^data:(image\/[^;]+);base64,(.+)$/i
+      );
+      if (!m || m[2].length < 64) {
+        return err("Invalid photo_b64", 400);
+      }
+      photoMime = m[1].toLowerCase();
+      barePhoto = m[2];
+    }
 
-  const photoRules = hasPhoto
-    ? [
-        "*** PHOTO AS GROUND TRUTH (CRITICAL) ***",
-        "You receive a REAL photo of the hero.",
-        "The photo is the ONLY source of truth for physical identity.",
-        "",
-        "You MUST preserve all of these from the photo:",
-        "- Face shape and proportions.",
-        "- Eyes (shape, distance, color, overall expression).",
-        "- Nose and mouth shape.",
-        "- Skin tone / fur color.",
-        "- Hair style, color and length (for a child).",
-        "",
-        "If ANY text description conflicts with the photo:",
-        "→ IGNORE the text and FOLLOW THE PHOTO.",
-        "Do NOT make the hero older or younger than in the photo.",
-        "Do NOT change skin tone, hair color or basic facial structure.",
-      ].join("\n")
-    : [
-        "*** NO PHOTO PROVIDED ***",
-        "There is no photo. Invent a consistent hero based on the bible and traits.",
-      ].join("\n");
+    if (!barePhoto) {
+      return err("Missing photo_b64", 400);
+    }
 
-  const identityBlock = isPet
-    ? [
-        "*** IDENTITY: PET HERO ***",
-        `The hero is a pet/animal named ${name}.`,
-        "Keep the animal species, general body type and key markings from the photo.",
-      ].join("\n")
-    : [
-        "*** IDENTITY: CHILD HERO ***",
-        `The hero is a child named ${name}.`,
-        `Approximate age: ${age} years old.`,
-        gender ? `Perceived gender: ${gender}.` : "",
-        "",
-        "The hero must look like the SAME child as in the photo, just stylized.",
-      ]
-        .filter(Boolean)
-        .join("\n");
+    // 2) Bygg ref-porträtt-prompt
+    const prompt = buildRefPortraitPrompt({
+      style,
+      bible: bible || null,
+      traits,
+      hasPhoto: !!barePhoto,
+      category,
+    });
 
-  const wardrobeBlock = [
-    "*** WARDROBE (CONSISTENT OUTFIT) ***",
-    `Book wardrobe description: ${wardrobe}.`,
-    "",
-    "For this reference portrait:",
-    "- Choose a clear, simple outfit that matches this wardrobe description.",
-    "- This outfit will be reused on ALL pages in the book.",
-    "- Do NOT add random hats, glasses or accessories unless the wardrobe explicitly mentions them.",
-  ].join("\n");
+    console.log(
+      "[REF] style:",
+      style,
+      "category:",
+      category,
+      "hasPhoto:",
+      !!barePhoto
+    );
+    console.log("[REF] incoming user photo b64 length:", barePhoto.length);
+    console.log("[REF] photo mime:", photoMime);
+    console.log("[REF] prompt excerpt:", prompt.slice(0, 300));
 
-  const poseBlock = [
-    "*** POSE & FRAMING ***",
-    "Output ONE single image, no collage, no split-screen.",
-    "Framing: medium shot or medium-close-up (head and upper body clearly visible).",
-    "The hero should face the viewer or be in a slight 3/4 angle.",
-    "",
-    "Expression:",
-    "- Warm, kind, expressive.",
-    "- The hero should feel alive and appealing for children.",
-  ].join("\n");
+    // 3) Anropa Gemini 2.5 Flash Image för ref-porträtt
+    const g = await geminiImage(
+      env,
+      {
+        prompt,
+        model: "flash", // tvinga FLASH för ref-bild
+        image_b64: barePhoto,
+        image_mime: photoMime || "image/png",
+        _debugTag: "ref",
+      },
+      70000,
+      2
+    );
 
-  const styleBlock = [
-    "*** ART STYLE ***",
-    `Art Style: ${styleLabel}.`,
-    "The style may be cute, colorful and storybook-like,",
-    "but it must NOT change the hero's identity.",
-    "",
-    "Do NOT add text, logos or speech bubbles.",
-    "Background: simple, soft, unobtrusive (plain color or very soft gradient).",
-  ].join("\n");
+    if (!g || !g.b64) {
+      return err("Failed to generate reference image", 500);
+    }
 
-  const traitsBlock = traits
-    ? [
-        "*** EXTRA TRAITS / NOTES ***",
-        traits,
-        "",
-        "Use these traits ONLY for subtle expression and mood,",
-        "not to change physical identity.",
-      ].join("\n")
-    : "";
+    // 4) För debugging: ladda upp ref-bilden till Cloudflare Images
+    let cfImage = null;
+    try {
+      const data_url = `data:image/png;base64,${g.b64}`;
+      cfImage = await uploadOneToCFImages(env, {
+        data_url,
+        id: `ref-${Date.now()}`,
+      });
+      console.log("[REF] CF Images upload ok:", cfImage.image_id, cfImage.url);
+    } catch (e) {
+      console.error("CF Image Upload Failed:", e?.message || e);
+      // Viktigt: vi låter INTE detta krascha hela svaret
+    }
 
-  return [
-    intro,
-    "",
-    photoRules,
-    "",
-    identityBlock,
-    "",
-    wardrobeBlock,
-    "",
-    poseBlock,
-    "",
-    styleBlock,
-    traitsBlock ? "\n" + traitsBlock : "",
-  ].join("\n");
+    // 🔹 Viktigt: skicka ref_image_b64 så frontend blir nöjd
+    return ok({
+      ref_image_b64: g.b64,             // det script.js läser
+      image_b64: g.b64,                 // ev. kompatibilitet
+      image_url: g.image_url,           // data-url från Gemini
+      provider: g.provider || "google",
+      // Nya fält för dig att inspektera:
+      cf_image_id: cfImage?.image_id || null,
+      cf_image_url: cfImage?.url || null,
+    });
+  } catch (e) {
+    return err(e?.message || "Ref image failed", 500);
+  }
 }
 
 
@@ -3199,91 +3171,133 @@ function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
   ].filter(Boolean).join("\n");
 }
 
-function buildRefPortraitPrompt({ style, bible, traits, hasPhoto, category }) {
-  const mc = bible?.main_character || {};
-  const name = mc.name || "Nova";
-  const age = mc.age ?? 6;
-  const world = bible?.world || "a cozy, friendly children's story world";
-  const tone = bible?.tone || "warm and playful";
-  const ward = Array.isArray(bible?.wardrobe)
-    ? bible.wardrobe.join(", ")
-    : (bible?.wardrobe || "").trim();
-  const palette = (bible?.palette || []).join(", ");
+function buildRefPortraitPrompt({
+  style,
+  bible,
+  traits = "",
+  hasPhoto,
+  category,
+}) {
+  const bookCategory = (category || bible?.category || "kids").toLowerCase();
+  const isPet = bookCategory === "pets" || bookCategory === "animals";
 
-  const phys = mc.physique || "";
-  const idKeys = Array.isArray(mc.identity_keys)
-    ? mc.identity_keys.join(", ")
-    : (mc.identity_keys || "");
-  const cat = (category || bible?.category || "kids").toLowerCase();
-  const looksLikePet = /\b(cat|dog|rabbit|hamster|kitten|puppy)\b/i.test(
-    phys + " " + idKeys
-  );
+  const mainChar = bible?.main_character || {};
+  const name = mainChar.name || "the hero";
+  const age = mainChar.age || 5;
+  const gender = mainChar.gender || null;
 
-  const isPet = cat === "pets" || looksLikePet;
+  const wardrobe = bible?.wardrobe
+    ? (Array.isArray(bible.wardrobe)
+        ? bible.wardrobe.join(", ")
+        : bible.wardrobe)
+    : "simple, comfortable clothes suitable for a young child";
 
-  const lines = [];
+  const styleLabel = styleGuard(style || "cartoon");
 
-  if (isPet) {
-    lines.push(
-      "You are creating ONE single square portrait reference for the main PET hero of a children's picture book.",
-      "The hero is a real pet (animal), not a human child."
-    );
-  } else {
-    lines.push(
-      "You are creating ONE single square portrait reference for the main CHILD hero of a children's picture book."
-    );
-  }
+  const intro = [
+    "*** ROLE ***",
+    "You are a professional character designer for a children's picture book.",
+    "Your ONLY task is to create ONE clean reference portrait for the MAIN HERO,",
+    "based directly on the provided PHOTO.",
+  ].join("\n");
 
-  lines.push(
+  const photoRules = hasPhoto
+    ? [
+        "*** PHOTO AS GROUND TRUTH (CRITICAL) ***",
+        "You receive a REAL photo of the hero.",
+        "The photo is the ONLY source of truth for physical identity.",
+        "",
+        "You MUST preserve all of these from the photo:",
+        "- Face shape and proportions.",
+        "- Eyes (shape, distance, color, overall expression).",
+        "- Nose and mouth shape.",
+        "- Skin tone / fur color.",
+        "- Hair style, color and length (for a child).",
+        "",
+        "If ANY text description conflicts with the photo:",
+        "→ IGNORE the text and FOLLOW THE PHOTO.",
+        "Do NOT make the hero older or younger than in the photo.",
+        "Do NOT change skin tone, hair color or basic facial structure.",
+      ].join("\n")
+    : [
+        "*** NO PHOTO PROVIDED ***",
+        "There is no photo. Invent a consistent hero based on the bible and traits.",
+      ].join("\n");
+
+  const identityBlock = isPet
+    ? [
+        "*** IDENTITY: PET HERO ***",
+        `The hero is a pet/animal named ${name}.`,
+        "Keep the animal species, general body type and key markings from the photo.",
+      ].join("\n")
+    : [
+        "*** IDENTITY: CHILD HERO ***",
+        `The hero is a child named ${name}.`,
+        `Approximate age: ${age} years old.`,
+        gender ? `Perceived gender: ${gender}.` : "",
+        "",
+        "The hero must look like the SAME child as in the photo, just stylized.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+  const wardrobeBlock = [
+    "*** WARDROBE (CONSISTENT OUTFIT) ***",
+    `Book wardrobe description: ${wardrobe}.`,
     "",
-    "OUTPUT:",
-    "- Exactly one clean, centered character portrait.",
-    "- No text, no logo, no borders.",
-    "- Soft, book-friendly background."
-  );
+    "For this reference portrait:",
+    "- Choose a clear, simple outfit that matches this wardrobe description.",
+    "- This outfit will be reused on ALL pages in the book.",
+    "- Do NOT add random hats, glasses or accessories unless the wardrobe explicitly mentions them.",
+  ].join("\n");
 
-  if (hasPhoto) {
-    lines.push(
-      "",
-      "You receive ONE INPUT PHOTO of the real hero. You MUST preserve the identity from that photo.",
-      isPet
-        ? "- Keep the same species, approximate breed, fur colors and patterns."
-        : "- Keep the same child: face shape, eyes, nose, mouth, hair and proportions.",
-      "- If any written description disagrees with the photo, ALWAYS follow the photo.",
-      "- You may clean up lighting and background, but do NOT redesign the hero."
-    );
-  } else {
-    lines.push(
-      "",
-      "No input photo is provided. Invent a consistent hero that fits the description."
-    );
-  }
-
-  lines.push(
+  const poseBlock = [
+    "*** POSE & FRAMING ***",
+    "Output ONE single image, no collage, no split-screen.",
+    "Framing: medium shot or medium-close-up (head and upper body clearly visible).",
+    "The hero should face the viewer or be in a slight 3/4 angle.",
     "",
-    "BOOK CONTEXT:",
-    `- Name: ${name}`,
-    !isPet ? `- Approx age: ${age}` : "",
-    world ? `- World: ${world}` : "",
-    tone ? `- Tone: ${tone}` : "",
-    ward ? `- Wardrobe hint: ${ward}` : "",
-    palette ? `- Color palette hints: ${palette}` : "",
-    traits ? `- Personality traits: ${traits}` : ""
-  );
+    "Expression:",
+    "- Warm, kind, expressive.",
+    "- The hero should feel alive and appealing for children.",
+  ].join("\n");
 
-  lines.push(
+  const styleBlock = [
+    "*** ART STYLE ***",
+    `Art Style: ${styleLabel}.`,
+    "The style may be cute, colorful and storybook-like,",
+    "but it must NOT change the hero's identity.",
     "",
-    `STYLE: ${styleHint(style)}`,
-    "",
-    "COMPOSITION:",
-    "- Square aspect ratio (1:1).",
-    "- Medium close-up or 3/4 view.",
-    "- The hero is clearly visible and expressive.",
-    "- Background is simple and soft, matching the book world."
-  );
+    "Do NOT add text, logos or speech bubbles.",
+    "Background: simple, soft, unobtrusive (plain color or very soft gradient).",
+  ].join("\n");
 
-  return lines.filter(Boolean).join("\n");
+  const traitsBlock = traits
+    ? [
+        "*** EXTRA TRAITS / NOTES ***",
+        traits,
+        "",
+        "Use these traits ONLY for subtle expression and mood,",
+        "not to change physical identity.",
+      ].join("\n")
+    : "";
+
+  return [
+    intro,
+    "",
+    photoRules,
+    "",
+    identityBlock,
+    "",
+    wardrobeBlock,
+    "",
+    poseBlock,
+    "",
+    styleBlock,
+    traitsBlock ? "\n" + traitsBlock : "",
+  ].join("\n");
 }
+
 
 
 async function handleStory(req, env) {
