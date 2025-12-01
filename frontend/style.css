@@ -954,3 +954,99 @@ textarea:focus {
     transition: none !important;
   }
 }
+/* === MOBIL-FINLIR FÖR HERO =============================== */
+@media (max-width: 600px) {
+  .hero {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+    padding-block: 1.75rem 2.5rem;
+  }
+
+  .hero-main {
+    max-width: 100%;
+  }
+
+  .hero-kicker {
+    font-size: 0.8rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .hero-title {
+    font-size: 1.5rem;
+    line-height: 1.2;
+  }
+
+  .hero-tagline {
+    font-size: 0.9rem;
+    max-width: 100%;
+  }
+
+  .hero-pill-row {
+    gap: 0.4rem;
+    margin-bottom: 1rem;
+  }
+
+  .hero-pill {
+    font-size: 0.78rem;
+    padding: 0.3rem 0.6rem;
+  }
+
+  .hero-cta-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .btn-cta {
+    min-width: 0;
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Bilden – visa HELA bilden i stället för att kapa */
+  .hero-media {
+    justify-content: center;
+  }
+
+  .hero-image-wrapper {
+    max-width: 320px;
+    width: 100%;
+    aspect-ratio: auto;      /* låt bilden styra höjden */
+  }
+
+  .hero-image {
+    width: 100%;
+    height: auto;
+    object-fit: contain;     /* visa hela bilden */
+  }
+
+  /* Skala ned bubblor lite så de inte tar över */
+  .hero-bubble {
+    font-size: 0.78rem;
+    padding: 0.5rem 0.65rem;
+  }
+
+  .hero-bubble-main {
+    left: 6%;
+    bottom: 14%;
+    max-width: 84%;
+  }
+
+  .hero-book-icon {
+    width: 1.8rem;
+    height: 1.8rem;
+    font-size: 1rem;
+  }
+
+  .hero-badge-card {
+    right: 6%;
+    top: 8%;
+  }
+
+  .hero-floating-tag {
+    font-size: 0.7rem;
+    bottom: -0.7rem;
+    padding: 0.3rem 0.6rem;
+  }
+}
