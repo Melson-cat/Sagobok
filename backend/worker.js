@@ -3046,21 +3046,13 @@ function attachCoverThumb(order, env) {
 
 /* ====================== CHECKOUT (Stripe) ====================== */
 async function handleCheckoutPing(_req, env) {
-  const stripe = env.STRIPE_SECRET_KEY || null;
-
-  return new Response(JSON.stringify({
-    has_secret: !!stripe,
-    // visar bara första 6 tecknen så du ser om något alls är bundet
-    stripe_preview: stripe ? stripe.slice(0, 6) + "..." : null,
-    env_keys: Object.keys(env), // så vi ser vilka bindings som finns
+  return ok({
+    has_secret: !!env.STRIPE_SECRET_KEY,
     frontend_origin: env.FRONTEND_ORIGIN,
     success_url: env.SUCCESS_URL,
     cancel_url: env.CANCEL_URL,
-  }, null, 2), {
-    headers: { "content-type": "application/json" },
   });
 }
-
 async function handleCheckoutPriceLookup(req, env) {
   try {
     const id = new URL(req.url).searchParams.get("id");
