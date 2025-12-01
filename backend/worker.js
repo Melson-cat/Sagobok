@@ -859,6 +859,43 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
   throw lastError || new Error("Gemini failed");
 }
 
+
+async function falRefImage(env, { photo_b64, style }) {
+  const resp = await fetch("https://fal.run/fal-ai/nano-banana-pro/edit", {
+    method: "POST",
+    headers: {
+      "Authorization": `Key ${env.FAL_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      input: {
+        prompt: `Transform this photo into a ${style} style illustration. 
+        Keep the identity exactly the same. 
+        Do not change facial features, markings or colors. 
+        Simple soft background.`,
+        image_urls: [`data:image/png;base64,${photo_b64}`],
+        output_format: "jpeg",
+        sync_mode: true
+      }
+    })
+  });
+
+  if (!resp.ok) {
+    throw new Error("FAL ref edit failed: " + resp.status);
+  }
+
+  const data = await resp.json();
+  const img = data?.images?.[0];
+
+  if (!img) return null;
+
+  return {
+    b64: img.file_data || null,
+    image_url: img.url || null,
+    provider: "fal-nano-banana"
+  };
+}
+
 // -------------------------- IMAGE QA – GPT-5 mini + hash --------------------------
 
 // Trygg JSON-parse
@@ -1579,7 +1616,6 @@ HÅRDA KRAV PÅ "pages":
 `;
 
 
-
 async function handleRefImage(req, env) {
   try {
     const {
@@ -1590,92 +1626,60 @@ async function handleRefImage(req, env) {
       category,
     } = await req.json().catch(() => ({}));
 
-    // 1) Plocka ut kundfoto som ren base64 + mime-type
+    // Extract bare base64
     let barePhoto = null;
-    let photoMime = null;
+    const m = String(photo_b64 || "").match(/^data:image\/[^;]+;base64,(.+)$/i);
+    if (m) barePhoto = m[1];
+    if (!barePhoto) return err("Invalid or missing photo_b64", 400);
 
-    if (photo_b64) {
-      const m = String(photo_b64).match(
-        /^data:(image\/[^;]+);base64,(.+)$/i
-      );
-      if (!m || m[2].length < 64) {
-        return err("Invalid photo_b64", 400);
-      }
-      photoMime = m[1].toLowerCase();
-      barePhoto = m[2];
-    }
-
-    if (!barePhoto) {
-      return err("Missing photo_b64", 400);
-    }
-
-    // 2) Bygg ref-porträtt-prompt
+    // --- NEW PROMPT BLOCK ---
+    // Much simpler. Style transfer only.
     const prompt = buildRefPortraitPrompt({
       style,
       bible: bible || null,
       traits,
-      hasPhoto: !!barePhoto,
+      hasPhoto: true,
       category,
     });
 
-    console.log(
-      "[REF] style:",
+    console.log("[REF] Using FAL Nano-Banana for reference portrait");
+
+    // --- NEW ENGINE: FAL ---
+    const fal = await falRefImage(env, {
+      photo_b64: barePhoto,
       style,
-      "category:",
-      category,
-      "hasPhoto:",
-      !!barePhoto
-    );
-    console.log("[REF] incoming user photo b64 length:", barePhoto.length);
-    console.log("[REF] photo mime:", photoMime);
-    console.log("[REF] prompt excerpt:", prompt.slice(0, 300));
+    });
 
-    // 3) Anropa Gemini 2.5 Flash Image för ref-porträtt
-    const g = await geminiImage(
-      env,
-      {
-        prompt,
-        model: "flash", // tvinga FLASH för ref-bild
-        image_b64: barePhoto,
-        image_mime: photoMime || "image/png",
-        _debugTag: "ref",
-      },
-      70000,
-      2
-    );
-
-    if (!g || !g.b64) {
-      return err("Failed to generate reference image", 500);
+    if (!fal || !fal.b64) {
+      return err("Failed to generate ref portrait via FAL", 500);
     }
 
-    // 4) För debugging: ladda upp ref-bilden till Cloudflare Images
+    // Upload to Cloudflare Images (optional)
     let cfImage = null;
     try {
-      const data_url = `data:image/png;base64,${g.b64}`;
+      const data_url = `data:image/jpeg;base64,${fal.b64}`;
       cfImage = await uploadOneToCFImages(env, {
         data_url,
         id: `ref-${Date.now()}`,
       });
-      console.log("[REF] CF Images upload ok:", cfImage.image_id, cfImage.url);
     } catch (e) {
-      console.error("CF Image Upload Failed:", e?.message || e);
-      // Viktigt: vi låter INTE detta krascha hela svaret
+      console.error("[REF] CF upload failed:", e.message);
     }
 
-    // 🔹 Viktigt: skicka ref_image_b64 så frontend blir nöjd
     return ok({
-      ref_image_b64: g.b64,             // det script.js läser
-      image_b64: g.b64,                 // ev. kompatibilitet
-      image_url: g.image_url,           // data-url från Gemini
-      provider: g.provider || "google",
-      // Nya fält för dig att inspektera:
+      ref_image_b64: fal.b64,
+      image_b64: fal.b64,
+      image_url: fal.image_url,
+      provider: fal.provider,
       cf_image_id: cfImage?.image_id || null,
       cf_image_url: cfImage?.url || null,
     });
+
   } catch (e) {
-    return err(e?.message || "Ref image failed", 500);
+    return err(e.message || "Ref image failed", 500);
   }
 }
+
 
 
 
@@ -3199,132 +3203,17 @@ function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
   ].filter(Boolean).join("\n");
 }
 
-function buildRefPortraitPrompt({
-  style,
-  bible,
-  traits = "",
-  hasPhoto,
-  category,
-}) {
-  const bookCategory = (category || bible?.category || "kids").toLowerCase();
-  const isPet = bookCategory === "pets" || bookCategory === "animals";
-
-  const mainChar = bible?.main_character || {};
-  const name = mainChar.name || "the hero";
-  const age = mainChar.age || 5;
-  const gender = mainChar.gender || null;
-
-  const wardrobe = bible?.wardrobe
-    ? (Array.isArray(bible.wardrobe)
-        ? bible.wardrobe.join(", ")
-        : bible.wardrobe)
-    : "simple, comfortable clothes suitable for a young child";
-
-  const styleLabel = styleGuard(style || "cartoon");
-
-  const intro = [
-    "*** ROLE ***",
-    "You are a professional character designer for a children's picture book.",
-     "Your ONLY critical task: keep the hero's physical identity as close to the PHOTO as possible.",
-    "based directly on the provided PHOTO.",
-  ].join("\n");
-
-  const photoRules = hasPhoto
-    ? [
-        "*** PHOTO AS GROUND TRUTH (CRITICAL) ***",
-        "You receive a REAL photo of the hero.",
-        "The photo is the ONLY source of truth for physical identity.",
-        "",
-        "You MUST preserve all of these from the photo:",
-        "- Face shape and proportions.",
-        "- Eyes (shape, distance, color, overall expression).",
-        "- Nose and mouth shape.",
-        "- Skin tone / fur color.",
-        "- Hair style, color and length (for a child).",
-        "",
-        "If ANY text description conflicts with the photo:",
-        "→ IGNORE the text and FOLLOW THE PHOTO.",
-        "Do NOT make the hero older or younger than in the photo.",
-        "Do NOT change skin tone, hair color or basic facial structure.",
-      ].join("\n")
-    : [
-        "*** NO PHOTO PROVIDED ***",
-        "There is no photo.",
-      ].join("\n");
-
-  const identityBlock = isPet
-    ? [
-        "*** IDENTITY: PET HERO ***",
-        `The hero is a pet/animal named ${name}.`,
-        "Keep the animal species, general body type and key markings from the photo.",
-      ].join("\n")
-    : [
-        "*** IDENTITY: CHILD HERO ***",
-        `The hero is a child named ${name}.`,
-        `Approximate age: ${age} years old.`,
-        gender ? `Perceived gender: ${gender}.` : "",
-        "",
-        "The hero must look like the SAME child as in the photo, just stylized.",
-      ]
-        .filter(Boolean)
-        .join("\n");
-
-  const wardrobeBlock = [
-    "*** WARDROBE (CONSISTENT OUTFIT) ***",
-    `Book wardrobe description: ${wardrobe}.`,
-    "",
-    "For this reference portrait:",
-    "- If possible, use the same outfit as in the photo.",
-    "- This outfit will be reused on ALL pages in the book.",
-    "- Do NOT add random hats, glasses or accessories unless the wardrobe explicitly mentions them.",
-  ].join("\n");
-
-  const poseBlock = [
-    "*** POSE & FRAMING ***",
-    "Output ONE single image, no collage, no split-screen.",
-    "Framing: medium shot or medium-close-up (head and upper body clearly visible).",
-    "The hero should face the viewer or be in a slight 3/4 angle.",
-    "",
-    "Expression:",
-    "- Warm, kind, expressive.",
-    "- The hero should feel alive and appealing for children.",
-  ].join("\n");
-
-  const styleBlock = [
-    "*** ART STYLE ***",
-    `Art Style: ${styleLabel}.`,
-    "The style may be cute, colorful and storybook-like,",
-    "but it must NOT change the hero's identity.",
-    "",
-    "Do NOT add text, logos or speech bubbles.",
-    "Background: simple, soft, unobtrusive (plain color or very soft gradient).",
-  ].join("\n");
-
-  const traitsBlock = traits
-    ? [
-        "*** EXTRA TRAITS / NOTES ***",
-        traits,
-        "",
-        "Use these traits ONLY for subtle expression and mood,",
-        "not to change physical identity.",
-      ].join("\n")
-    : "";
-
-  return [
-    intro,
-    "",
-    photoRules,
-    "",
-    identityBlock,
-    "",
-    wardrobeBlock,
-    "",
-    poseBlock,
-    "",
-    styleBlock,
-    traitsBlock ? "\n" + traitsBlock : "",
-  ].join("\n");
+function buildRefPortraitPrompt({ style, hasPhoto }) {
+  // Minimal safe prompt for ALL cases (child / pet / adult)
+  return `
+Transform this photo into a ${style} style illustration.
+Keep the identity exactly the same.
+Do not change facial features, markings, colors, or proportions.
+Do not add new accessories.
+Use a simple soft background.
+`;
 }
+
 
 
 
