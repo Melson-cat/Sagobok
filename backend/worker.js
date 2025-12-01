@@ -3274,7 +3274,7 @@ function buildRefPortraitPrompt({
     `Book wardrobe description: ${wardrobe}.`,
     "",
     "For this reference portrait:",
-    "- Choose a clear, simple outfit that matches this wardrobe description.",
+    "- If possible, use the same outfit as in the photo.",
     "- This outfit will be reused on ALL pages in the book.",
     "- Do NOT add random hats, glasses or accessories unless the wardrobe explicitly mentions them.",
   ].join("\n");

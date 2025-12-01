@@ -117,13 +117,13 @@ body::before {
 
 /* wrapper som gör att logga + meny ligger på samma rad och centrerat i bredden */
 .header-inner {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 16px 20px;
+  width: 100%;
+  padding: 16px 32px;     /* mer luft på desktop */
   display: flex;
   align-items: center;
-  gap: 24px;
+  justify-content: space-between; /* ← kritiskt */
 }
+
 
 /* Brand – till vänster */
 .brand {
