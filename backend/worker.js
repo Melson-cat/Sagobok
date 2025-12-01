@@ -858,7 +858,6 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
 
   throw lastError || new Error("Gemini failed");
 }
-
 async function falRefImage(env, { photo_b64, style }) {
   const resp = await fetch("https://fal.run/fal-ai/nano-banana-pro/edit", {
     method: "POST",
@@ -867,16 +866,22 @@ async function falRefImage(env, { photo_b64, style }) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
+      // 🔹 exakt enligt Fal schema
       prompt: `Transform this photo into a ${style} style illustration. 
-      Keep the identity exactly the same. 
-      Do not change facial features, markings or colors. 
-      Use a simple soft background.`,
-      image_url: `data:image/jpeg;base64,${photo_b64}`,
+Keep the identity exactly the same.
+Do not change facial features, markings or colors.
+Use a simple, soft background.`,
 
-      // Dessa två behövs för att undvika 422
-      sync_mode: true,
-      output_format: "jpeg"
-    })
+      // 🔹 API kräver image_urls (array), och data URI är tillåten
+      image_urls: [`data:image/jpeg;base64,${photo_b64}`],
+
+      // 🔹 resten är optional men giltiga
+      num_images: 1,
+      aspect_ratio: "auto",
+      output_format: "jpeg",
+      resolution: "1K",
+      sync_mode: true
+    }),
   });
 
   if (!resp.ok) {
@@ -891,9 +896,10 @@ async function falRefImage(env, { photo_b64, style }) {
   return {
     b64: img.file_data || null,
     image_url: img.url || null,
-    provider: "fal-nano-banana"
+    provider: "fal-nano-banana",
   };
 }
+
 
 
 // -------------------------- IMAGE QA – GPT-5 mini + hash --------------------------
