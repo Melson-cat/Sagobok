@@ -858,7 +858,7 @@ async function geminiImage(env, item, timeoutMs = 70000, attempts = 3) {
 
   throw lastError || new Error("Gemini failed");
 }
-async function falRefImage(env, { photo_b64, style }) {
+async function falRefImage(env, { photo_b64, prompt }) {
   const resp = await fetch("https://fal.run/fal-ai/nano-banana-pro/edit", {
     method: "POST",
     headers: {
@@ -866,16 +866,8 @@ async function falRefImage(env, { photo_b64, style }) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      // 🔹 exakt enligt Fal schema
-      prompt: `Transform this photo into a ${style} style illustration. 
-Keep the identity exactly the same.
-Do not change facial features, markings or colors.
-Use a simple, soft background.`,
-
-      // 🔹 API kräver image_urls (array), och data URI är tillåten
+      prompt,
       image_urls: [`data:image/jpeg;base64,${photo_b64}`],
-
-      // 🔹 resten är optional men giltiga
       num_images: 1,
       aspect_ratio: "auto",
       output_format: "jpeg",
@@ -890,15 +882,32 @@ Use a simple, soft background.`,
 
   const data = await resp.json();
   const img = data?.images?.[0];
-
   if (!img) return null;
 
-  return {
-    b64: img.file_data || null,
-    image_url: img.url || null,
-    provider: "fal-nano-banana",
-  };
+  // PRIMARY: inline base64
+  if (img.file_data) {
+    return {
+      b64: img.file_data,
+      image_url: img.url || null,
+      provider: "fal-nano-banana"
+    };
+  }
+
+  // FALLBACK: fetch URL → base64
+  if (img.url) {
+    const r = await fetch(img.url);
+    const buf = await r.arrayBuffer();
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    return {
+      b64,
+      image_url: img.url,
+      provider: "fal-nano-banana"
+    };
+  }
+
+  return null;
 }
+
 
 
 
@@ -1621,46 +1630,38 @@ HÅRDA KRAV PÅ "pages":
 • Endast giltig JSON i svaret – ingen extra text, ingen förklaring utanför JSON.
 `;
 
-
 async function handleRefImage(req, env) {
   try {
-    const {
-      style = "cartoon",
-      photo_b64,
-      bible,
-      traits = "",
-      category,
-    } = await req.json().catch(() => ({}));
+    const { style = "cartoon", photo_b64 } = await req.json().catch(() => ({}));
 
-    // Extract bare base64
-    let barePhoto = null;
-    const m = String(photo_b64 || "").match(/^data:image\/[^;]+;base64,(.+)$/i);
-    if (m) barePhoto = m[1];
-    if (!barePhoto) return err("Invalid or missing photo_b64", 400);
+    if (!photo_b64) return err("Missing photo_b64", 400);
 
-    // --- NEW PROMPT BLOCK ---
-    // Much simpler. Style transfer only.
-    const prompt = buildRefPortraitPrompt({
-      style,
-      bible: bible || null,
-      traits,
-      hasPhoto: true,
-      category,
-    });
+    // Extract pure base64 (without data:image/... prefix)
+    const m = String(photo_b64).match(/^data:image\/[^;]+;base64,(.+)$/i);
+    if (!m) return err("Invalid photo_b64", 400);
+    const barePhoto = m[1];
 
     console.log("[REF] Using FAL Nano-Banana for reference portrait");
 
-    // --- NEW ENGINE: FAL ---
+    // --- SIMPLE, SAFE PROMPT (no details, only style transfer) ---
+    const prompt = `Transform this photo into a ${style} style illustration.
+Keep identity exactly the same.
+Do not change facial features, proportions or colors.
+Simple soft background.
+No text.`;
+
+
+    // --- CALL FAL ENGINE ---
     const fal = await falRefImage(env, {
       photo_b64: barePhoto,
-      style,
+      prompt,
     });
 
     if (!fal || !fal.b64) {
       return err("Failed to generate ref portrait via FAL", 500);
     }
 
-    // Upload to Cloudflare Images (optional)
+    // --- OPTIONAL: UPLOAD TO CLOUDFLARE IMAGES ---
     let cfImage = null;
     try {
       const data_url = `data:image/jpeg;base64,${fal.b64}`;
@@ -1675,8 +1676,8 @@ async function handleRefImage(req, env) {
     return ok({
       ref_image_b64: fal.b64,
       image_b64: fal.b64,
-      image_url: fal.image_url,
-      provider: fal.provider,
+      image_url: fal.image_url || null,
+      provider: fal.provider || "fal-nano-banana",
       cf_image_id: cfImage?.image_id || null,
       cf_image_url: cfImage?.url || null,
     });
@@ -1685,6 +1686,7 @@ async function handleRefImage(req, env) {
     return err(e.message || "Ref image failed", 500);
   }
 }
+
 
 
 
