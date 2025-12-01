@@ -3211,18 +3211,6 @@ function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
   ].filter(Boolean).join("\n");
 }
 
-function buildRefPortraitPrompt({ style, hasPhoto }) {
-  // Minimal safe prompt for ALL cases (child / pet / adult)
-  return `
-Transform this photo into a ${style} style illustration.
-Keep the identity exactly the same.
-Do not change facial features, markings, colors, or proportions.
-Do not add new accessories.
-Use a simple soft background.
-`;
-}
-
-
 
 
 async function handleStory(req, env) {
