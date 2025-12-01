@@ -3225,7 +3225,7 @@ function buildRefPortraitPrompt({
   const intro = [
     "*** ROLE ***",
     "You are a professional character designer for a children's picture book.",
-    "Your ONLY task is to create ONE clean reference portrait for the MAIN HERO,",
+     "Your ONLY critical task: keep the hero's physical identity as close to the PHOTO as possible.",
     "based directly on the provided PHOTO.",
   ].join("\n");
 
@@ -3249,7 +3249,7 @@ function buildRefPortraitPrompt({
       ].join("\n")
     : [
         "*** NO PHOTO PROVIDED ***",
-        "There is no photo. Invent a consistent hero based on the bible and traits.",
+        "There is no photo.",
       ].join("\n");
 
   const identityBlock = isPet
