@@ -812,10 +812,29 @@ async function fillShipMethods(country) {
 
     } catch (e){
       hide(el.spinner);
+
+      let msg = e?.message || "Okänt fel.";
+
+      // 🔹 Specialfall: vi gissar att Workern slagit i tidsgränsen / CPU-limit
+      if (
+        /Timeout/i.test(msg) ||
+        /HTTP 503/.test(msg) ||
+        /single-url failed/i.test(msg) ||
+        /Worker exceeded CPU time limit/i.test(msg)
+      ) {
+        msg =
+          "Det tog lite för lång tid att skapa din bok första gången. " +
+          "Ingen fara – betalningen är genomförd, men PDF:en hann inte bli klar i tid. " +
+          "Klicka på ”Försök igen” så försöker vi bygga boken en gång till.";
+      }
+
       setBanner("Ett fel uppstod.");
-      showErr(e?.message || "Okänt fel.");
+      showErr(msg);
       show(el.retryRow);
-      el.retryHint.textContent = "Om felet kvarstår: gå till startsidan och försök igen från kassan.";
+
+      el.retryHint.textContent =
+        "Om felet kvarstår efter något nytt försök: gå till startsidan och kontakta oss, så skickar vi boken manuellt.";
+
       console.error("success:init error:", e);
     }
   }

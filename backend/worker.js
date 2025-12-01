@@ -2263,7 +2263,7 @@ async function buildPdf(
     story?.book?.back_blurb ??
       (story?.book?.lesson
         ? `Lärdom: ${story.book.lesson}.`
-        : "En berättelse skapad med BokPiloten.") ?? ""
+        : "En berättelse skapad med SagoStugan.") ?? ""
   );
   const pagesStory = [...(story?.book?.pages || [])];
 
@@ -2745,31 +2745,67 @@ async function handlePdfRequest(req, env) {
       : JSON.stringify({ error: "PDF failed" });
     return new Response(body, { status: 500, headers: { "content-type": "application/json", "x-request-id": reqId, ...CORS } });
   }
-}
-async function handlePdfSingleUrl(req, env) {
+}async function handlePdfSingleUrl(req, env) {
   try {
     const payload = await req.json().catch(() => ({}));
     let {
-      story, images, mode = "preview", trim = "square200",
-      bleed_mm, deliverable = "digital", order_id,
+      story,
+      images,
+      mode = "preview",
+      trim = "square200",
+      bleed_mm,
+      deliverable = "digital",
+      order_id,
     } = payload || {};
-
-    // Hämta story från KV om bara order_id gavs
-    if ((!story || !Array.isArray(story?.book?.pages)) && order_id) {
-      const ord = await kvGetOrder(env, order_id);
-      if (ord?.draft?.story && Array.isArray(ord.draft.story?.book?.pages)) {
-        story  = ord.draft.story;
-        images = images || ord.draft.images || ord.draft.image_rows || [];
-      }
-    }
-    if (!story || !Array.isArray(story?.book?.pages)) {
-      return err("Missing story.book.pages", 400, { has_order: !!order_id, has_draft: false });
-    }
 
     const normDeliverable = String(deliverable || "digital").toLowerCase();
     const isPrint = normDeliverable === "print" || normDeliverable === "printed";
 
-    // Bygg PDF
+    // 🔹 1) CACHE-FIRST: om order redan har single_pdf_url → retur DIREKT (superbilligt)
+    let order = null;
+    if (order_id) {
+      try {
+        order = await kvGetOrder(env, order_id);
+      } catch (e) {
+        console.warn("[single-url] kvGetOrder failed:", e?.message || e);
+      }
+
+      if (order?.files?.single_pdf_url && order.files.page_count) {
+        return withCORS(
+          ok({
+            url: order.files.single_pdf_url,
+            key: order.files.single_pdf_key || null,
+            page_count: order.files.page_count,
+            pdf_page_count: order.files.pdf_page_count || order.files.page_count,
+            deliverable: order.files.deliverable || normDeliverable,
+            source: "cache",
+          })
+        );
+      }
+
+      // 🔹 Första gången: hämta story/images från draft om vi inte fick dem i payload
+      if (
+        (!story || !Array.isArray(story?.book?.pages)) &&
+        order?.draft?.story &&
+        Array.isArray(order.draft.story?.book?.pages)
+      ) {
+        story = order.draft.story;
+        images = images || order.draft.images || order.draft.image_rows || [];
+      }
+    }
+
+    // 🔹 2) Validering – vi MÅSTE ha story.book.pages för att bygga PDF
+    if (!story || !Array.isArray(story?.book?.pages)) {
+      const meta = {
+        has_order: !!order_id,
+        has_draft: !!order?.draft,
+      };
+      return withCORS(
+        err("Missing story.book.pages", 400, meta)
+      );
+    }
+
+    // 🔹 3) Bygg PDF (tunga delen – körs bara när vi INTE hade single_pdf_url)
     const trace = traceStart();
     const bytes = await buildPdf(
       {
@@ -2784,42 +2820,53 @@ async function handlePdfSingleUrl(req, env) {
       trace
     );
 
-    // Räkna verkliga sidor
-    const doc           = await PDFDocument.load(bytes);
-    const realPageCount = doc.getPageCount();
-
-    // Spara filen publikt
-    const ts        = Date.now();
+    // 🔹 4) Spara PDF i R2
+    const ts = Date.now();
     const safeTitle = safeTitleFrom(story);
-    const suffix    = isPrint ? "_PRINT_BOOK.pdf" : "_BOOK.pdf";
-    const key       = `${safeTitle}_${ts}${suffix}`;
-    const url       = await r2PutPublic(env, key, bytes, "application/pdf");
+    const suffix = isPrint ? "_PRINT_BOOK.pdf" : "_BOOK.pdf";
+    const key = `${safeTitle}_${ts}${suffix}`;
+    const url = await r2PutPublic(env, key, bytes, "application/pdf");
 
-    // 💡 REGEL: För PRINT sparar vi ALLTID page_count = 34 (hårdkodat).
-    //          Verkligt sidantal sparas som pdf_page_count för diagnos/logg.
+    // 🔹 5) Sidantal – superlätt:
+    //    PRINT: alltid 34 (så Gelato är nöjd)
+    //    DIGITAL: gissa på "antal story-sidor + 2" (omslag + baksida)
+    const realPageCount =
+      Array.isArray(story.book.pages) && story.book.pages.length
+        ? story.book.pages.length + 2
+        : 34;
+
     const pageCountForGelato = isPrint ? 34 : realPageCount;
 
+    // 🔹 6) Uppdatera order i KV (för framtida ultrasnabba anrop)
     if (order_id) {
       await kvAttachFiles(env, order_id, {
         single_pdf_url: url,
         single_pdf_key: key,
-        page_count: pageCountForGelato,  // <- Gelato läser detta
-        pdf_page_count: realPageCount,   // <- diagnostic
+        page_count: pageCountForGelato, // Gelato läser detta
+        pdf_page_count: realPageCount,  // diag-info
         deliverable: normDeliverable,
       });
     }
 
-    return withCORS(ok({
-      url,
-      key,
-      page_count: pageCountForGelato,
-      pdf_page_count: realPageCount,
-      deliverable: normDeliverable,
-    }));
+    // 🔹 7) Svar
+    return withCORS(
+      ok({
+        url,
+        key,
+        page_count: pageCountForGelato,
+        pdf_page_count: realPageCount,
+        deliverable: normDeliverable,
+        source: "fresh",
+      })
+    );
   } catch (e) {
-    return withCORS(err(e?.message || "single-url failed", 500));
+    console.error("[single-url] error:", e);
+    return withCORS(
+      err(e?.message || "single-url failed", 500)
+    );
   }
 }
+
 
 
 /* --------------------------- /api/diag ------------------------------- */
