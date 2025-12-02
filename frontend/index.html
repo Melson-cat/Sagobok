@@ -33,7 +33,6 @@
     </nav>
   </div>
 </header>
-
 <main class="container">
   <!-- HERO / TOPPSEKTION -->
   <section class="hero">
@@ -55,19 +54,7 @@
         />
       </div>
 
-      <p class="hero-tagline">
-        Fyll i namn, ålder och önskad stil – vi skriver sagan, målar
-        illustrationerna och förbereder både tryckt bok och digital PDF åt dig.
-      </p>
-
-      <div class="hero-pill-row">
-        <span class="hero-pill">🧒 Barn & 🐾 husdjur</span>
-        <span class="hero-pill">📚 Tryckt bok & PDF</span>
-        <span class="hero-pill">✨ AI-illustrationer</span>
-      </div>
-
-      <!-- Vi låter knapparna ligga kvar här i HTML,
-           men flyttar ned dem på MOBIL med CSS (order) -->
+      <!-- Knapparna ligger kvar i hero-main (overlay på desktop) -->
       <div class="hero-cta-row">
         <button
           type="button"
@@ -83,18 +70,6 @@
           Visa exempel
         </button>
       </div>
-
-      <ul class="hero-list">
-        <li>1. Fyll i namn, ålder och önskad stil.</li>
-        <li>2. AI skriver sagan & skapar illustrationer sida för sida.</li>
-        <li>3. Beställ tryckt bok eller ladda ner som PDF.</li>
-      </ul>
-
-      <p class="hero-pricing">
-        Digital bok: <strong>79 kr</strong>
-        &nbsp;•&nbsp;
-        Tryckt bok: <strong>249 kr</strong>
-      </p>
     </div>
 
     <div class="hero-media">
@@ -109,8 +84,33 @@
       </div>
     </div>
   </section>
-</main>
 
+  <!-- 🔽 All info-text, tags, lista & pris hamnar UNDER bilden -->
+  <section class="hero-details">
+    <p class="hero-tagline">
+      Fyll i namn, ålder och önskad stil – vi skriver sagan, målar
+      illustrationerna och förbereder både tryckt bok och digital PDF åt dig.
+    </p>
+
+    <div class="hero-pill-row">
+      <span class="hero-pill">🧒 Barn & 🐾 husdjur</span>
+      <span class="hero-pill">📚 Tryckt bok & PDF</span>
+      <span class="hero-pill">✨ AI-illustrationer</span>
+    </div>
+
+    <ul class="hero-list">
+      <li>1. Fyll i namn, ålder och önskad stil.</li>
+      <li>2. AI skriver sagan & skapar illustrationer sida för sida.</li>
+      <li>3. Beställ tryckt bok eller ladda ner som PDF.</li>
+    </ul>
+
+    <p class="hero-pricing">
+      Digital bok: <strong>79 kr</strong>
+      &nbsp;•&nbsp;
+      Tryckt bok: <strong>249 kr</strong>
+    </p>
+  </section>
+</main>
 
 
 

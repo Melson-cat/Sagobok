@@ -971,3 +971,27 @@ textarea:focus {
     transition: none !important;
   }
 }
+/* Text-blocket under bilden */
+.hero-details {
+  max-width: 680px;
+  margin: 18px auto 0;
+}
+
+/* Bas-stilarna för tagline/lista/pris används redan,
+   men här ser vi till att de funkar fint även efter flytten. */
+.hero-details .hero-tagline {
+  margin: 0 0 8px;
+  font-size: 0.98rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.hero-details .hero-pill-row {
+  margin: 4px 0 12px;
+}
+
+.hero-details .hero-list,
+.hero-details .hero-pricing {
+  color: var(--muted);
+  text-shadow: none;
+}
