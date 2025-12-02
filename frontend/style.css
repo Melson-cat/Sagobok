@@ -823,6 +823,7 @@ textarea:focus {
     padding: 12px 10px;
     gap: 12px;
   }
+  
 
   .brand img { width: 48px; }
   .brand span { font-size: 0.95rem; }
@@ -854,7 +855,16 @@ textarea:focus {
     min-width: 0;
     justify-content: center;
   }
+   .container {
+    padding-top: 8px; /* mindre padding mot headern */
+  }
+
+  .hero {
+    margin-top: 4px; /* eller 0 om du vill ha det supertight */
+  }
+
 }
+
 
 /* Mindre mobiljusteringar */
 @media (max-width: 600px) {
