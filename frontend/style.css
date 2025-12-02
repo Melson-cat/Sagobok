@@ -207,7 +207,7 @@ body::before {
   margin: 0 0 1rem;
 }
 
-/* ⬇️ FIX för färgblock: gör gradienten bara på texten */
+/* Gradient-highlightad text */
 .hero-highlight {
   display: inline-block;
   background: linear-gradient(90deg, #ff8fa3, #ffd37a);
@@ -289,6 +289,7 @@ body::before {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: center center;
   display: block;
 }
 
@@ -893,68 +894,7 @@ textarea:focus {
   }
 }
 
-/* Mindre mobiljusteringar */
-@media (max-width: 600px) {
-  .hero-cta-row {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .hero-bubble-main {
-    left: 6%;
-    bottom: 16%;
-    max-width: 82%;
-  }
-
-  .hero-badge-card {
-    right: 6%;
-  }
-
-  .hero-floating-tag {
-    font-size: 0.75rem;
-  }
-
-  .hero-title {
-    font-size: 1.8rem;
-  }
-
-  .thumb-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .checkout-actions .btn-cta {
-    width: 100%;
-  }
-}
-
-/* Utskrift */
-@media print {
-  .site-header,
-  .main-nav,
-  .actions,
-  #statusBar {
-    display: none !important;
-  }
-
-  .panel {
-    border: 0;
-    box-shadow: none;
-    background: white;
-  }
-
-  .thumb {
-    page-break-inside: avoid;
-  }
-}
-
-/* Färre animationer */
-@media (prefers-reduced-motion: reduce) {
-  * {
-    animation: none !important;
-    transition: none !important;
-  }
-}
-/* === MOBIL-FINLIR FÖR HERO =============================== */
+/* Mindre mobiljusteringar + HERO-fix */
 @media (max-width: 600px) {
   .hero {
     grid-template-columns: 1fr;
@@ -1010,15 +950,18 @@ textarea:focus {
   }
 
   .hero-image-wrapper {
-    max-width: 320px;
-    width: 100%;
-    aspect-ratio: auto;      /* låt bilden styra höjden */
+    max-width: 100%;
+    width: 100vw;
+    margin-inline: -16px;  /* tar bort container-padding så den blir fullbredd */
+    aspect-ratio: auto;    /* låt bilden styra höjden */
+    border-radius: 0;      /* kan sättas tillbaka om du vill ha rundade hörn även på mobil */
   }
 
   .hero-image {
     width: 100%;
     height: auto;
-    object-fit: contain;     /* visa hela bilden */
+    object-fit: contain;   /* visa hela bilden */
+    object-position: center;
   }
 
   /* Skala ned bubblor lite så de inte tar över */
@@ -1048,5 +991,41 @@ textarea:focus {
     font-size: 0.7rem;
     bottom: -0.7rem;
     padding: 0.3rem 0.6rem;
+  }
+
+  .thumb-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .checkout-actions .btn-cta {
+    width: 100%;
+  }
+}
+
+/* Utskrift */
+@media print {
+  .site-header,
+  .main-nav,
+  .actions,
+  #statusBar {
+    display: none !important;
+  }
+
+  .panel {
+    border: 0;
+    box-shadow: none;
+    background: white;
+  }
+
+  .thumb {
+    page-break-inside: avoid;
+  }
+}
+
+/* Färre animationer */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
   }
 }
