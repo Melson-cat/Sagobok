@@ -896,7 +896,7 @@ textarea:focus {
 
   .hero-tagline {
     color: #e5f5ff;
-    max-width: 30rem;
+    max-width: none;
     text-shadow: 0 6px 18px rgba(0, 0, 0, 0.65);
   }
 
