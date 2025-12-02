@@ -45,6 +45,16 @@
         <span class="hero-highlight">ditt barn eller husdjur</span> som hjälte.
       </h1>
 
+      <!-- 🔥 Mobil-bild: visas bara på mobil, göms på desktop -->
+      <div class="hero-image-wrapper hero-image-mobile">
+        <img
+          src="images/hero-image.png"
+          alt="Illustration av en personlig sagobok från Sagostugan"
+          class="hero-image"
+          loading="eager"
+        />
+      </div>
+
       <p class="hero-tagline">
         Fyll i namn, ålder och önskad stil – vi skriver sagan, målar
         illustrationerna och förbereder både tryckt bok och digital PDF åt dig.
@@ -56,6 +66,8 @@
         <span class="hero-pill">✨ AI-illustrationer</span>
       </div>
 
+      <!-- Vi låter knapparna ligga kvar här i HTML,
+           men flyttar ned dem på MOBIL med CSS (order) -->
       <div class="hero-cta-row">
         <button
           type="button"
@@ -86,19 +98,19 @@
     </div>
 
     <div class="hero-media">
-      <div class="hero-image-wrapper">
+      <div class="hero-image-wrapper hero-image-desktop">
         <img
           src="images/hero-image.png"
           alt="Illustration av en personlig sagobok från Sagostugan"
           class="hero-image"
           loading="eager"
         />
-
-      
+        <!-- här kan du ha dina bubblor/floating tag om du vill -->
       </div>
     </div>
   </section>
 </main>
+
 
 
 
