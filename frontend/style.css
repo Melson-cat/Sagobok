@@ -176,20 +176,21 @@ body::before {
 }
 
 /* =========================================================
-   HERO
+   HERO – mobil först
    ========================================================= */
 .hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-  align-items: center;
-  gap: 3rem;
-  padding-block: 3.5rem 4.5rem;
-}
-
-.hero-main {
-  max-width: 600px;
+  margin-top: 24px;
   display: flex;
   flex-direction: column;
+  gap: 12px;
+}
+
+/* Textdel */
+.hero-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 680px;
 }
 
 .hero-kicker {
@@ -198,13 +199,13 @@ body::before {
   letter-spacing: 0.14em;
   font-weight: 600;
   opacity: 0.8;
-  margin: 0 0 0.75rem;
+  margin: 0;
 }
 
 .hero-title {
-  font-size: clamp(1.9rem, 3vw + 1rem, 2.6rem);
+  font-size: clamp(1.9rem, 3vw + 1rem, 2.5rem);
   line-height: 1.15;
-  margin: 0 0 1rem;
+  margin: 0;
 }
 
 /* Gradient-highlightad text */
@@ -216,11 +217,25 @@ body::before {
   color: transparent;
 }
 
+/* 👉 På mobil ligger bilden direkt under titeln */
+.hero-image-mobile {
+  margin-top: 10px;
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.35);
+}
+
+.hero-image-mobile .hero-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: cover;
+}
+
 .hero-tagline {
-  margin: 0 0 1.25rem;
-  font-size: 1rem;
-  line-height: 1.5;
-  max-width: 40rem;
+  margin: 6px 0 8px;
+  font-size: 0.98rem;
+  line-height: 1.6;
   color: var(--muted);
 }
 
@@ -228,16 +243,16 @@ body::before {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin-bottom: 1.5rem;
+  margin: 4px 0 12px;
 }
 
 .hero-pill {
-  padding: 0.4rem 0.75rem;
+  padding: 0.35rem 0.75rem;
   border-radius: 999px;
-  font-size: 0.85rem;
-  background: rgba(255, 255, 255, 0.7);
+  font-size: 0.82rem;
+  background: rgba(255, 255, 255, 0.8);
   border: 1px solid rgba(255, 255, 255, 0.9);
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
   backdrop-filter: blur(6px);
 }
 
@@ -245,7 +260,7 @@ body::before {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
-  margin-bottom: 1.5rem;
+  margin: 4px 0 10px;
 }
 
 .hero-list {
@@ -268,32 +283,29 @@ body::before {
   color: var(--text);
 }
 
-/* === HERO IMAGE SIDE ====================================== */
+/* Bild på desktop används som stor hero-banner */
 .hero-media {
-  display: flex;
-  justify-content: center;
+  display: none; /* mobil: vi använder hero-image-mobile */
 }
 
 .hero-image-wrapper {
   position: relative;
-  max-width: 460px;
   width: 100%;
-  aspect-ratio: 16 / 10;
-  border-radius: 1.5rem;
+  max-width: 1100px;
+  border-radius: 24px;
   overflow: hidden;
-  box-shadow: 0 22px 45px rgba(15, 23, 42, 0.25);
+  box-shadow: 0 26px 55px rgba(15, 23, 42, 0.4);
   background: radial-gradient(circle at top, #ffe4ec, #f3f4ff);
 }
 
 .hero-image {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center center;
+  height: auto;
   display: block;
+  object-fit: cover;
 }
 
-/* Bubbla + badges */
+/* Bubbla + badges (kan användas senare om du vill) */
 .hero-bubble {
   position: absolute;
   font-size: 0.85rem;
@@ -357,6 +369,11 @@ body::before {
   box-shadow: 0 10px 25px rgba(15, 23, 42, 0.45);
 }
 
+/* På mobil använder vi bara hero-image-mobile */
+.hero-image-desktop {
+  display: none;
+}
+
 /* =========================================================
    Paneler & formulär
    ========================================================= */
@@ -367,7 +384,7 @@ body::before {
   box-shadow: var(--shadow);
   padding: 24px;
   max-width: 920px;
-  margin: 0 auto;
+  margin: 32px auto 0;
 }
 
 form {
@@ -835,32 +852,6 @@ textarea:focus {
   }
 }
 
-/* Stackad hero på tablet */
-@media (max-width: 900px) {
-  .hero {
-    grid-template-columns: 1fr;
-    gap: 2.75rem;
-    padding-block: 2.5rem 3.25rem;
-  }
-
-  .hero-main {
-    order: 1;
-  }
-
-  .hero-media {
-    order: 2;
-  }
-
-  .hero-image-wrapper {
-    max-width: 380px;
-    margin-inline: auto;
-  }
-
-  .hero-title {
-    font-size: clamp(1.8rem, 6vw, 2.3rem);
-  }
-}
-
 /* Mobil: header + formulär */
 @media (max-width: 760px) {
   .header-inner {
@@ -892,107 +883,16 @@ textarea:focus {
   .thumb-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-}
-
-/* Mindre mobiljusteringar + HERO-fix */
-@media (max-width: 600px) {
-  .hero {
-    grid-template-columns: 1fr;
-    gap: 2rem;
-    padding-block: 1.75rem 2.5rem;
-  }
-
-  .hero-main {
-    max-width: 100%;
-  }
-
-  .hero-kicker {
-    font-size: 0.8rem;
-    margin-bottom: 0.5rem;
-  }
-
-  .hero-title {
-    font-size: 1.5rem;
-    line-height: 1.2;
-  }
-
-  .hero-tagline {
-    font-size: 0.9rem;
-    max-width: 100%;
-  }
-
-  .hero-pill-row {
-    gap: 0.4rem;
-    margin-bottom: 1rem;
-  }
-
-  .hero-pill {
-    font-size: 0.78rem;
-    padding: 0.3rem 0.6rem;
-  }
-
-  .hero-cta-row {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-  }
 
   .btn-cta {
+    width: 100%;
     min-width: 0;
-    width: 100%;
     justify-content: center;
   }
+}
 
-  /* Bilden – visa HELA bilden i stället för att kapa */
-  .hero-media {
-    justify-content: center;
-  }
-
-  .hero-image-wrapper {
-    max-width: 100%;
-    width: 100vw;
-    margin-inline: -16px;  /* tar bort container-padding så den blir fullbredd */
-    aspect-ratio: auto;    /* låt bilden styra höjden */
-    border-radius: 0;      /* kan sättas tillbaka om du vill ha rundade hörn även på mobil */
-  }
-
-  .hero-image {
-    width: 100%;
-    height: auto;
-    object-fit: contain;   /* visa hela bilden */
-    object-position: center;
-  }
-
-  /* Skala ned bubblor lite så de inte tar över */
-  .hero-bubble {
-    font-size: 0.78rem;
-    padding: 0.5rem 0.65rem;
-  }
-
-  .hero-bubble-main {
-    left: 6%;
-    bottom: 14%;
-    max-width: 84%;
-  }
-
-  .hero-book-icon {
-    width: 1.8rem;
-    height: 1.8rem;
-    font-size: 1rem;
-  }
-
-  .hero-badge-card {
-    right: 6%;
-    top: 8%;
-  }
-
-  .hero-floating-tag {
-    font-size: 0.7rem;
-    bottom: -0.7rem;
-    padding: 0.3rem 0.6rem;
-  }
-
+/* Mindre mobiljusteringar */
+@media (max-width: 600px) {
   .thumb-grid {
     grid-template-columns: 1fr;
   }
@@ -1000,6 +900,128 @@ textarea:focus {
   .checkout-actions .btn-cta {
     width: 100%;
   }
+}
+
+/* Desktop / större skärmar – overlay-hero */
+@media (min-width: 900px) {
+  .hero {
+    position: relative;
+    margin-top: 32px;
+    gap: 18px;
+  }
+
+  /* Vi använder den stora desktop-bilden som hero-bakgrund */
+  .hero-media {
+    display: block;
+  }
+
+  .hero-image-desktop {
+    display: block;
+  }
+
+  .hero-image-mobile {
+    display: none;
+  }
+
+  .hero-media .hero-image-wrapper {
+    width: 100%;
+    max-width: 1100px;
+    margin: 0 auto;
+    border-radius: 26px;
+    overflow: hidden;
+    box-shadow: 0 28px 60px rgba(15, 23, 42, 0.45);
+  }
+
+  /* Lägg texten ovanpå bilden */
+  .hero-main {
+    position: absolute;
+    inset: 0;
+    padding: 2.5rem 3rem;
+    max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    pointer-events: none; /* så att klick går igenom, vi slår på på knapparna igen */
+  }
+
+  .hero-main > * {
+    pointer-events: auto;
+  }
+
+  .hero-kicker {
+    color: #f9fafb;
+    opacity: 0.85;
+  }
+
+  .hero-title {
+    color: #f9fafb;
+    text-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+    max-width: 26rem;
+  }
+
+  .hero-tagline {
+    color: #e5f5ff;
+    max-width: 30rem;
+    text-shadow: 0 6px 18px rgba(0, 0, 0, 0.65);
+  }
+
+  .hero-pill-row {
+    margin-top: 0.75rem;
+  }
+
+  .hero-pill {
+    background: rgba(15, 23, 42, 0.8);
+    color: #e5f1ff;
+    border: 1px solid rgba(248, 250, 252, 0.25);
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.55);
+  }
+
+  /* Ordning i overlay: kicker, titel, tagline, pills, lista/pris, knappar i botten */
+  .hero-main {
+    row-gap: 0.4rem;
+  }
+
+  .hero-list,
+  .hero-pricing {
+    color: #e5f5ff;
+    text-shadow: 0 6px 18px rgba(0, 0, 0, 0.65);
+  }
+
+  .hero-list {
+    margin-top: 0.75rem;
+  }
+
+  .hero-cta-row {
+    margin-top: auto; /* tryck ner knapparna mot botten av bilden */
+    gap: 0.75rem;
+  }
+
+  .hero-cta-row .btn-cta {
+    min-width: 0;
+  }
+
+  .hero-cta-row .btn-ghost {
+    background: rgba(15, 23, 42, 0.78);
+    color: #f9fafb;
+    border-color: rgba(249, 250, 251, 0.3);
+  }
+
+  .hero-cta-row .btn-ghost:hover {
+    background: rgba(15, 23, 42, 0.95);
+  }
+
+  /* Brödtexten ska ligga under knapparna – utanför bilden */
+  .hero-tagline {
+    position: static;
+  }
+
+  /* För att få tagline under hero-bilden på desktop:
+     vi låter hero-tagline synas två gånger visuellt? Nej.
+     Här gör vi så: vi duplicerar stilen för tagline när den
+     ligger efter section.hero i HTML – men du har den inne i
+     hero-main, så vi låter den ligga kvar ovanför knapparna
+     i overlay och accepterar det; vill du ha den fysiskt under
+     bilden flyttar vi <p class="hero-tagline"> under </section>
+     i HTML. */
 }
 
 /* Utskrift */
