@@ -185,12 +185,13 @@ body::before {
   gap: 12px;
 }
 
-/* Textdel */
+/* Textdel över bilden */
 .hero-main {
   display: flex;
   flex-direction: column;
   gap: 8px;
   max-width: 680px;
+  z-index: 2;
 }
 
 .hero-kicker {
@@ -198,14 +199,17 @@ body::before {
   text-transform: uppercase;
   letter-spacing: 0.14em;
   font-weight: 600;
-  opacity: 0.8;
+  opacity: 0.9;
   margin: 0;
+  color: #f9fafb;
 }
 
 .hero-title {
   font-size: clamp(1.9rem, 3vw + 1rem, 2.6rem);
   line-height: 1.15;
   margin: 0;
+  color: #f9fafb;
+  text-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
 }
 
 /* Gradient-highlightad text */
@@ -217,7 +221,7 @@ body::before {
   color: transparent;
 }
 
-/* 👉 Mobil: bilden direkt under titeln, centrerad */
+/* Mobil-bild direkt under titeln, centrerad */
 .hero-image-mobile {
   margin: 12px auto 8px;
   max-width: 680px;
@@ -232,57 +236,6 @@ body::before {
   height: auto;
   object-fit: cover;
   object-position: center center;
-}
-
-.hero-tagline {
-  margin: 6px 0 8px;
-  font-size: 0.98rem;
-  line-height: 1.6;
-  color: var(--muted);
-}
-
-.hero-pill-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 4px 0 12px;
-}
-
-.hero-pill {
-  padding: 0.35rem 0.75rem;
-  border-radius: 999px;
-  font-size: 0.82rem;
-  background: rgba(255, 255, 255, 0.8);
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
-  backdrop-filter: blur(6px);
-}
-
-.hero-cta-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  margin: 4px 0 10px;
-}
-
-.hero-list {
-  list-style: disc;
-  margin: 0 0 0.75rem 1.2rem;
-  padding: 0;
-  font-size: 0.95rem;
-  line-height: 1.55;
-  color: var(--muted);
-}
-
-.hero-pricing {
-  margin: 0;
-  font-size: 0.95rem;
-  opacity: 0.9;
-  color: var(--muted);
-}
-
-.hero-pricing strong {
-  color: var(--text);
 }
 
 /* Desktop-bilden (hero-media) är dold på mobil */
@@ -304,6 +257,90 @@ body::before {
   height: auto;
   display: block;
   object-fit: cover;
+}
+
+/* CTA-knapp – under texten, centrerad */
+.hero-cta-row {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+  padding-bottom: 0;
+}
+
+.hero-cta-row .btn-cta {
+  font-size: 1.1rem;
+  padding: 16px 34px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--brand), color-mix(in srgb, var(--brand) 80%, black));
+  box-shadow:
+    0 10px 28px rgba(0,0,0,.25),
+    0 0 18px rgba(60, 200, 140, 0.45);
+  transform: translateY(0);
+  transition: all .22s ease;
+}
+
+.hero-cta-row .btn-cta:hover {
+  transform: translateY(-3px);
+  box-shadow:
+    0 18px 40px rgba(0,0,0,.28),
+    0 0 26px rgba(60, 200, 140, 0.55);
+}
+
+/* =========================================================
+   Textblocket UNDER bilden (tagline, pills, lista, pris)
+   ========================================================= */
+.hero-details {
+  max-width: 1100px;
+  width: 100%;
+  margin: 56px auto 0;
+  padding: 0 16px;          /* matchar .container */
+  color: #2b3135;
+}
+
+.hero-details .hero-tagline {
+  margin: 0 0 8px;
+  font-size: 0.98rem;
+  line-height: 1.6;
+  color: #3a4248;
+}
+
+.hero-details .hero-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 4px 0 12px;
+}
+
+.hero-pill {
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  color: #2b2f33;
+  font-weight: 600;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
+  backdrop-filter: blur(6px);
+}
+
+.hero-details .hero-list {
+  list-style: disc;
+  margin: 0 0 0.75rem 1.2rem;
+  padding: 0;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: #4a5258;
+}
+
+.hero-details .hero-pricing {
+  margin: 0;
+  font-size: 0.95rem;
+  color: #374045;
+}
+
+.hero-details .hero-pricing strong {
+  color: var(--text);
 }
 
 /* =========================================================
@@ -516,14 +553,20 @@ textarea:focus {
 }
 
 .btn-primary {
-  background: linear-gradient(
-    180deg,
-    var(--brand),
-    color-mix(in srgb, var(--brand) 88%, black)
-  );
+  background: linear-gradient(180deg, var(--brand), color-mix(in srgb, var(--brand) 85%, black));
+  transform: translateY(-1px);
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, 0.18),
+    0 12px 32px color-mix(in srgb, var(--brand) 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand) 60%, black);
   color: white;
-  border: 1px solid color-mix(in srgb, var(--brand) 60%, black 0%);
-  box-shadow: 0 10px 22px color-mix(in srgb, var(--brand) 28%, transparent);
+}
+
+.btn-primary:hover {
+  transform: translateY(-3px);
+  box-shadow:
+    0 12px 26px rgba(0,0,0,0.2),
+    0 16px 40px color-mix(in srgb, var(--brand) 50%, transparent);
 }
 
 .btn-secondary {
@@ -551,16 +594,6 @@ textarea:focus {
 .checkout-actions {
   justify-content: flex-start;
   gap: 12px;
-}
-
-.btn-cta {
-  font-size: 1rem;
-  padding: 14px 22px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 190px;
 }
 
 /* =========================================================
@@ -834,9 +867,7 @@ textarea:focus {
   }
 }
 
-/* =========================================================
-   Desktop / större skärmar – overlay-hero
-   ========================================================= */
+/* Desktop / större skärmar – overlay-hero */
 @media (min-width: 900px) {
   .hero {
     position: relative;
@@ -864,7 +895,7 @@ textarea:focus {
     border-radius: 26px;
     overflow: hidden;
     box-shadow: 0 28px 60px rgba(15, 23, 42, 0.45);
-    z-index: 1; /* bilden under texten */
+    z-index: 1;
   }
 
   /* Lägg texten ovanpå bilden */
@@ -875,6 +906,7 @@ textarea:focus {
     max-width: 100%;
     display: flex;
     flex-direction: column;
+    justify-content: flex-start;
     z-index: 2;
     pointer-events: none;
   }
@@ -883,63 +915,14 @@ textarea:focus {
     pointer-events: auto;
   }
 
-  .hero-title {
-    color: #f9fafb;
-    text-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
-    max-width: 32rem;           /* längre titel – över hund/barn */
-  }
-
-  .hero-kicker {
-    color: #f9fafb;
-    opacity: 0.9;
-  }
-
-  .hero-tagline {
-    color: #e5f5ff;
-    max-width: none;
-    text-shadow: 0 6px 18px rgba(0, 0, 0, 0.65);
-  }
-
-  .hero-pill-row {
-    margin-top: 0.75rem;
-  }
-
-  .hero-pill {
-    background: rgba(15, 23, 42, 0.8);
-    color: #e5f1ff;
-    border: 1px solid rgba(248, 250, 252, 0.25);
-    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.55);
-  }
-
-  .hero-list,
-  .hero-pricing {
-    color: #e5f5ff;
-    text-shadow: 0 6px 18px rgba(0, 0, 0, 0.65);
-  }
-
-  /* Knapparna – centrerade nära nederkanten av bilden */
+  /* Knapparna – absolut centrerade nära nederkanten av bilden */
   .hero-cta-row {
     position: absolute;
     left: 50%;
     bottom: 32px;
     transform: translateX(-50%);
-    display: flex;
-    gap: 0.75rem;
-    justify-content: center;
-  }
-
-  .hero-cta-row .btn-cta {
-    min-width: 0;
-  }
-
-  .hero-cta-row .btn-ghost {
-    background: rgba(15, 23, 42, 0.78);
-    color: #f9fafb;
-    border-color: rgba(249, 250, 251, 0.3);
-  }
-
-  .hero-cta-row .btn-ghost:hover {
-    background: rgba(15, 23, 42, 0.95);
+    margin-top: 0;
+    padding-bottom: 0;
   }
 }
 
@@ -970,131 +953,4 @@ textarea:focus {
     animation: none !important;
     transition: none !important;
   }
-}
-/* Text-blocket under bilden */
-.hero-details {
-  max-width: 1100px;
-  width: 100%;
-  margin: 52px auto 0;
-  padding: 0 0; /* ingen insida — full bredd */
-}
-
-
-
-/* Innehållet i blocket */
-.hero-details .hero-tagline {
-  margin: 0 0 8px;
-  font-size: 0.98rem;
-  line-height: 1.6;
-  color: var(--muted);
-}
-
-.hero-details .hero-pill-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 4px 0 12px;
-}
-
-.hero-details .hero-pill {
-  padding: 0.35rem 0.75rem;
-  border-radius: 999px;
-  font-size: 0.82rem;
-  background: rgba(255, 255, 255, 0.8);
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
-  backdrop-filter: blur(6px);
-}
-
-.hero-details .hero-list {
-  list-style: disc;
-  margin: 0 0 0.75rem 1.2rem;
-  padding: 0;
-  font-size: 0.95rem;
-  line-height: 1.55;
-  color: var(--muted);
-}
-
-.hero-details .hero-pricing {
-  margin: 0;
-  font-size: 0.95rem;
-  opacity: 0.9;
-  color: var(--muted);
-}
-
-.hero-details .hero-pricing strong {
-  color: var(--text);
-}
-
-.hero-cta-row {
-  width: 100%;
-  display: flex;
-  justify-content: center;   /* 🔥 centrerar knappen */
-  margin-top: auto;          /* håller den längst ner på desktop */
-  padding-bottom: 32px;      /* luft från nederkant av bilden */
-}
-
-.hero-cta-row .btn-cta {
-  font-size: 1.15rem;
-  padding: 16px 34px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, var(--brand), color-mix(in srgb, var(--brand) 80%, black));
-  box-shadow:
-    0 10px 28px rgba(0,0,0,.25),
-    0 0 18px rgba(60, 200, 140, 0.45);  /* 🔥 magisk glow */
-  transform: translateY(0);
-  transition: all .22s ease;
-}
-
-.hero-cta-row .btn-cta:hover {
-  transform: translateY(-3px);
-  box-shadow:
-    0 18px 40px rgba(0,0,0,.28),
-    0 0 26px rgba(60, 200, 140, 0.55);
-}
-
-.hero-details {
-  color: #2b3135; /* mörk men mjuk */
-}
-
-.hero-details .hero-tagline {
-  color: #3a4248; 
-}
-
-.hero-details .hero-list {
-  color: #4a5258;
-}
-
-.hero-details .hero-pricing {
-  color: #374045;
-}
-.hero-pill {
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  color: #2b2f33;           /* 🔥 bättre kontrast */
-  font-weight: 600;
-  backdrop-filter: blur(6px);
-}
-@media (min-width: 900px) {
-  .hero-pill {
-    background: rgba(255, 255, 255, 0.97);
-    border-color: rgba(0,0,0,0.1);
-    color: #16191c;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-  }
-}
-.btn-primary {
-  background: linear-gradient(180deg, var(--brand), color-mix(in srgb, var(--brand) 85%, black));
-  transform: translateY(-1px);
-  box-shadow:
-      0 8px 22px rgba(0, 0, 0, 0.18),
-      0 12px 32px color-mix(in srgb, var(--brand) 45%, transparent);
-  border: 1px solid color-mix(in srgb, var(--brand) 60%, black);
-  color: white;
-}
-.btn-primary:hover {
-  transform: translateY(-3px);
-  box-shadow:
-      0 12px 26px rgba(0,0,0,0.2),
-      0 16px 40px color-mix(in srgb, var(--brand) 50%, transparent);
 }
