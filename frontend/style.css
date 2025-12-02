@@ -973,12 +973,12 @@ textarea:focus {
 }
 /* Text-blocket under bilden */
 .hero-details {
-  max-width: 680px;
-  margin: 18px auto 0;
+  max-width: 1100px;      /* samma som containern / bilden */
+  margin: 18px auto 0; 
+  padding: 0 4px;   
 }
 
-/* Bas-stilarna för tagline/lista/pris används redan,
-   men här ser vi till att de funkar fint även efter flytten. */
+/* Innehållet i blocket */
 .hero-details .hero-tagline {
   margin: 0 0 8px;
   font-size: 0.98rem;
@@ -987,11 +987,39 @@ textarea:focus {
 }
 
 .hero-details .hero-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   margin: 4px 0 12px;
 }
 
-.hero-details .hero-list,
-.hero-details .hero-pricing {
-  color: var(--muted);
-  text-shadow: none;
+.hero-details .hero-pill {
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
+  backdrop-filter: blur(6px);
 }
+
+.hero-details .hero-list {
+  list-style: disc;
+  margin: 0 0 0.75rem 1.2rem;
+  padding: 0;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.hero-details .hero-pricing {
+  margin: 0;
+  font-size: 0.95rem;
+  opacity: 0.9;
+  color: var(--muted);
+}
+
+.hero-details .hero-pricing strong {
+  color: var(--text);
+}
+
