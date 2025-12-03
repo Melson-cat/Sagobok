@@ -349,7 +349,6 @@
 <footer class="site-footer">
   <p>© 2025 SagoStugan</p>
 </footer>
-
 <script>
 /* Mobile menu */
 (function(){
@@ -365,53 +364,52 @@
   m.addEventListener("click",e=>{ if(e.target.tagName==="A") setOpen(false); });
 })();
 
-/* Status Logic */
+/* Status Logic + e-poststatus */
 (function(){
-  const BACKEND="https://bokpilot-backend.sebastian-runell.workers.dev";
-  const $=id=>document.getElementById(id);
-  const show=el=>el.classList.remove("hidden");
-  const hide=el=>el.classList.add("hidden");
-  const setText=(el,t)=>el.textContent=t;
-const el = {
-  form: $("statusForm"),
-  input: $("orderIdInput"),
-  email: $("emailInput"),
-  emailBtn: $("emailStatusBtn"),
-  emailMsg: $("emailStatusMsg"),
-  box: $("orderBox"),
-  pill: $("pillKind"),
-  orderId: $("orderId"),
-  orderState: $("orderState"),
-  updated: $("lastUpdated"),
-  bar: $("statusBar"),
-  spinner: $("spinner"),
-  err: $("err"),
-  cover: $("coverThumb"),
-  title: $("bookTitle"),
-  info: $("bookInfo"),
-  links: $("infoLinks")
-};
+  const BACKEND = "https://bokpilot-backend.sebastian-runell.workers.dev";
+  const $ = id => document.getElementById(id);
+  const show = el => el && el.classList.remove("hidden");
+  const hide = el => el && el.classList.add("hidden");
+  const setText = (el, t) => { if (el) el.textContent = t; };
 
+  const el = {
+    form: $("statusForm"),
+    input: $("orderIdInput"),
+    email: $("emailInput"),
+    emailBtn: $("emailStatusBtn"),
+    emailMsg: $("emailStatusMsg"),
+    box: $("orderBox"),
+    pill: $("pillKind"),
+    orderId: $("orderId"),
+    orderState: $("orderState"),
+    updated: $("lastUpdated"),
+    bar: $("statusBar"),
+    spinner: $("spinner"),
+    err: $("err"),
+    cover: $("coverThumb"),
+    title: $("bookTitle"),
+    info: $("bookInfo"),
+    links: $("infoLinks")
+  };
 
- async function fetchJSON(url, options){
-  const r = await fetch(url, options || {});
-  const ct = r.headers.get("content-type") || "";
-  const isJSON = ct.includes("application/json");
-  const body = isJSON ? await r.json() : await r.text();
-  if (!r.ok || (isJSON && body.error)) {
-    throw new Error(body.error || `HTTP ${r.status}`);
+  async function fetchJSON(url, options){
+    const r = await fetch(url, options || {});
+    const ct = r.headers.get("content-type") || "";
+    const isJSON = ct.includes("application/json");
+    const body = isJSON ? await r.json() : await r.text();
+    if (!r.ok || (isJSON && body.error)) {
+      throw new Error(body.error || `HTTP ${r.status}`);
+    }
+    return body;
   }
-  return body;
-}
 
-
-   function explain(order){
+  function explain(order){
     const kind = (order.kind || order.draft?.kind || "pdf").toLowerCase();
     const isPrinted = (kind === "printed" || kind === "print");
 
     el.links.innerHTML = isPrinted
       ? `<p class="muted">Tryckt bok – vi uppdaterar status löpande från tryckeriet, du får ett mail när boken är på väg!.</p>`
-      : `<p class="muted">Digital bok – Kolla din mail från SagoStugan för att hitta till nedladdning av din digitala bok.</p>`;
+      : `<p class="muted">Digital bok – kolla din mail från SagoStugan för att hitta till nedladdning av din digitala bok.</p>`;
   }
 
   function render(order, id){
@@ -429,7 +427,6 @@ const el = {
     const isPrinted = (kind === "printed" || kind === "print");
     setText(el.pill, isPrinted ? "Tryckt bok" : "Digital PDF");
 
-    // 🔹 Titel: funkar nu även för digitala ordrar (draft.story.book.title)
     const title =
       order.book?.title ||
       order.story?.book?.title ||
@@ -437,19 +434,15 @@ const el = {
       "Din bok";
     setText(el.title, title);
 
-    // 🔹 Sidantal: leta på samma ställen
     const pages =
       order.book?.pages ??
       order.story?.book?.pages ??
       order.draft?.story?.book?.pages;
     const pageCount = Array.isArray(pages) ? pages.length : null;
 
-    const txt = pageCount
-      ? `${pageCount} sidor.`
-      : "";
+    const txt = pageCount ? `${pageCount} sidor.` : "";
     setText(el.info, txt);
 
-    // 🔹 Thumbnail – vi använder cover_thumb_url som du sätter i backend
     const thumb =
       order.book?.cover_thumb_url ||
       order.cover_thumb_url ||
@@ -473,7 +466,6 @@ const el = {
     setText(el.bar, "Status hämtad. Uppdateras vid laddning av sidan.");
   }
 
-
   async function load(id){
     hide(el.err);
     show(el.spinner);
@@ -489,70 +481,86 @@ const el = {
     }
   }
 
-  if(new URL(location.href).searchParams.get("id")){
-    const id=new URL(location.href).searchParams.get("id");
-    el.input.value=id;
-    load(id);
+  // Prefill från ?id=...
+  const urlParamsId = new URL(location.href).searchParams.get("id");
+  if (urlParamsId) {
+    el.input.value = urlParamsId;
+    load(urlParamsId);
   }
 
-  el.form.addEventListener("submit",ev=>{
-    ev.preventDefault();
-    const id=el.input.value.trim();
-    if(!id){ setText(el.err,"Ange ett order-ID."); show(el.err); return; }
-    load(id);
-    history.replaceState({}, "", `?id=${encodeURIComponent(id)}`);
-  });
-
-})();
-
-async function sendEmailStatus() {
-  hide(el.err);
-  if (el.emailMsg) el.emailMsg.textContent = "";
-
-  const id = el.input.value.trim();
-  const email = (el.email.value || "").trim();
-
-  if (!id) {
-    setText(el.err, "Fyll i ditt order-ID först.");
-    show(el.err);
-    return;
-  }
-
-  if (!email || !email.includes("@")) {
-    setText(el.err, "Fyll i en giltig e-postadress.");
-    show(el.err);
-    return;
-  }
-
-  if (el.emailBtn) el.emailBtn.disabled = true;
-  if (el.emailMsg) setText(el.emailMsg, "Skickar status till din e-post …");
-
-  try {
-    await fetchJSON(`${BACKEND}/api/orders/status-email`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, email })
+  // Submit för "Visa status"
+  if (el.form) {
+    el.form.addEventListener("submit", ev => {
+      ev.preventDefault();
+      const id = el.input.value.trim();
+      if (!id){
+        setText(el.err,"Ange ett order-ID.");
+        show(el.err);
+        return;
+      }
+      load(id);
+      history.replaceState({}, "", `?id=${encodeURIComponent(id)}`);
     });
-
-    if (el.emailMsg) {
-      setText(
-        el.emailMsg,
-        "Klart! Om uppgifterna stämmer kommer ett mail med orderstatus inom kort."
-      );
-    }
-  } catch (e) {
-    if (el.emailMsg) {
-      setText(
-        el.emailMsg,
-        e.message || "Kunde inte skicka e-post just nu. Prova igen senare."
-      );
-    }
-  } finally {
-    if (el.emailBtn) el.emailBtn.disabled = false;
   }
-}
 
+  // 🔔 Funktion för "Skicka status till min e-post"
+  async function sendEmailStatus() {
+    hide(el.err);
+    if (el.emailMsg) setText(el.emailMsg, "");
+
+    const id = (el.input.value || "").trim();
+    const email = (el.email.value || "").trim();
+
+    if (!id) {
+      setText(el.err, "Fyll i ditt order-ID först.");
+      show(el.err);
+      return;
+    }
+
+    if (!email || !email.includes("@")) {
+      setText(el.err, "Fyll i en giltig e-postadress.");
+      show(el.err);
+      return;
+    }
+
+    if (el.emailBtn) el.emailBtn.disabled = true;
+    if (el.emailMsg) setText(el.emailMsg, "Skickar status till din e-post …");
+
+    try {
+      await fetchJSON(`${BACKEND}/api/orders/status-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, email })
+      });
+
+      if (el.emailMsg) {
+        setText(
+          el.emailMsg,
+          "Klart! Om uppgifterna stämmer kommer ett mail med orderstatus inom kort."
+        );
+      }
+    } catch (e) {
+      if (el.emailMsg) {
+        setText(
+          el.emailMsg,
+          e.message || "Kunde inte skicka e-post just nu. Prova igen senare."
+        );
+      }
+    } finally {
+      if (el.emailBtn) el.emailBtn.disabled = false;
+    }
+  }
+
+  // 🔗 Koppla knappen
+  if (el.emailBtn) {
+    el.emailBtn.addEventListener("click", ev => {
+      ev.preventDefault();
+      sendEmailStatus();
+    });
+  }
+})();
 </script>
+
 
 </body>
 </html>
