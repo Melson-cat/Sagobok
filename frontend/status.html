@@ -8,30 +8,66 @@
   <link rel="stylesheet" href="./style.css">
   <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;600;700&display=swap" rel="stylesheet" />
   <style>
-  /* ========= Status / success-paneler ========= */
+ /* ========= Status / success-paneler ========= */
 
 .muted {
   color: var(--muted);
 }
 
-/* Panel runt order-/statusinnehåll */
+/* Wrapper-panel runt innehållet */
 .status-panel {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
   box-shadow: var(--shadow);
-  padding: 32px 26px 38px;
+  padding: 32px 26px 40px;
   max-width: 820px;
-  margin: 0 auto;
+  margin: 40px auto 48px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* liten soft highlight högst upp */
+.status-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at top, rgba(255,255,255,0.4), transparent 60%);
+  pointer-events: none;
+  opacity: .7;
 }
 
 .status-panel h1 {
-  font-size: 1.9rem;
-  margin: 6px 0 8px;
+  font-size: 2rem;
+  margin: 4px 0 6px;
   letter-spacing: .3px;
+  text-align: center;
 }
 
-/* Liten “hero” i statusflöden (valfri) */
+/* undertexten under rubriken */
+#statusBar {
+  text-align: center;
+  max-width: 32rem;
+  margin: 0 auto;
+  font-size: .98rem;
+}
+
+/* centrera formuläret och knappen */
+#statusForm {
+  margin-top: 20px;
+}
+
+#statusForm .form-row {
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.status-panel .actions {
+  justify-content: center;
+  margin-top: 8px;
+}
+
+/* Liten “hero”-sektion om du vill lägga till mer text senare */
 .status-hero {
   text-align: center;
   margin: 20px 0 32px;
@@ -50,7 +86,7 @@
 
 /* Spinner */
 .spinner-lg {
-  margin-top: 8px;
+  margin: 18px auto 0;
   width: 32px;
   height: 32px;
   border-radius: 50%;
@@ -66,34 +102,51 @@
 /* Box med orderinfo */
 .order-box {
   background: white;
-  padding: 18px 20px;
+  padding: 18px 20px 20px;
   border-radius: var(--r);
   border: 1px solid var(--border);
   box-shadow: 0 4px 16px rgba(0,0,0,.05);
-  margin-top: 22px;
+  margin-top: 26px;
 }
 
 .order-box strong {
   font-weight: 700;
 }
 
+.order-status-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
 /* Liten status-pill (t.ex. “Digital bok klar”) */
 .pill {
-  background: color-mix(in srgb, var(--brand-2) 30%, white);
+  background: color-mix(in srgb, var(--brand-2) 35%, white);
   padding: 4px 12px;
   border-radius: 999px;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   font-weight: 700;
-  margin-bottom: 6px;
-  display: inline-block;
-  text-transform: capitalize;
+  margin-right: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pill::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #2ecc71;
 }
 
 /* Layout för bild + text i order-status */
 .order-status-body {
   display: flex;
   gap: 18px;
-  margin-top: 14px;
+  margin-top: 8px;
   align-items: flex-start;
 }
 
@@ -103,16 +156,19 @@
   box-shadow: 0 4px 10px rgba(0,0,0,.15);
 }
 
-/* Länkar/knappar på status-sidor (t.ex. “Tillbaka till startsidan”) */
+/* Länkar/knappar på status-sidor (t.ex. “Öppna PDF”) */
 .links a {
   display: inline-flex;
   align-items: center;
-  padding: 12px 18px;
+  padding: 10px 16px;
   margin-top: 8px;
   border-radius: 999px;
   background: white;
   border: 1px solid var(--border);
   box-shadow: 0 4px 14px rgba(0,0,0,.04);
+  font-size: .9rem;
+  text-decoration: none;
+  color: inherit;
 }
 
 .links a + a {
@@ -121,7 +177,7 @@
 
 .links a:hover {
   transform: translateY(-1px);
-  box-shadow: 0 10px 22px rgba(0,0,0,.06);
+  box-shadow: 0 10px 22px rgba(0,0,0,.08);
 }
 
 /* Små inline-statusgrejer */
@@ -146,14 +202,26 @@
   border-radius: var(--r-xl);
 }
 
+/* Felmeddelande */
+#err {
+  margin-top: 14px;
+  text-align: center;
+  font-size: .92rem;
+}
+
 /* Responsivitet för status-sidor */
 @media (max-width: 640px) {
   .status-panel {
     padding: 24px 18px 32px;
+    margin-top: 24px;
   }
 
   .order-box {
     padding: 16px;
+  }
+
+  #statusForm .form-row {
+    max-width: 100%;
   }
 
   .links a {
@@ -174,7 +242,31 @@
     align-items: center;
     text-align: center;
   }
+
+  .order-status-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
 }
+/* Centrera knapparna i statusformuläret */
+.actions-status {
+  justify-content: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+@media (max-width: 640px) {
+  .actions-status {
+    flex-direction: column;
+  }
+
+  .actions-status .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 
   </style>
 </head>
@@ -203,18 +295,31 @@
     <h1>Orderstatus</h1>
     <p id="statusBar" class="muted">Ange ditt order-ID för att se status på din bok.</p>
 
-    <form id="statusForm" class="form-card" style="margin-top:12px">
-      <div class="form-row">
-        <div class="field">
-          <label for="orderIdInput">Order-ID</label>
-          <input id="orderIdInput" placeholder="t.ex. 996a9557-..." />
-          <p class="hint">Order-ID hittar du i bekräftelsemailet.</p>
-        </div>
-      </div>
-      <div class="actions">
-        <button type="submit" class="btn btn-primary">Visa status</button>
-      </div>
-    </form>
+   <form id="statusForm" class="form-card" style="margin-top:12px">
+  <div class="form-row">
+    <div class="field">
+      <label for="orderIdInput">Order-ID</label>
+      <input id="orderIdInput" placeholder="t.ex. 996a9557-..." />
+      <p class="hint">Order-ID hittar du i bekräftelsemailet.</p>
+    </div>
+
+    <div class="field">
+      <label for="emailInput">Din e-post</label>
+      <input id="emailInput" type="email" placeholder="t.ex. namn@exempel.se" />
+      <p class="hint">Vi använder den bara för att skicka orderstatus.</p>
+    </div>
+  </div>
+
+  <div class="actions actions-status">
+    <button type="submit" class="btn btn-primary">Visa status</button>
+    <button type="button" id="emailStatusBtn" class="btn btn-secondary">
+      Skicka status till min e-post
+    </button>
+  </div>
+
+  <p id="emailStatusMsg" class="muted" style="margin-top:8px;"></p>
+</form>
+
 
     <div id="orderBox" class="order-box hidden">
       <div class="order-status-header">
@@ -267,32 +372,38 @@
   const show=el=>el.classList.remove("hidden");
   const hide=el=>el.classList.add("hidden");
   const setText=(el,t)=>el.textContent=t;
+const el = {
+  form: $("statusForm"),
+  input: $("orderIdInput"),
+  email: $("emailInput"),
+  emailBtn: $("emailStatusBtn"),
+  emailMsg: $("emailStatusMsg"),
+  box: $("orderBox"),
+  pill: $("pillKind"),
+  orderId: $("orderId"),
+  orderState: $("orderState"),
+  updated: $("lastUpdated"),
+  bar: $("statusBar"),
+  spinner: $("spinner"),
+  err: $("err"),
+  cover: $("coverThumb"),
+  title: $("bookTitle"),
+  info: $("bookInfo"),
+  links: $("infoLinks")
+};
 
-  const el={
-    form:$("statusForm"),
-    input:$("orderIdInput"),
-    box:$("orderBox"),
-    pill:$("pillKind"),
-    orderId:$("orderId"),
-    orderState:$("orderState"),
-    updated:$("lastUpdated"),
-    bar:$("statusBar"),
-    spinner:$("spinner"),
-    err:$("err"),
-    cover:$("coverThumb"),
-    title:$("bookTitle"),
-    info:$("bookInfo"),
-    links:$("infoLinks")
-  };
 
-  async function fetchJSON(url){
-    const r=await fetch(url);
-    const ct=r.headers.get("content-type")||"";
-    const isJSON=ct.includes("application/json");
-    const body=isJSON?await r.json():await r.text();
-    if(!r.ok || (isJSON && body.error)) throw new Error(body.error||`HTTP ${r.status}`);
-    return body;
+ async function fetchJSON(url, options){
+  const r = await fetch(url, options || {});
+  const ct = r.headers.get("content-type") || "";
+  const isJSON = ct.includes("application/json");
+  const body = isJSON ? await r.json() : await r.text();
+  if (!r.ok || (isJSON && body.error)) {
+    throw new Error(body.error || `HTTP ${r.status}`);
   }
+  return body;
+}
+
 
    function explain(order){
     const kind = (order.kind || order.draft?.kind || "pdf").toLowerCase();
@@ -393,6 +504,54 @@
   });
 
 })();
+
+async function sendEmailStatus() {
+  hide(el.err);
+  if (el.emailMsg) el.emailMsg.textContent = "";
+
+  const id = el.input.value.trim();
+  const email = (el.email.value || "").trim();
+
+  if (!id) {
+    setText(el.err, "Fyll i ditt order-ID först.");
+    show(el.err);
+    return;
+  }
+
+  if (!email || !email.includes("@")) {
+    setText(el.err, "Fyll i en giltig e-postadress.");
+    show(el.err);
+    return;
+  }
+
+  if (el.emailBtn) el.emailBtn.disabled = true;
+  if (el.emailMsg) setText(el.emailMsg, "Skickar status till din e-post …");
+
+  try {
+    await fetchJSON(`${BACKEND}/api/orders/status-email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, email })
+    });
+
+    if (el.emailMsg) {
+      setText(
+        el.emailMsg,
+        "Klart! Om uppgifterna stämmer kommer ett mail med orderstatus inom kort."
+      );
+    }
+  } catch (e) {
+    if (el.emailMsg) {
+      setText(
+        el.emailMsg,
+        e.message || "Kunde inte skicka e-post just nu. Prova igen senare."
+      );
+    }
+  } finally {
+    if (el.emailBtn) el.emailBtn.disabled = false;
+  }
+}
+
 </script>
 
 </body>

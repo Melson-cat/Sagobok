@@ -424,6 +424,174 @@ function buildReceiptEmail({ kind, amount, currency, orderId, customerName, succ
 }
 
 
+function buildStatusEmail({ order, orderId, toName, statusUrl, receiptUrl }) {
+  const name = toName || "vän";
+  const logoUrl = "https://sagostugan.se/images/logo.png";
+  const supportEmail = "hej@sagostugan.se";
+
+  const kindRaw = (order.kind || order.draft?.kind || "pdf").toLowerCase();
+  const mode = (kindRaw === "print" || kindRaw === "printed") ? "print" : "pdf";
+  const niceKind = mode === "print" ? "Tryckt bok" : "Digital PDF-bok";
+
+  const rawStatus =
+    order.provider_status ||
+    order.gelato_status ||
+    order.status ||
+    "okänd";
+
+  // Enkel “humanizer” – finare text i mailet
+  let statusLabel = rawStatus;
+  switch (rawStatus) {
+    case "paid":
+      statusLabel = "Betald – vi har tagit emot din beställning";
+      break;
+    case "processing":
+      statusLabel = "Under behandling – vi förbereder din bok";
+      break;
+    case "generating":
+      statusLabel = "Din bok genereras just nu";
+      break;
+    case "ready":
+      statusLabel = "Klar – din bok finns redo att laddas ner";
+      break;
+    case "printing":
+      statusLabel = "På tryck – boken produceras hos tryckeriet";
+      break;
+    case "shipped":
+      statusLabel = "Skickad – boken är på väg till dig";
+      break;
+    case "delivered":
+      statusLabel = "Levererad";
+      break;
+  }
+
+  const subject = `Orderstatus för din bok hos Sagostugan`;
+
+  const textLines = [
+    `Hej ${name}!`,
+    "",
+    `Här kommer en uppdatering om din bokbeställning hos Sagostugan.`,
+    "",
+    `Typ av beställning: ${niceKind}`,
+    `Order-ID: ${orderId}`,
+    `Status: ${statusLabel}`,
+    "",
+    `Du kan se mer detaljer på status-sidan:`,
+    statusUrl,
+    receiptUrl ? "", "" : "",
+    receiptUrl ? "Kvittosida:" : "",
+    receiptUrl ? receiptUrl : "",
+    "",
+    "Om du har frågor kan du svara på detta mejl eller kontakta oss på " + supportEmail + ".",
+    "",
+    "Varma hälsningar,",
+    "Sagostugan"
+  ].filter(Boolean);
+
+  const text = textLines.join("\n");
+
+  const html = `<!DOCTYPE html>
+<html lang="sv">
+  <head>
+    <meta charset="UTF-8" />
+    <title>${subject}</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f7f5ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background:#f7f5ff;padding:24px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:560px;background:#ffffff;border-radius:16px;padding:24px 20px;box-shadow:0 8px 24px rgba(0,0,0,0.06);">
+            
+            <!-- Header med logga -->
+            <tr>
+              <td align="center" style="padding-bottom:4px;">
+                <img src="${logoUrl}" alt="Sagostugan" width="120" style="display:block;margin:0 auto 8px auto;border-radius:12px;" />
+                <div style="font-size:13px;color:#8a7fb8;margin-top:0;">små sagor, stora minnen</div>
+              </td>
+            </tr>
+
+            <!-- Hero-rubrik -->
+            <tr>
+              <td align="left" style="padding:4px 4px 10px 4px;">
+                <h1 style="margin:0 0 8px 0;font-size:20px;color:#31255e;">
+                  Uppdatering om din bokbeställning 📚
+                </h1>
+                <p style="margin:0 0 10px 0;font-size:15px;color:#1e1730;line-height:1.6;">
+                  Hej ${name}!<br/>
+                  Här kommer en aktuell status för din bok hos Sagostugan.
+                </p>
+              </td>
+            </tr>
+
+            <!-- Order-sammanfattning -->
+            <tr>
+              <td style="padding:4px 4px 14px 4px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width:100%;margin:0;background:#f6f3ff;border-radius:12px;padding:12px 14px;font-size:14px;">
+                  <tr>
+                    <td style="padding:4px 0;"><strong>Typ av beställning:</strong></td>
+                    <td style="padding:4px 0;">${niceKind}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:4px 0;"><strong>Order-ID:</strong></td>
+                    <td style="padding:4px 0;">${orderId}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:4px 0;"><strong>Status just nu:</strong></td>
+                    <td style="padding:4px 0;">${statusLabel}</td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Info-text -->
+            <tr>
+              <td style="padding:0 4px 10px 4px;font-size:14px;color:#1e1730;line-height:1.6;">
+                <p style="margin:0 0 10px 0;">
+                  Du kan se mer detaljer och nästa steg på status-sidan:
+                </p>
+              </td>
+            </tr>
+
+            <!-- Knapp till status-sida -->
+            <tr>
+              <td style="padding:0 4px 14px 4px;">
+                <a href="${statusUrl}" style="display:inline-block;padding:11px 20px;background:#4b3c88;color:#ffffff;text-decoration:none;border-radius:999px;font-size:14px;font-weight:600;">
+                  Öppna orderstatus
+                </a>
+              </td>
+            </tr>
+
+            <!-- Länkar som text -->
+            <tr>
+              <td style="padding:0 4px 10px 4px;font-size:12px;color:#6c658a;line-height:1.5;">
+                Status-sida:<br/>
+                <span style="word-break:break-all;color:#4b3c88;">${statusUrl}</span>
+                ${
+                  receiptUrl
+                    ? `<br/><br/>Kvittosida:<br/><span style="word-break:break-all;color:#4b3c88;">${receiptUrl}</span>`
+                    : ""
+                }
+              </td>
+            </tr>
+
+            <!-- Footer / support -->
+            <tr>
+              <td style="padding:10px 4px 0 4px;font-size:12px;color:#a39ac7;line-height:1.5;" align="center">
+                Det här mejlet skickades efter att du begärt orderstatus på sagostugan.se.<br/>
+                Har du frågor? Svara på mejlet eller skriv till
+                <a href="mailto:${supportEmail}" style="color:#7a6ad4;text-decoration:none;">${supportEmail}</a>.
+              </td>
+            </tr>
+
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+
+  return { subject, text, html };
+}
 
 
 
@@ -471,6 +639,55 @@ async function sendReceiptEmail(env, { email, name, kind, amount_total, currency
   }
 }
 
+async function sendStatusEmail(env, { email, order, orderId }) {
+  if (!email) {
+    console.log("sendStatusEmail: ingen e-post, skippar.");
+    return;
+  }
+
+  // Bygg URL:er
+  const baseSite = env.PUBLIC_SITE_URL || "https://sagostugan.se";
+  const statusUrl = `${baseSite}/status.html?id=${encodeURIComponent(orderId)}`;
+
+  // Om du vill – återanvänd kvittosida-URL (SUCCESS_URL) om det finns stripe_session_id
+  const receiptUrl = order.stripe_session_id
+    ? `${env.SUCCESS_URL}?session_id=${encodeURIComponent(order.stripe_session_id)}`
+    : "";
+
+  const { subject, text, html } = buildStatusEmail({
+    order,
+    orderId,
+    toName: order.customer_name || order.name || null,
+    statusUrl,
+    receiptUrl,
+  });
+
+  const from = env.EMAIL_FROM || "Sagostugan <no-reply@sagostugan.se>";
+
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from,
+        to: email,
+        subject,
+        html,
+        text,
+      }),
+    });
+
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      console.error("Resend status-email error:", res.status, t);
+    }
+  } catch (err) {
+    console.error("sendStatusEmail exception:", err);
+  }
+}
 
 async function handleStripeWebhook(req, env) {
   // 1) Läs rå payload (måste vara text) och verifiera signatur
@@ -615,6 +832,79 @@ async function handleStripeWebhook(req, env) {
   }
 }
 
+async function handleOrderStatusEmail(req, env) {
+  if (req.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: CORS,
+    });
+  }
+
+  if (req.method !== "POST") {
+    return new Response(JSON.stringify({ error: "Method not allowed" }), {
+      status: 405,
+      headers: { ...CORS, "content-type": "application/json" },
+    });
+  }
+
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return new Response(JSON.stringify({ error: "Bad JSON" }), {
+      status: 400,
+      headers: { ...CORS, "content-type": "application/json" },
+    });
+  }
+
+  const id = (body.id || "").trim();
+  const email = (body.email || "").trim();
+
+  if (!id || !email) {
+    return new Response(JSON.stringify({ error: "id och email krävs" }), {
+      status: 400,
+      headers: { ...CORS, "content-type": "application/json" },
+    });
+  }
+
+  let order;
+  try {
+    order = await kvGetOrder(env, id);
+  } catch (e) {
+    console.error("kvGetOrder error:", e);
+    return new Response(JSON.stringify({ error: "Kunde inte hämta order." }), {
+      status: 500,
+      headers: { ...CORS, "content-type": "application/json" },
+    });
+  }
+
+  if (!order) {
+    return new Response(JSON.stringify({ error: "Order hittades inte." }), {
+      status: 404,
+      headers: { ...CORS, "content-type": "application/json" },
+    });
+  }
+
+  // Enkel "säkerhet": om order har en lagrad kundmail som skiljer sig tydligt
+  // kan du välja att neka – eller bara logga. Här låter vi det passera men loggar.
+  if (
+    order.customer_email &&
+    order.customer_email.toLowerCase() !== email.toLowerCase()
+  ) {
+    console.log(
+      "Status-email: angiven email skiljer sig från order.customer_email",
+      { orderEmail: order.customer_email, requested: email }
+    );
+    // Om du vill låsa det hårdare kan du returnera 403 här.
+  }
+
+  await sendStatusEmail(env, { email, order, orderId: id });
+
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: { ...CORS, "content-type": "application/json" },
+  });
+}
 
 
 function addBlankPages(pdfDoc, howMany, pageW, pageH) {
@@ -4294,6 +4584,9 @@ export default {
       if (req.method === "GET" && pathname === "/api/gelato/debug-status") {
         return await handleGelatoDebugStatus(req, env);
       }
+         if (url.pathname === "/api/orders/status-email") {
+      return handleOrderStatusEmail(req, env);
+    }
 
       // 9) 404
       return err("Not found", 404);
