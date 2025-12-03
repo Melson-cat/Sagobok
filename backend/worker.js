@@ -467,7 +467,7 @@ function buildStatusEmail({ order, orderId, toName, statusUrl, receiptUrl }) {
 
   const subject = `Orderstatus för din bok hos Sagostugan`;
 
-  const textLines = [
+   const textLines = [
     `Hej ${name}!`,
     "",
     `Här kommer en uppdatering om din bokbeställning hos Sagostugan.`,
@@ -478,15 +478,16 @@ function buildStatusEmail({ order, orderId, toName, statusUrl, receiptUrl }) {
     "",
     `Du kan se mer detaljer på status-sidan:`,
     statusUrl,
-    receiptUrl ? "", "" : "",
-    receiptUrl ? "Kvittosida:" : "",
-    receiptUrl ? receiptUrl : "",
+    // 🔹 Lägg bara till kvittosida-raderna om receiptUrl finns
+    ...(receiptUrl ? ["", "Kvittosida:", receiptUrl] : []),
     "",
     "Om du har frågor kan du svara på detta mejl eller kontakta oss på " + supportEmail + ".",
     "",
     "Varma hälsningar,",
     "Sagostugan"
   ].filter(Boolean);
+
+
 
   const text = textLines.join("\n");
 
