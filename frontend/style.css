@@ -1,24 +1,30 @@
-/* =========================================================
-   Basvariabler & teman
-   ========================================================= */
-:root {
+
+ :root {
+  /* Bas-typografi & skuggor */
   --text: #223038;
   --muted: #687883;
   --border: rgba(0, 0, 0, .08);
   --shadow: 0 8px 22px rgba(20, 30, 35, .05);
+
+  /* Basfärger – neutral, funkar som vuxen/allmän */
   --bg: #f7fbf9;
   --panel: #eff6f2;
   --brand: #2b8c68;
   --brand-2: #a6dac5;
   --focus: #a7d7ff;
+
+  /* Fält & UI */
   --field: color-mix(in srgb, white 90%, var(--bg));
   --field-border: rgba(30, 50, 40, .12);
+
+  /* Radier & effekter */
   --r-xl: 22px;
   --r: 16px;
   --r-sm: 10px;
   --lock-blur: 6px;
 }
 
+/* 💚 Barn – lite ljusare, mer lekfull variant av root */
 body[data-theme="kids"] {
   --bg: #f6fbf7;
   --panel: #eef6f1;
@@ -28,6 +34,7 @@ body[data-theme="kids"] {
   --field: color-mix(in srgb, white 94%, var(--bg));
 }
 
+/* 💙 Husdjur – samma struktur men blå ton */
 body[data-theme="pets"] {
   --bg: #cfeafc;
   --panel: #c6e0f2;
@@ -36,6 +43,17 @@ body[data-theme="pets"] {
   --focus: #c6d7ff;
   --field: color-mix(in srgb, white 94%, var(--bg));
 }
+
+/* 🧡 Vuxen – varm, lite mer “presentbok till vuxen”-känsla */
+body[data-theme="adult"] {
+  --bg: #fff7f0;
+  --panel: #ffeede;
+  --brand: #d86b4a;   /* varm terrakotta/orange */
+  --brand-2: #ffd0b8;
+  --focus: #ffcfa2;
+  --field: color-mix(in srgb, white 94%, var(--bg));
+}
+
 
 /* =========================================================
    Reset & grundtypografi

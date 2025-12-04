@@ -913,7 +913,30 @@ function addBlankPages(pdfDoc, howMany, pageW, pageH) {
 }
 
 
+// helper för tillfälle - vuxen
 
+function buildOccasionLabel(key, custom) {
+  const k = (key || "").toLowerCase();
+  switch (k) {
+    case "birthday":
+      return "födelsedag";
+    case "mothersday":
+      return "Mors dag eller Fars dag";
+    case "wedding":
+      return "bröllop eller årsdag";
+    case "bachelor":
+      return "svensexa eller möhippa";
+    case "retirement":
+      return "pension eller avtackning";
+    case "encouragement":
+      return "en peppande / uppmuntrande present";
+    case "justbecause":
+      return "en kärleksfull bok utan särskilt tillfälle, bara för att överraska";
+    case "other":
+    default:
+      return (custom || "").trim();
+  }
+}
 
 
 
@@ -1996,8 +2019,9 @@ function buildFramePrompt({
   wardrobe_signature,
   coherence_code,
 }) {
-  const category = story?.book?.category || "kids";
-  const isPet = category.toLowerCase() === "pets";
+  const category = (story?.book?.category || "kids").toLowerCase();
+  const isPet = category === "pets";
+  const isAdult = category === "adult";
 
   const wardrobe = story?.book?.bible?.wardrobe
     ? (Array.isArray(story.book.bible.wardrobe)
@@ -2005,7 +2029,11 @@ function buildFramePrompt({
         : story.book.bible.wardrobe)
     : wardrobe_signature || "consistent outfit";
 
-  const age = story?.book?.bible?.main_character?.age || 5;
+  const main = story?.book?.bible?.main_character || {};
+  const age = main.age || 5;
+  const relation = main.relation || "närstående vuxen (t.ex. mamma, partner, bästa vän)";
+  const occLabel = story?.book?.bible?.occasion_label || "";
+
   const coh = coherence_code || makeCoherenceCode(story);
 
   // 1) INPUT GUIDE – flera bilder + text
@@ -2031,32 +2059,47 @@ function buildFramePrompt({
     `4. INTEGRATION: The hero must be IN the scene, interacting with the light, depth, and environment.`,
   ].join("\n");
 
-  // 3) IDENTITY – hårt låst till IMAGE 1
-  const identityLines = isPet
-    ? [
-        `*** 1. IDENTITY (Source: IMAGE 1) ***`,
-        `Target: A pet animal named ${characterName}.`,
-        `CRITICAL: You must match the animal in IMAGE 1 exactly. Do NOT let the art style override the appearance.`,
-        `Match these traits with perfect accuracy:`,
-        `- Species and breed.`,
-        `- Fur color and pattern.`,
-        `- Head and face shape.`,
-        `- Eyes (shape, spacing, size, and color).`,
-        `- Nose and mouth proportions.`,
-        `- Body type and proportions (no extra limbs).`,
-        ``,
-        `ABSOLUTE RULE: If IMAGE 1 and any text description conflict,`,
-        `→ IMAGE 1 is the ONLY source of truth for physical appearance.`,
-      ]
-    : [
-        `*** 1. IDENTITY (Source: IMAGE 1) ***`,
-        `Target: A child named ${characterName}, age approx ${age}.`,
-        `CRITICAL: You must match the child in IMAGE 1 exactly. Do NOT let the chosen art style override the real appearance!`,
-        ``,
-        `ABSOLUTE RULE: If IMAGE 1 and any text description conflict,`,
-        `→ IMAGE 1 is the ONLY source of truth for physical appearance.`,
-      ];
-  const identitySection = identityLines.join("\n");
+  // 3) IDENTITY – olika text för barn / djur / vuxen
+  let identityLines;
+  if (isPet) {
+    identityLines = [
+      `*** 1. IDENTITY (Source: IMAGE 1) ***`,
+      `Target: A pet animal named ${characterName}.`,
+      `CRITICAL: You must match the animal in IMAGE 1 exactly. Do NOT let the art style override the appearance.`,
+      `Match these traits with perfect accuracy:`,
+      `- Species and breed.`,
+      `- Fur color and pattern.`,
+      `- Head and face shape.`,
+      `- Eyes (shape, spacing, size, and color).`,
+      `- Nose and mouth proportions.`,
+      `- Body type and proportions (no extra limbs).`,
+      ``,
+      `ABSOLUTE RULE: If IMAGE 1 and any text description conflict,`,
+      `→ IMAGE 1 is the ONLY source of truth for physical appearance.`,
+    ];
+  } else if (isAdult) {
+    identityLines = [
+      `*** 1. IDENTITY (Source: IMAGE 1) ***`,
+      `Target: An adult person named ${characterName}, described as the author's ${relation}.`,
+      `The illustration style may be stylized, but the identity must clearly match IMAGE 1.`,
+      ``,
+      `ABSOLUTE RULE: If IMAGE 1 and any text description conflict,`,
+      `→ IMAGE 1 is the ONLY source of truth for physical appearance.`,
+      occLabel
+        ? `The overall mood and expressions should fit that this is a special gift for ${occLabel}.`
+        : "",
+    ];
+  } else {
+    identityLines = [
+      `*** 1. IDENTITY (Source: IMAGE 1) ***`,
+      `Target: A child named ${characterName}, age approx ${age}.`,
+      `CRITICAL: You must match the child in IMAGE 1 exactly. Do NOT let the chosen art style override the real appearance!`,
+      ``,
+      `ABSOLUTE RULE: If IMAGE 1 and any text description conflict,`,
+      `→ IMAGE 1 is the ONLY source of truth for physical appearance.`,
+    ];
+  }
+  const identitySection = identityLines.filter(Boolean).join("\n");
 
   // 4) WARDROBE – lås kläder
   const wardrobeSection = [
@@ -2067,7 +2110,7 @@ function buildFramePrompt({
     `If previous frames show clothing mistakes, IGNORE those mistakes and follow this wardrobe description instead.`,
   ].join("\n");
 
-  // 5) CONTINUITY + ANTI-STAGNATION – hur tidigare bilder ska användas
+  // 5) CONTINUITY + ANTI-STAGNATION
   const continuitySection = [
     `*** 3. CONTINUITY vs NEW ACTION (Sources: IMAGE 2 and context) ***`,
     `IMAGE 2 shows what happened a moment ago in the story.`,
@@ -2085,23 +2128,21 @@ function buildFramePrompt({
     `- Always move the story forward with a NEW moment in time.`,
   ].join("\n");
 
-    const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
+  // 6) Kort historik (som du hade)
+  const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
   const idx = pages.findIndex((p) => p.page === page.page);
   let historySection = "";
 
   if (idx > 0) {
-    const MAX_HISTORY_PAGES = 2; // 👈 alltid bara de 2 senaste
+    const MAX_HISTORY_PAGES = 2;
     const start = Math.max(0, idx - MAX_HISTORY_PAGES);
     const chunks = [];
 
     for (let i = start; i < idx; i++) {
       const p = pages[i];
-
-      // Ta text, men begränsa mängden vi skickar
       const raw = p.scene_en || p.scene || p.text || "";
       if (!raw) continue;
 
-      // 👇 Trunkera per sida (t.ex. ~280 tecken)
       const desc =
         raw.length > 280
           ? raw.slice(0, 280) + " …"
@@ -2118,8 +2159,7 @@ function buildFramePrompt({
     }
   }
 
-
-  // 7) NY SCEN – den sida vi genererar
+  // 7) NY SCEN
   const sceneBlock = [
     `*** 4. NEW SCENE SPECIFICATION (Current Page ${page.page}) ***`,
     page.scene_en
@@ -2138,7 +2178,7 @@ function buildFramePrompt({
     .filter(Boolean)
     .join("\n");
 
-  // 8) MANDATORY ACTION – hård regel för bildmodellen
+  // 8) MANDATORY ACTION
   const actionBlock = [
     `*** 4b. MANDATORY ACTION (Hard Constraint) ***`,
     `You MUST illustrate the exact physical action described for this page.`,
@@ -2159,7 +2199,7 @@ function buildFramePrompt({
     `- The required action (above) is the PRIMARY TRUTH.`,
   ].join("\n");
 
-  // 9) STIL + negativa constraints
+  // 9) STIL
   const styleSection = [
     `*** 5. STYLE & FORMAT ***`,
     `Art Style: ${styleGuard(style)}`,
@@ -2170,7 +2210,7 @@ function buildFramePrompt({
     `NEGATIVE PROMPT:`,
     `- No off-model faces.`,
     `- No changes to hair color or hairstyle.`,
-    `- No teen/adult anatomy for the child hero.`,
+    `- No teen/adult anatomy for the child hero when category is "kids".`,
     `- No extra limbs, no duplicated hero.`,
   ].join("\n");
 
@@ -2194,7 +2234,6 @@ function buildFramePrompt({
     `COHERENCE_CODE: ${coh}`,
   ].join("\n");
 }
-
 
 
 
@@ -3506,7 +3545,6 @@ function characterCardPrompt({ style = "cartoon", bible = {}, traits = "" }) {
 }
 
 
-
 async function handleStory(req, env) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -3521,16 +3559,25 @@ async function handleStory(req, env) {
       reading_age,
       extraCharacters = [],
       petSpecies = "",
+
+      // 👇 NYTT: vuxen
+      relation = "",
+      occasion = "justbecause",
+      occasion_custom = "",
     } = body || {};
 
-    // Läsålder: explicit reading_age > annars från barnets ålder > pets default 8
+    const cat = (category || "kids").toLowerCase();
+
+    // Läsålder: explicit reading_age > annars från barnets ålder > pets default 8 > vuxen ignorerar läsålder
     const parsedRA = parseInt(reading_age, 10);
     const targetAge = Number.isFinite(parsedRA)
       ? parsedRA
-      : ((category || "kids") === "pets" ? 8 : parseInt(age || 6, 10));
+      : (cat === "pets" ? 8 : parseInt(age || 6, 10));
+
+    const occasionLabel = buildOccasionLabel(occasion, occasion_custom);
 
     // 1) Bygg karaktärssträngar (MISSADES I DIN SNIPPET)
-    const mainChar = heroDescriptor({ category, name, age, traits, petSpecies });
+    const mainChar = heroDescriptor({ category: cat, name, age, traits, petSpecies });
 
     const extrasText =
       Array.isArray(extraCharacters) && extraCharacters.length > 0
@@ -3544,28 +3591,38 @@ async function handleStory(req, env) {
           ].join("\n")
         : "Inga tydligt definierade biroller angivna.";
 
-    // 2) OUTLINE
     const speciesLine =
-      (category || "kids") === "pets"
+      cat === "pets"
         ? `Djurslag: ${petSpecies || "katt"}.`
         : "";
 
+    const adultLines =
+      cat === "adult"
+        ? [
+            `Relation: ${relation || "närstående vuxen (t.ex. mamma, partner, bästa vän)"}.`,
+            `Tillfälle / typ av bok: ${occasionLabel || "allmän kärleksfull present"}.`,
+          ].join("\n")
+        : "";
+
+    // 2) OUTLINE-prompt
     const outlineUser = `
 ${mainChar}
 ${extrasText}
-Kategori: ${category || "kids"}.
+Kategori: ${cat}.
 ${speciesLine}
-Läsålder: ${targetAge}.
+${adultLines}
+Läsålder (barnböcker): ${cat === "kids" ? targetAge : "ej barnbok" }.
 Önskat tema/poäng: ${theme || "vänskap"}.
 Antal sidor (mål): 16.
 
 Skapa en engagerande outline för en bilderbok.
+För kategori "adult" ska tonen passa en vuxen, men behålla värme, humor och hjärta.
 Returnera ENDAST giltig JSON enligt OUTLINE-strukturen.
 `.trim();
 
     const outline = await openaiJSON(env, OUTLINE_SYS, outlineUser);
 
-    // 3) STORY
+    // 3) STORY-prompt
     const storyUser = `
 OUTLINE:
 ${JSON.stringify(outline, null, 2)}
@@ -3590,10 +3647,20 @@ INSTRUKTIONER FÖR BOKEN:
 5) BI-ROLLER:
 ${extrasText}
 
-6) KATEGORI:
-   - category: ${category || "kids"}
-   - Läsålder: ${targetAge}
+6) KATEGORI OCH MÅLGRUPP:
+   - category: ${cat}
+   - Läsålder (barn): ${cat === "kids" ? targetAge : "ej barn"}
    - Stil: ${style || "cartoon"}
+   ${
+     cat === "adult"
+       ? `
+   - Målgrupp: vuxen läsare.
+   - Relation: ${relation || "närstående vuxen (t.ex. mamma, partner, bästa vän)"}.
+   - Tillfälle / typ av bok: ${occasionLabel || "allmän kärleksfull present"}.
+   Berättelsen ska kännas personlig, varm och ibland humoristisk – aldrig snuskig eller plump.
+   `
+       : ""
+   }
 
 Returnera ENDAST giltig JSON enligt STORY_SYS-strukturen (fält och typer).
 Inga extra fält, inga kommentarer, ingen text utanför JSON.
@@ -3602,22 +3669,29 @@ Inga extra fält, inga kommentarer, ingen text utanför JSON.
     const story = await openaiJSON(env, STORY_SYS, storyUser);
 
     if (Array.isArray(story?.book?.pages)) {
-  story.book.pages = story.book.pages.map((pg, idx) => {
-    if (!pg || typeof pg !== "object") return pg;
-    return {
-      ...pg,
-      page: Number.isFinite(pg.page) ? pg.page : idx + 1,
-    };
-  });
-}
+      story.book.pages = story.book.pages.map((pg, idx) => {
+        if (!pg || typeof pg !== "object") return pg;
+        return {
+          ...pg,
+          page: Number.isFinite(pg.page) ? pg.page : idx + 1,
+        };
+      });
+    }
 
-
-    // 4) Efterarbete: Säkra kategori + fixa "det lilla barnet" för husdjur
-    const cat = (category || "kids").toLowerCase();
+    // 4) Efterarbete: Säkra kategori + metadata
     if (story?.book) {
       story.book.category = cat;
 
-      if (cat === "pets") {
+      // Se till att bible/main_character finns
+      story.book.bible = story.book.bible || {};
+      story.book.bible.main_character = story.book.bible.main_character || {};
+      const main = story.book.bible.main_character;
+
+      if (cat === "kids") {
+        main.age = age ? parseInt(age, 10) || targetAge : targetAge;
+        main.pet_species = null;
+        main.relation = null;
+      } else if (cat === "pets") {
         const heroName =
           name ||
           (story.book.hero && story.book.hero.name) ||
@@ -3630,8 +3704,11 @@ Inga extra fält, inga kommentarer, ingen text utanför JSON.
             (story.book.main_character && story.book.main_character.species) ||
             "katten").toLowerCase();
 
-        const reChild = /det lilla barnet/gi;
+        main.age = null;
+        main.pet_species = species;
+        main.relation = null;
 
+        const reChild = /det lilla barnet/gi;
         if (Array.isArray(story.book.pages)) {
           for (const pg of story.book.pages) {
             if (!pg) continue;
@@ -3643,7 +3720,20 @@ Inga extra fält, inga kommentarer, ingen text utanför JSON.
             }
           }
         }
+      } else if (cat === "adult") {
+        main.age = null;
+        main.pet_species = null;
+        main.relation = relation || null;
+
+        story.book.bible.occasion_key = occasion || null;
+        story.book.bible.occasion_label = occasionLabel || null;
+        story.book.bible.occasion_custom = occasion_custom || null;
       }
+
+      // Lägg gärna in målgrupp/meta för framtida logik
+      story.meta = story.meta || {};
+      story.meta.reading_age = cat === "kids" ? targetAge : null;
+      story.meta.category = cat;
     }
 
     // 5) Garderob
@@ -3667,6 +3757,7 @@ Inga extra fält, inga kommentarer, ingen text utanför JSON.
     return err(e?.message || "Story generation failed", 500);
   }
 }
+
 
 async function handleImagesNext(req, env) {
   try {

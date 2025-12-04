@@ -28,16 +28,37 @@ const STORY_PAGES = 16;
 const HAS_PRINT_PDF_ENDPOINTS = true; // sätt till false om /api/pdf/interior /api/pdf/cover inte är på plats
 
 
+
 /* --------------------------- Elements --------------------------- */
 const els = {
   body: document.body,
   form: document.getElementById("storyForm"),
+
+  // Kategoriknappar
   catKidsBtn: document.getElementById("catKidsBtn"),
   catPetsBtn: document.getElementById("catPetsBtn"),
+  catAdultBtn: document.getElementById("catAdultBtn"),
+
+  // Grundfält
   name: document.getElementById("name"),
+  nameField: document.getElementById("nameField"),
   age: document.getElementById("age"),
+  ageField: document.getElementById("ageField"),
   style: document.getElementById("style"),
   theme: document.getElementById("theme"),
+
+  // Läsålder
+  readingAgeNumber: document.getElementById("readingAge"),
+  readingAgeField: document.getElementById("readingAgeField"),
+
+  // Vuxen: relation + tillfälle
+  relation: document.getElementById("relation"),
+  relationField: document.getElementById("relationField"),
+  occasionField: document.getElementById("occasionField"),
+  occasionHidden: document.getElementById("occasionHidden"),
+  occasionCustom: document.getElementById("occasionCustom"),
+
+  // Karaktärsreferens
   traits: document.getElementById("traits"),
   charPhoto: document.getElementById("charPhoto"),
   photoPreview: document.getElementById("photoPreview"),
@@ -45,22 +66,34 @@ const els = {
   refPhotoBtn: document.getElementById("refPhotoBtn"),
   traitsBlock: document.getElementById("traitsBlock"),
   photoBlock: document.getElementById("photoBlock"),
-  readingAgeNumber: document.getElementById("readingAge"),
+
+  // Preview
   previewSection: document.getElementById("preview"),
   previewGrid: document.getElementById("bookPreview"),
+
+  // Knappar
   submitBtn: document.querySelector("#storyForm .btn-primary"),
   demoBtn: document.getElementById("demoBtn"),
-  navToggle: document.getElementById("navToggle"),
-  mobileMenu: document.getElementById("mobileMenu"),
   pdfBtn: document.getElementById("pdfBtn"),
   buyPrintBtn: document.getElementById("buyPrintBtn"),
-  ageLabel: document.querySelector('label[for="age"]'),
+  buyPdfBtn: document.getElementById("buyPdfBtn"),
+
+  // Header / nav
+  navToggle: document.getElementById("navToggle"),
+  mobileMenu: document.getElementById("mobileMenu"),
+
+  // Labels
+  ageLabel: document.getElementById("ageLabel"),
+  ageHint: document.getElementById("ageHint"),
+
+  // Extra karaktärer (om du använder)
   extraCharsToggle: document.getElementById("extraCharsToggle"),
   extraCharsContainer: document.getElementById("extraCharsContainer"),
   extraCharRows: Array.from(document.querySelectorAll("[data-extra-char-row]")),
 };
 
 const readingAgeSeg = Array.from(document.querySelectorAll("[data-readage]"));
+const occasionSeg = Array.from(document.querySelectorAll("[data-occasion]"));
 
 
 els.buyPdfBtn = document.getElementById("buyPdfBtn");
@@ -72,37 +105,40 @@ const STORAGE_KEY = "bokpiloten_form_v6";
 const MAX_AGE = 120;
 const MIN_AGE = 1;
 const MAX_REF_DIM = 1024;
-// Håller koll på vilka sidor som redan regenereras
 const regeneratingPages = new Set();
 
 const state = {
   form: {
-    category: "kids",
+    category: "kids",          // "kids" | "pets" | "adult"
     name: "Nova",
-    age: 6,
+    age: 6,                    // barn
     reading_age: 6,
+    petSpecies: "",            // för husdjur
+    relation: "",              // för vuxen
+    occasion: "justbecause",   // nyckel, t.ex. "bachelor"
+    occasion_custom: "",       // fri text när "Annat"
     style: "cartoon",
     theme: "",
-    refMode: "photo", // "photo" | "desc"
+    refMode: "photo",          // "photo" | "desc"
     traits: "",
     photoDataUrl: null,
-     petSpecies: "",
   },
+
   visibleCount: 4,
 
   story: null,
   plan: null,
 
   ref_b64: null,
-   ref_hash: null,   
+  ref_hash: null,
 
-  // local preview
-  cover_preview_url: null, // can be data_url/http
+  cover_preview_url: null,
   cover_image_id: null,
 
   images_by_page: new Map(),
-  hashes_by_page: new Map(),  
+  hashes_by_page: new Map(),
 };
+
 
 async function fetchJSON(url, init) {
   const r = await fetch(url, init);
@@ -405,13 +441,19 @@ function stopQuips() {
 
 /* --------------------------- UI logic --------------------------- */
 function setCategory(cat, save = true) {
-  const val = cat === "pets" ? "pets" : "kids";
+  // tillåt tre värden nu
+  const val = cat === "pets" ? "pets" : cat === "adult" ? "adult" : "kids";
+
   state.form.category = val;
-  document.body.dataset.theme = val;
+
+  // 👇 nu får body tre möjliga teman
+  document.body.dataset.theme = val; // "kids" | "pets" | "adult"
+
   els.catKidsBtn?.classList.toggle("active", val === "kids");
   els.catPetsBtn?.classList.toggle("active", val === "pets");
+  els.catAdultBtn?.classList.toggle("active", val === "adult");
 
-  // 🔁 Byt label + input-typ + hint
+  // resten av din befintliga logik (ålder/djurslag osv) kan ligga kvar här under
   const ageLabel = document.getElementById("ageLabel");
   const ageHint  = document.getElementById("ageHint");
 
@@ -425,7 +467,7 @@ function setCategory(cat, save = true) {
 
     if (ageLabel) ageLabel.textContent = "Ålder (hjälte)";
     if (ageHint)  ageHint.textContent  = "Barnets ålder";
-  } else {
+  } else if (val === "pets") {
     els.age.type = "text";
     els.age.removeAttribute("min");
     els.age.removeAttribute("max");
@@ -435,10 +477,23 @@ function setCategory(cat, save = true) {
 
     if (ageLabel) ageLabel.textContent = "Djurslag";
     if (ageHint)  ageHint.textContent  = "Ange djurslag, t.ex. katt, hund eller kanin.";
+  } else if (val === "adult") {
+    // här kan vi styra hur fältet ska funka i vuxen-läget, t.ex. "Relation"
+    els.age.type = "text";
+    els.age.removeAttribute("min");
+    els.age.removeAttribute("max");
+    els.age.removeAttribute("inputmode");
+    els.age.placeholder = "Ex: mamma, bror, bästa vän";
+    els.age.value = state.form.relation || "";
+
+    if (ageLabel) ageLabel.textContent = "Relation till hjälten";
+    if (ageHint)  ageHint.textContent  = "T.ex. mamma, partner, bror, kollega.";
   }
 
   if (save) saveForm();
 }
+
+
 
 function setRefMode(mode, focus = true) {
   const m = mode === "photo" ? "photo" : "desc";
@@ -461,67 +516,125 @@ function setReadingAgeByChip(range) {
   saveForm();
 }
 
+function setOccasionByKey(key, save = true) {
+  const occ = key || "justbecause";
+  state.form.occasion = occ;
+
+  occasionSeg.forEach((btn) => {
+    const k = btn.getAttribute("data-occasion");
+    btn.classList.toggle("active", k === occ);
+  });
+
+  if (els.occasionHidden) els.occasionHidden.value = occ;
+
+  // Visa / göm fritextfält för "Annat"
+  const showCustom = occ === "other";
+  if (els.occasionCustom) {
+    els.occasionCustom.classList.toggle("hidden", !showCustom);
+    if (!showCustom) {
+      els.occasionCustom.value = state.form.occasion_custom || "";
+    }
+  }
+
+  if (save) saveForm();
+}
+
+
 function readForm() {
   const f = state.form;
   f.category = f.category || "kids";
 
-  f.name  = (els.name.value || "Nova").trim();
+  f.name = (els.name.value || "Nova").trim();
   f.style = els.style.value || "cartoon";
   f.theme = (els.theme.value || "").trim();
   f.traits = (els.traits.value || "").trim();
 
-  // Läsålder
-  f.reading_age = clamp(
-    toInt(els.readingAgeNumber?.value ?? f.reading_age, f.reading_age),
-    3,
-    12
-  );
+  // Läsålder (för barn)
+  if (f.category === "kids") {
+    f.reading_age = clamp(
+      toInt(els.readingAgeNumber?.value ?? f.reading_age, f.reading_age),
+      3,
+      12
+    );
+  }
 
   if (f.category === "kids") {
+    // Barn
     f.age = clamp(toInt(els.age.value, 6), MIN_AGE, MAX_AGE);
     f.petSpecies = "";
-  } else {
+    f.relation = "";
+    f.occasion = f.occasion || "justbecause";
+    f.occasion_custom = "";
+  } else if (f.category === "pets") {
+    // Husdjur
     f.petSpecies = (els.age.value || "").trim().toLowerCase();
-    f.age = null; // backend bryr sig ändå inte om ålder för pets
+    f.age = null;
+    f.relation = "";
+    f.occasion = f.occasion || "justbecause";
+    f.occasion_custom = "";
+  } else if (f.category === "adult") {
+    // Vuxen
+    f.age = null;
+    f.petSpecies = "";
+
+    f.relation = (els.relation.value || "").trim();
+
+    // Tillfälle
+    const activeOcc = occasionSeg.find((btn) =>
+      btn.classList.contains("active")
+    );
+    const occKey = activeOcc?.getAttribute("data-occasion") || els.occasionHidden?.value || f.occasion || "justbecause";
+    f.occasion = occKey;
+
+    f.occasion_custom = (els.occasionCustom?.value || "").trim();
   }
 }
+
 
 
 function writeForm() {
   const f = state.form;
   f.category = f.category || "kids";
 
-  els.name.value  = f.name || "";
+  els.name.value = f.name || "";
   els.style.value = f.style || "cartoon";
   els.theme.value = f.theme || "";
   els.traits.value = f.traits || "";
 
+  // Läsålder
   if (els.readingAgeNumber) {
     els.readingAgeNumber.value = f.reading_age ?? 6;
   }
-
   const target =
     f.reading_age <= 5 ? "4-5" :
     f.reading_age <= 8 ? "6-8" :
     f.reading_age <= 12 ? "9-12" : "familj";
-  setReadingAgeByChip(target);
+  setReadingAgeByChip(target, false);
 
-  // Sätt kategori (styling + state)
+  // Sätt kategori (visar/döljer rätt fält)
   setCategory(f.category, false);
 
-  // Skriv rätt sak in i ålder/species-fältet
+  // Ålder/djurslag
   if (f.category === "kids") {
     els.age.value = f.age ?? 6;
-  } else {
+  } else if (f.category === "pets") {
     els.age.value = f.petSpecies || "";
   }
 
-  updateHeroFieldForCategory(); // uppdaterar label + hint
+  // Vuxen-fält
+  if (f.category === "adult") {
+    els.relation.value = f.relation || "";
+    setOccasionByKey(f.occasion || "justbecause", false);
+    if (els.occasionCustom) {
+      els.occasionCustom.value = f.occasion_custom || "";
+    }
+  }
 
-  if (f.refMode !== "photo" && f.refMode !== "desc")
-    f.refMode = "photo";
+  // Ref-mode
+  if (f.refMode !== "photo" && f.refMode !== "desc") f.refMode = "photo";
   setRefMode(f.refMode, false);
 
+  // Foto-preview
   if (f.photoDataUrl) {
     els.photoPreview.src = f.photoDataUrl;
     els.photoPreview.classList.remove("hidden");
@@ -530,6 +643,7 @@ function writeForm() {
     els.photoPreview.src = "";
   }
 }
+
 
 
 function renderSkeleton(count = 4) {
@@ -1372,12 +1486,18 @@ function handleStripeReturnIfAny() {
 
 
 /* --------------------------- Events & Init --------------------------- */
+/* --------------------------- Events & Init --------------------------- */
 function bindEvents() {
+  // 🔹 Kategori-knappar (nu med vuxen)
   els.catKidsBtn?.addEventListener("click", () => setCategory("kids"));
   els.catPetsBtn?.addEventListener("click", () => setCategory("pets"));
+  els.catAdultBtn?.addEventListener("click", () => setCategory("adult"));
+
+  // 🔹 Ref-läge (beskrivning/foto)
   els.refDescBtn?.addEventListener("click", () => setRefMode("desc"));
   els.refPhotoBtn?.addEventListener("click", () => setRefMode("photo"));
 
+  // 🔹 Läsålder-chip (barn)
   readingAgeSeg.forEach((btn) => {
     btn.addEventListener("click", () => {
       readingAgeSeg.forEach((b) => b.classList.remove("active"));
@@ -1386,7 +1506,25 @@ function bindEvents() {
     });
   });
 
-  ["name", "age", "style", "theme", "traits", "readingAge"].forEach((id) => {
+  // 🔹 Tillfälle-chip (vuxen)
+  occasionSeg.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.getAttribute("data-occasion");
+      setOccasionByKey(key);
+    });
+  });
+
+  // 🔹 Vanliga input-fält som ska trigga readForm/saveForm
+  [
+    "name",
+    "age",
+    "style",
+    "theme",
+    "traits",
+    "readingAge",
+    "relation",        // 👈 nytt för vuxen
+    "occasionCustom",  // 👈 fritext-tillfälle
+  ].forEach((id) => {
     const el = document.getElementById(id);
     el?.addEventListener("input", () => {
       readForm();
@@ -1394,7 +1532,7 @@ function bindEvents() {
     });
   });
 
-
+  // 🔹 Foto-upload
   els.charPhoto?.addEventListener("change", async () => {
     const f = els.charPhoto.files?.[0];
     if (!f) {
@@ -1411,9 +1549,10 @@ function bindEvents() {
     saveForm();
   });
 
+  // 🔹 Form submit
   els.form?.addEventListener("submit", onSubmit);
 
-
+  // 🔹 Mobilmeny
   els.navToggle?.addEventListener("click", () => {
     els.mobileMenu.classList.toggle("open");
     const open = els.mobileMenu.classList.contains("open");
@@ -1421,13 +1560,12 @@ function bindEvents() {
     els.mobileMenu.setAttribute("aria-hidden", open ? "false" : "true");
   });
 
-
+  // 🔹 Köp-knappar
   els.buyPdfBtn?.addEventListener("click", onBuyPdf);
 
   els.buyPrintBtn = document.getElementById("buyPrintBtn");
   els.buyPrintBtn?.addEventListener("click", onBuyPrint);
 }
-
 
 (function init() {
   loadForm();
@@ -1435,8 +1573,8 @@ function bindEvents() {
     state.form.refMode = "photo";
   writeForm();
 
-  // ⬅️ NYTT: om vi landar på success-sidan, verifiera betalning nu
-  handleStripeReturnIfAny();
+  // Om vi landar på success-sidan, verifiera betalning nu
+  handleStripeReturnIfAny?.();
 
   bindEvents();
   setStatus(null);
