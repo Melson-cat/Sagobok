@@ -438,36 +438,46 @@ function stopQuips() {
   const q = document.querySelector(".status-quips");
   if (q) q.remove();
 }
-
-/* --------------------------- UI logic --------------------------- */
 function setCategory(cat, save = true) {
-  // tillåt tre värden nu
-  const val = cat === "pets" ? "pets" : cat === "adult" ? "adult" : "kids";
+  // kids | pets | adult
+  const val =
+    cat === "pets"  ? "pets"  :
+    cat === "adult" ? "adult" :
+    "kids";
 
   state.form.category = val;
 
-  // 👇 nu får body tre möjliga teman
-  document.body.dataset.theme = val; // "kids" | "pets" | "adult"
+  // 🔹 Växla tema (detta styr body[data-theme] → CSS-variabler)
+  document.body.dataset.theme = val;
 
+  // 🔹 Aktivera rätt knapp
   els.catKidsBtn?.classList.toggle("active", val === "kids");
   els.catPetsBtn?.classList.toggle("active", val === "pets");
   els.catAdultBtn?.classList.toggle("active", val === "adult");
 
-  // resten av din befintliga logik (ålder/djurslag osv) kan ligga kvar här under
+  // 🔹 Uppdatera fält (label, typ, hint) utifrån kategori
   const ageLabel = document.getElementById("ageLabel");
   const ageHint  = document.getElementById("ageHint");
 
+  if (!els.age) {
+    if (save) saveForm();
+    return;
+  }
+
   if (val === "kids") {
+    // Barn: numerisk ålder
     els.age.type = "number";
-    els.age.min = "1";
+    els.age.min = String(MIN_AGE);
     els.age.max = String(MAX_AGE);
     els.age.inputMode = "numeric";
     els.age.placeholder = "Ex: 6";
     els.age.value = state.form.age ?? 6;
 
     if (ageLabel) ageLabel.textContent = "Ålder (hjälte)";
-    if (ageHint)  ageHint.textContent  = "Barnets ålder";
+    if (ageHint)  ageHint.textContent  = "Barnets ålder.";
+
   } else if (val === "pets") {
+    // Husdjur: djurslag
     els.age.type = "text";
     els.age.removeAttribute("min");
     els.age.removeAttribute("max");
@@ -477,21 +487,37 @@ function setCategory(cat, save = true) {
 
     if (ageLabel) ageLabel.textContent = "Djurslag";
     if (ageHint)  ageHint.textContent  = "Ange djurslag, t.ex. katt, hund eller kanin.";
+
   } else if (val === "adult") {
-    // här kan vi styra hur fältet ska funka i vuxen-läget, t.ex. "Relation"
+    // Vuxen: relation
     els.age.type = "text";
     els.age.removeAttribute("min");
     els.age.removeAttribute("max");
     els.age.removeAttribute("inputmode");
-    els.age.placeholder = "Ex: mamma, bror, bästa vän";
+    els.age.placeholder = "Ex: mamma, storebror, kollega";
     els.age.value = state.form.relation || "";
 
-    if (ageLabel) ageLabel.textContent = "Relation till hjälten";
-    if (ageHint)  ageHint.textContent  = "T.ex. mamma, partner, bror, kollega.";
+    if (ageLabel) ageLabel.textContent = "Relation (hjälte)";
+    if (ageHint)  ageHint.textContent  = "Ex: mamma, storebror, kollega, bästa vän.";
+  }
+
+  // 🔹 Läsålder-fältet:
+  // - Kids/pets: visa som vanligt
+  // - Adult: döp om (eller göm om du vill senare)
+  const raLabel = document.querySelector('label[for="readingAge"]');
+  const raHint  = document.querySelector('#readingAge + p.hint');
+
+  if (val === "adult") {
+    if (raLabel) raLabel.textContent = "Typ av bok (vuxen)";
+    if (raHint)  raHint.textContent  = "T.ex. rolig & lättsam, rörande, busig, minnesbok. (Du kan beskriva mer i temat.)";
+  } else {
+    if (raLabel) raLabel.textContent = "Läsålder";
+    if (raHint)  raHint.textContent  = 'Välj läsålder, eller välj "Familj" för att boken ska passa hela familjen.';
   }
 
   if (save) saveForm();
 }
+
 
 
 
@@ -539,24 +565,21 @@ function setOccasionByKey(key, save = true) {
   if (save) saveForm();
 }
 
-
 function readForm() {
   const f = state.form;
   f.category = f.category || "kids";
 
-  f.name = (els.name.value || "Nova").trim();
-  f.style = els.style.value || "cartoon";
-  f.theme = (els.theme.value || "").trim();
+  f.name   = (els.name.value || "Nova").trim();
+  f.style  = els.style.value || "cartoon";
+  f.theme  = (els.theme.value || "").trim();
   f.traits = (els.traits.value || "").trim();
 
-  // Läsålder (för barn)
-  if (f.category === "kids") {
-    f.reading_age = clamp(
-      toInt(els.readingAgeNumber?.value ?? f.reading_age, f.reading_age),
-      3,
-      12
-    );
-  }
+  // Läsålder: läs alltid av gömda numret, Chipsen uppdaterar detta
+  f.reading_age = clamp(
+    toInt(els.readingAgeNumber?.value ?? f.reading_age, f.reading_age),
+    3,
+    12
+  );
 
   if (f.category === "kids") {
     // Barn
@@ -565,6 +588,7 @@ function readForm() {
     f.relation = "";
     f.occasion = f.occasion || "justbecause";
     f.occasion_custom = "";
+
   } else if (f.category === "pets") {
     // Husdjur
     f.petSpecies = (els.age.value || "").trim().toLowerCase();
@@ -572,58 +596,64 @@ function readForm() {
     f.relation = "";
     f.occasion = f.occasion || "justbecause";
     f.occasion_custom = "";
+
   } else if (f.category === "adult") {
-    // Vuxen
+    // Vuxen – vi återanvänder age-fältet som "relation"
     f.age = null;
     f.petSpecies = "";
-
-    f.relation = (els.relation.value || "").trim();
+    f.relation = (els.age.value || "").trim();
 
     // Tillfälle
     const activeOcc = occasionSeg.find((btn) =>
       btn.classList.contains("active")
     );
-    const occKey = activeOcc?.getAttribute("data-occasion") || els.occasionHidden?.value || f.occasion || "justbecause";
-    f.occasion = occKey;
 
+    const occKey =
+      activeOcc?.getAttribute("data-occasion") ||
+      els.occasionHidden?.value ||
+      f.occasion ||
+      "justbecause";
+
+    f.occasion = occKey;
     f.occasion_custom = (els.occasionCustom?.value || "").trim();
   }
 }
-
 
 
 function writeForm() {
   const f = state.form;
   f.category = f.category || "kids";
 
-  els.name.value = f.name || "";
-  els.style.value = f.style || "cartoon";
-  els.theme.value = f.theme || "";
+  els.name.value   = f.name || "";
+  els.style.value  = f.style || "cartoon";
+  els.theme.value  = f.theme || "";
   els.traits.value = f.traits || "";
 
-  // Läsålder
+  // Läsålder → hidden number + chips
   if (els.readingAgeNumber) {
     els.readingAgeNumber.value = f.reading_age ?? 6;
   }
+
   const target =
-    f.reading_age <= 5 ? "4-5" :
-    f.reading_age <= 8 ? "6-8" :
+    f.reading_age <= 5  ? "4-5" :
+    f.reading_age <= 8  ? "6-8" :
     f.reading_age <= 12 ? "9-12" : "familj";
+
   setReadingAgeByChip(target, false);
 
-  // Sätt kategori (visar/döljer rätt fält)
+  // Sätt kategori (styr theme, label/hints, input-typ)
   setCategory(f.category, false);
 
-  // Ålder/djurslag
+  // Skriv ut “age”-fältet beroende på kategori
   if (f.category === "kids") {
     els.age.value = f.age ?? 6;
   } else if (f.category === "pets") {
     els.age.value = f.petSpecies || "";
-  }
+  } else if (f.category === "adult") {
+    // Relation i samma fält
+    els.age.value = f.relation || "";
 
-  // Vuxen-fält
-  if (f.category === "adult") {
-    els.relation.value = f.relation || "";
+    // Tillfälle
     setOccasionByKey(f.occasion || "justbecause", false);
     if (els.occasionCustom) {
       els.occasionCustom.value = f.occasion_custom || "";
@@ -643,6 +673,7 @@ function writeForm() {
     els.photoPreview.src = "";
   }
 }
+
 
 
 
@@ -983,21 +1014,29 @@ async function onSubmit(e) {
   const problems = [];
   if (!state.form.name) problems.push("Ange ett namn.");
 
-  if (state.form.category === "kids") {
+   if (state.form.category === "kids") {
     if (state.form.age < MIN_AGE || state.form.age > MAX_AGE) {
       problems.push("Barnets ålder verkar orimlig.");
     }
-  } else {
-  const species = (state.form.petSpecies || "").trim();
-  if (species.length < 2) {
-    problems.push("Ange djurslag, t.ex. katt eller hund.");
+  } else if (state.form.category === "pets") {
+    const species = (state.form.petSpecies || "").trim();
+    if (species.length < 2) {
+      problems.push("Ange djurslag, t.ex. katt eller hund.");
+    }
+  } else if (state.form.category === "adult") {
+    if (!state.form.relation || state.form.relation.length < 2) {
+      problems.push("Ange relation, t.ex. mamma, storebror eller bästa vän.");
+    }
   }
-}
 
-
-  if (state.form.reading_age < 3 || state.form.reading_age > 12) {
+  // Läsålder-validering bara för barn/husdjur
+  if (
+    state.form.category !== "adult" &&
+    (state.form.reading_age < 3 || state.form.reading_age > 12)
+  ) {
     problems.push("Läsålder bör vara 3–12 (eller välj Familj).");
   }
+
 
   if (state.form.refMode === "desc") {
     if (!state.form.traits || state.form.traits.length < 6) problems.push("Beskriv gärna kännetecken – eller ladda upp foto för bäst resultat.");
@@ -1485,7 +1524,7 @@ function handleStripeReturnIfAny() {
 }
 
 
-/* --------------------------- Events & Init --------------------------- */
+
 /* --------------------------- Events & Init --------------------------- */
 function bindEvents() {
   // 🔹 Kategori-knappar (nu med vuxen)
