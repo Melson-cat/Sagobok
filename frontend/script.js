@@ -130,13 +130,13 @@ const state = {
   plan: null,
 
   ref_b64: null,
-  ref_hash: null,
+
 
   cover_preview_url: null,
   cover_image_id: null,
 
   images_by_page: new Map(),
-  hashes_by_page: new Map(),
+
 };
 
 
@@ -225,54 +225,6 @@ function dataUrlToBareB64(dataUrl){
   if(!dataUrl || !dataUrl.startsWith("data:image/")) return null;
   const m = dataUrl.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
   return m ? m[1] : null;
-}
-
-// Enkel "perceptual" hash (aHash) → 64-bit → 16 hex-tecken
-async function imageDataUrlToHashHex(dataUrl, size = 8) {
-  if (!dataUrl || !dataUrl.startsWith("data:image/")) return null;
-
-  const img = await new Promise((resolve, reject) => {
-    const im = new Image();
-    im.onload = () => resolve(im);
-    im.onerror = reject;
-    im.src = dataUrl;
-  });
-
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-
-  // Rita ner till liten ruta
-  ctx.drawImage(img, 0, 0, size, size);
-  const { data } = ctx.getImageData(0, 0, size, size);
-
-  const gray = [];
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-    // enkel luma
-    gray.push(0.299 * r + 0.587 * g + 0.114 * b);
-  }
-
-  const avg =
-    gray.reduce((sum, v) => sum + v, 0) / Math.max(1, gray.length);
-
-  // Bygg 64-bit hash
-  let bits = "";
-  for (const g of gray) {
-    bits += g >= avg ? "1" : "0";
-  }
-
-  // Konvertera till hex (8 bytes = 16 hex)
-  let hex = "";
-  for (let i = 0; i < 64; i += 4) {
-    const nibble = bits.slice(i, i + 4);
-    hex += parseInt(nibble, 2).toString(16);
-  }
-  return hex;
 }
 
 
@@ -1012,37 +964,33 @@ const r = await fetch(`${API}/api/checkout/printed`, {
 
 
 
-
-
 async function onSubmit(e) {
   e.preventDefault();
 
+  // Avbryt ev. tidigare körning
   if (state.abortController) state.abortController.abort();
   state.abortController = new AbortController();
   const signal = state.abortController.signal;
 
-
-   // full reset
-   state.story = null;
+  // 🔁 Full reset
+  state.story = null;
   state.plan = null;
   state.ref_b64 = null;
-  state.ref_hash = null;              
-  state.images_by_page.clear();
-  state.hashes_by_page = new Map();  
   state.cover_preview_url = null;
   state.cover_image_id = null;
-
+  state.images_by_page.clear();
 
   els.previewGrid.innerHTML = "";
   setStatus(null);
   stopQuips();
 
-  // validera
+  // 🔎 Läs form + validera
   readForm();
   const problems = [];
+
   if (!state.form.name) problems.push("Ange ett namn.");
 
-   if (state.form.category === "kids") {
+  if (state.form.category === "kids") {
     if (state.form.age < MIN_AGE || state.form.age > MAX_AGE) {
       problems.push("Barnets ålder verkar orimlig.");
     }
@@ -1065,22 +1013,30 @@ async function onSubmit(e) {
     problems.push("Läsålder bör vara 3–12 (eller välj Familj).");
   }
 
-
+  // Referensläge
   if (state.form.refMode === "desc") {
-    if (!state.form.traits || state.form.traits.length < 6) problems.push("Beskriv gärna kännetecken – eller ladda upp foto för bäst resultat.");
+    if (!state.form.traits || state.form.traits.length < 6) {
+      problems.push("Beskriv gärna kännetecken – eller ladda upp foto för bäst resultat.");
+    }
   } else if (state.form.refMode === "photo") {
-    if (!state.form.photoDataUrl) problems.push("Ladda upp ett foto – eller byt till Beskrivning.");
+    if (!state.form.photoDataUrl) {
+      problems.push("Ladda upp ett foto – eller byt till Beskrivning.");
+    }
   }
-  if (problems.length) { alert("Korrigera:\n\n• " + problems.join("\n• ")); return; }
 
-  // UI
+  if (problems.length) {
+    alert("Korrigera:\n\n• " + problems.join("\n• "));
+    return;
+  }
+
+  // 🧱 UI – skeleton + status
   renderSkeleton(5);
   setStatus("✏️ Skriver berättelsen…", 8);
   startQuips();
   els.submitBtn.disabled = true;
   els.submitBtn.innerHTML = 'Skapar förhandsvisning… <span class="spinner"></span>';
 
-  // reset
+  // Säkerställ reset (idempotent)
   state.images_by_page.clear();
   state.cover_preview_url = null;
   state.cover_image_id = null;
@@ -1088,31 +1044,36 @@ async function onSubmit(e) {
   try {
     // 1) STORY
     const storyRes = await fetch(`${API}/api/story`, {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({
-    name: state.form.name,
-    age: state.form.age,
-    reading_age: state.form.reading_age,
-    pages: STORY_PAGES,
-    category: state.form.category,      // "kids" | "pets" | "adult"
-    style: state.form.style,
-    theme: state.form.theme,
-    traits: state.form.traits,
-    petSpecies: state.form.petSpecies || "",
-    relation: state.form.relation || "",          // 👈 NYTT
-    occasion: state.form.occasion || "",          // 👈 NYTT, om du använder det
-    occasion_custom: state.form.occasion_custom || "", // 👈 NYTT
-  }),
-});
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: state.form.name,
+        age: state.form.age,
+        reading_age: state.form.reading_age,
+        pages: STORY_PAGES,
+        category: state.form.category,      // "kids" | "pets" | "adult"
+        style: state.form.style,
+        theme: state.form.theme,
+        traits: state.form.traits,
+        petSpecies: state.form.petSpecies || "",
+        relation: state.form.relation || "",
+        occasion: state.form.occasion || "",
+        occasion_custom: state.form.occasion_custom || "",
+      }),
+      signal,
+    });
 
     const storyData = await storyRes.json().catch(() => ({}));
-    if (!storyRes.ok || storyData?.error) throw new Error(storyData?.error || `HTTP ${storyRes.status}`);
+    if (!storyRes.ok || storyData?.error) {
+      throw new Error(storyData?.error || `HTTP ${storyRes.status}`);
+    }
+
     state.story = storyData.story;
     state.plan = storyData.plan || { plan: [] };
 
     const pages = state.story?.book?.pages || [];
     if (!pages.length) throw new Error("Berättelsen saknar sidor.");
+
     buildCards(pages, state.visibleCount);
     setStatus("🖼️ Målar huvudkaraktären…", 22);
 
@@ -1125,46 +1086,38 @@ async function onSubmit(e) {
         photo_b64: state.form.refMode === "photo" ? state.form.photoDataUrl : null,
         bible: state.story?.book?.bible || null,
         traits: state.form.traits || "",
-         category: state.form.category, 
+        category: state.form.category,
       }),
+      signal,
     });
+
     const refData = await refRes.json().catch(() => ({}));
-    if (!refRes.ok || refData?.error) throw new Error(refData?.error || `HTTP ${refRes.status}`);
+    if (!refRes.ok || refData?.error) {
+      throw new Error(refData?.error || `HTTP ${refRes.status}`);
+    }
+
     state.ref_b64 = refData.ref_image_b64 || null;
     if (!state.ref_b64) throw new Error("Ingen referensbild kunde skapas.");
 
-    // DEBUG: visa referensbilden i konsolen
-const refPreviewUrl =
-  refData.image_url ||
-  (state.ref_b64 ? `data:image/png;base64,${state.ref_b64}` : null);
+    const refPreviewUrl =
+      refData.image_url ||
+      (state.ref_b64 ? `data:image/png;base64,${state.ref_b64}` : null);
 
-if (refPreviewUrl) {
-  console.log("[BokPiloten] Ref image preview URL:", refPreviewUrl);
+    if (refPreviewUrl) {
+      console.log("[BokPiloten] Ref image preview URL:", refPreviewUrl);
+    }
 
-  // 🔹 Beräkna hash för hjältereferensen
-  try {
-    const du = refPreviewUrl.startsWith("data:")
-      ? refPreviewUrl
-      : await urlToDataURL(refPreviewUrl);
-    const hashHex = await imageDataUrlToHashHex(du);
-    state.ref_hash = hashHex || null;
-    console.log("[BokPiloten] Ref hash:", hashHex);
-  } catch (err) {
-    console.warn("[BokPiloten] Kunde inte beräkna ref-hash", err);
-    state.ref_hash = null;
-  }
-}
-
-   // 3) INTERIOR IMAGES — SEKVENSIELLT (Kedjan)
+    // 3) INTERIOR IMAGES — SEKVENSIELLT (kedja, men ingen QA)
     setStatus("🎥 Spelar in scener…", 38);
 
-   let received = 0;
-// Håller koll på de senaste n (t.ex. 3) bilderna för kontinuitet
-let prevBareFrames = [];
-
+    let received = 0;
+    // Håller koll på de senaste n (t.ex. 3) bilderna för kontinuitet
+    let prevBareFrames = [];
 
     for (const pg of pages) {
-      // Visa skeleton om bilden saknas
+      if (signal.aborted) throw new Error("Avbruten");
+
+      // Skeleton om ingen bild finns
       const wrap = els.previewGrid.querySelector(`.imgwrap[data-page="${pg.page}"]`);
       if (wrap && !wrap.querySelector("img")?.src) {
         const sk = wrap.querySelector(".skeleton") || document.createElement("div");
@@ -1173,95 +1126,72 @@ let prevBareFrames = [];
       }
 
       try {
-
-        const prevPageNum = pg.page - 1;
-const prev_hash =
-  (state.hashes_by_page && state.hashes_by_page.get(prevPageNum)) || null;
-
-        // ANROPET: Skicka med prev_b64 (om det finns)
         const res = await fetch(`${API}/api/images/next`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-  style: state.form.style,
-  story: state.story,
-  page: pg.page,
-  ref_image_b64: state.ref_b64,
-  prev_b64:
-    prevBareFrames.length
-      ? prevBareFrames[prevBareFrames.length - 1]
-      : null,
-  hashes: {
-    ref_hash: state.ref_hash || null,
-    prev_hash,
-    curr_hash: null, // backend kan räkna själv om det vill
-  },
-}),
-
+          body: JSON.stringify({
+            style: state.form.style,
+            story: state.story,
+            page: pg.page,
+            ref_image_b64: state.ref_b64,
+            prev_b64:
+              prevBareFrames.length
+                ? prevBareFrames[prevBareFrames.length - 1]
+                : null,
+          }),
+          signal,
         });
-        
-      const j = await res.json().catch(() => ({}));
-if (!res.ok || j?.error || !j?.image_url) throw new Error(j?.error || `HTTP ${res.status}`);
 
-// Visa bilden direkt
-fillCard(pg.page, j.image_url, "Gemini");
-state.images_by_page.set(pg.page, { image_url: j.image_url });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || j?.error || !j?.image_url) {
+          throw new Error(j?.error || `HTTP ${res.status}`);
+        }
 
-const du = await urlToDataURL(j.image_url);
-const bare = dataUrlToBareB64(du);
+        // Visa bilden direkt
+        fillCard(pg.page, j.image_url, j.provider || "Gemini");
+        state.images_by_page.set(pg.page, { image_url: j.image_url });
 
-// 🔹 Beräkna hash för den här sidan
-let hashHex = null;
-if (du) {
-  try {
-    hashHex = await imageDataUrlToHashHex(du);
-  } catch (err) {
-    console.warn("Kunde inte beräkna hash för page", pg.page, err);
-  }
-}
-if (hashHex) {
-  if (!state.hashes_by_page) state.hashes_by_page = new Map();
-  state.hashes_by_page.set(pg.page, hashHex);
-}
+        const du = await urlToDataURL(j.image_url);
+        const bare = dataUrlToBareB64(du);
 
-if (bare) {
-  prevBareFrames.push(bare);
-  if (prevBareFrames.length > 3) {
-    prevBareFrames.shift();
-  }
-}
-
-
+        // Spara “bare” för nästa prev_b64 (sekvens, ingen QA)
+        if (bare) {
+          prevBareFrames.push(bare);
+          if (prevBareFrames.length > 3) {
+            prevBareFrames.shift();
+          }
+        }
 
         // Ladda upp till Cloudflare i bakgrunden
         if (du) {
           const uploads = await uploadToCF([{ page: pg.page, data_url: du }]).catch(() => []);
-          const u = uploads?.find(x => x.page === pg.page);
+          const u = uploads?.find((x) => x.page === pg.page);
           if (u?.image_id) {
             state.images_by_page.set(pg.page, { image_id: u.image_id, image_url: u.url });
             fillCard(pg.page, u.url || j.image_url, "CF");
           }
         }
+      } catch (err) {
+        console.error("page", pg.page, err);
+        if (wrap) {
+          wrap.querySelector(".skeleton, .skeleton-box")?.remove();
 
-       } catch (err) {
-    console.error("page", pg.page, err);
-    if (wrap) {
-      wrap.querySelector(".skeleton, .skeleton-box")?.remove();
+          const fb = document.createElement("div");
+          fb.className = "img-fallback";
+          fb.textContent = "oj, Jag tänkte för länge! Prova gärna att generera bilden igen!";
+          wrap.appendChild(fb);
 
-      const fb = document.createElement("div");
-      fb.className = "img-fallback";
-      fb.textContent = "oj, Jag tänkte för länge! Prova gärna att generera bilden igen!";
-      wrap.appendChild(fb);
-
-      // 🔓 Viktigt: lås upp regenerera även vid total API-fail
-      const over = wrap.querySelector(".regen-overlay");
-      if (over) over.classList.remove("hidden");
-    }
-  }
-
+          // Lås upp regenerera även vid total API-fail
+          const over = wrap.querySelector(".regen-overlay");
+          if (over) over.classList.remove("hidden");
+        }
+      }
 
       received++;
-      setStatus(`🎨 Målar sida ${received}/${pages.length}…`, 38 + (received / Math.max(1, pages.length)) * 32);
+      setStatus(
+        `🎨 Målar sida ${received}/${pages.length}…`,
+        38 + (received / Math.max(1, pages.length)) * 32
+      );
     }
 
     // 4) COVER (Omslag)
@@ -1276,44 +1206,56 @@ if (bare) {
       setStatus("☁️ Laddar upp illustrationer…", 86);
     }
 
-    // 5) SLUTLIG UPPLADDNING (Säkerställ att allt är på CF)
+    // 5) Sista uppladdning – se till att allt är på CF
     const items = [];
     for (const p of pages) {
       const row = state.images_by_page.get(p.page);
       if (!row) continue;
-      if (row.image_id) continue; // Redan klart
+      if (row.image_id) continue; // redan klar
 
-      const du = row.data_url || (row.image_url ? await urlToDataURL(row.image_url) : null);
+      const du =
+        row.data_url || (row.image_url ? await urlToDataURL(row.image_url) : null);
       if (du) items.push({ page: p.page, data_url: du });
     }
 
     if (items.length) {
       const uploads = await uploadToCF(items);
       const byPage = new Map();
-      for (const u of uploads) if (Number.isFinite(u.page)) byPage.set(u.page, u);
+      for (const u of uploads) {
+        if (Number.isFinite(u.page)) byPage.set(u.page, u);
+      }
 
       for (const p of pages) {
         const u = byPage.get(p.page);
         if (u?.image_id) {
-          state.images_by_page.set(p.page, { image_id: u.image_id, image_url: u.url });
-          fillCard(p.page, u.url || state.images_by_page.get(p.page)?.image_url || "", "CF");
+          state.images_by_page.set(p.page, {
+            image_id: u.image_id,
+            image_url: u.url,
+          });
+          fillCard(
+            p.page,
+            u.url || state.images_by_page.get(p.page)?.image_url || "",
+            "CF"
+          );
         }
       }
     }
 
     stopQuips();
     setStatus("✅ Klart! Förhandsvisning redo.", 100);
-
   } catch (e) {
     console.error(e);
     stopQuips();
     setStatus(null);
-    alert("Ett fel uppstod: " + (e?.message || e));
+    if (e?.name !== "AbortError") {
+      alert("Ett fel uppstod: " + (e?.message || e));
+    }
   } finally {
     els.submitBtn.disabled = false;
     els.submitBtn.textContent = "Skapa förhandsvisning";
   }
 }
+
 
 async function chooseRegenReason() {
   const msg =
@@ -1400,56 +1342,37 @@ async function regenerateOne(page, reasonCode = "generic") {
   wrap.prepend(sk);
 
   try {
-    const prevHash =
-      (state.hashes_by_page && state.hashes_by_page.get(page - 1)) || null;
+   const res = await fetch(`${API}/api/image/regenerate`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    page,
+    story: state.story,
+    ref_image_b64: state.ref_b64,         // huvudkaraktär
+    prev_b64: currB64,                    // nuvarande bild vi vill förbättra
+    style: state.form.style,
+    coherence_code: state.coherence_code || null,
+    style_refs_b64: state.style_refs_b64 || null,
+    reason_code: reasonCode,
+    reason_note: "",
+  }),
+});
 
-    const res = await fetch(`${API}/api/image/regenerate`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        page,
-        story: state.story,
-        ref_image_b64: state.ref_b64,         // huvudkaraktär
-        prev_b64: currB64,                    // nuvarande felaktiga bild
-        style: state.form.style,
-        coherence_code: state.coherence_code || null,
-        style_refs_b64: state.style_refs_b64 || null,
-        hashes: {
-          ref_hash: state.ref_hash || null,
-          prev_hash: prevHash,
-          curr_hash: null,
-        },
-        reason_code: reasonCode,              // 🔹 nyckeln här
-        reason_note: ""                       // kan fyllas senare om du vill ha fritext
-      }),
-    });
+const j = await res.json().catch(() => ({}));
+if (!res.ok || j?.error || !j.image_url) {
+  throw new Error(j?.error || `HTTP ${res.status}`);
+}
 
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok || j?.error || !j.image_url) {
-      throw new Error(j?.error || `HTTP ${res.status}`);
-    }
+// Ta bort skeleton – fillCard sätter in nya bilden + overlay-logik
+sk.remove();
+await fillCard(page, j.image_url, j.provider || "Gemini");
 
-    // Ta bort skeleton – fillCard sätter in nya bilden + overlay-logik
-    sk.remove();
-    await fillCard(page, j.image_url, j.provider || "Gemini");
+// Uppdatera state (bild)
+state.images_by_page.set(page, {
+  image_url: j.image_url,
+  provider: j.provider || "Gemini",
+});
 
-    // Uppdatera state (bild)
-    state.images_by_page.set(page, {
-      image_url: j.image_url,
-      provider: j.provider || "Gemini",
-    });
-
-    // Uppdatera hash
-    try {
-      const du = await urlToDataURL(j.image_url);
-      if (du) {
-        const hashHex = await imageDataUrlToHashHex(du);
-        if (!state.hashes_by_page) state.hashes_by_page = new Map();
-        state.hashes_by_page.set(page, hashHex || null);
-      }
-    } catch (err) {
-      console.warn("Kunde inte uppdatera hash för regen page", page, err);
-    }
   } catch (e) {
     console.error("regenerateOne error", e);
     sk.remove();
