@@ -3894,17 +3894,18 @@ async function handleImagesNext(req, env) {
   }
 }
 
-
 async function handleImageRegenerate(req, env) {
   try {
     const {
       story,
       page,
       ref_image_b64,
-      prev_b64, // <--- NYTT: Ta emot föregående bild
+      prev_b64,          // 🔹 används nu som "nuvarande felaktiga bild"
       style,
       coherence_code,
-      style_refs_b64
+      style_refs_b64,
+      reason_code,       // 🔹 NYTT
+      reason_note        // 🔹 NYTT
     } = await req.json().catch(() => ({}));
 
     if (!story?.book?.pages) return err("Missing story.pages", 400);
@@ -3916,15 +3917,17 @@ async function handleImageRegenerate(req, env) {
     if (!target) return err(`Page ${page} not found`, 404);
 
     const heroName = story.book.bible?.main_character?.name || "Hero";
-    
+
     // Hämta garderob (samma logik som handleImagesNext)
-    const bibleWardrobe = story.book.bible?.wardrobe 
-        ? (Array.isArray(story.book.bible.wardrobe) ? story.book.bible.wardrobe.join(", ") : story.book.bible.wardrobe)
-        : null;
+    const bibleWardrobe = story.book.bible?.wardrobe
+      ? (Array.isArray(story.book.bible.wardrobe)
+          ? story.book.bible.wardrobe.join(", ")
+          : story.book.bible.wardrobe)
+      : null;
     const wardrobe = bibleWardrobe || deriveWardrobeSignature(story);
 
-    // Bygg bas-prompten
-    const prompt = buildFramePrompt({
+    // Bas-prompten för sidan
+    const basePrompt = buildFramePrompt({
       style: style || story.book.style || "cartoon",
       story,
       page: target,
@@ -3933,21 +3936,60 @@ async function handleImageRegenerate(req, env) {
       coherence_code: coherence_code || makeCoherenceCode(story),
     });
 
-    // Lägg till REGENERATE-instruktion
-    const regenPrompt = [
-       prompt,
-       "*** REGENERATION REQUEST ***",
-       "Create a NEW variation of this scene.",
-       "Fix any previous errors.",
-       "Maintain strict identity from Image 1.",
-       prev_b64 ? "Maintain environment continuity from Image 2." : ""
-    ].join("\n\n");
+    // 🔹 Bygg en extra instruktion baserat på vald anledning
+       let reasonInstruction = "";
+    switch (reason_code) {
+      case "character_mismatch":
+        reasonInstruction =
+          "User feedback: The character in the current page image does NOT look like the main character. " +
+          "Redraw the character so face, age, hairstyle and clothing match the reference portrait very closely. " +
+          "Keep pose and background if they are otherwise correct.";
+        break;
+      case "scene_mismatch":
+        reasonInstruction =
+          "User feedback: The image does NOT match the story text for this page. " +
+          "Adjust the scene so it accurately reflects the events, action, setting and details described in this page.";
+        break;
+      case "style_issue":
+        reasonInstruction =
+          "User feedback: The overall style feels wrong (colors, rendering style, mood). " +
+          "Fix the style so it matches the book's intended style and looks visually consistent with other pages, " +
+          "while keeping the core content and composition.";
+        break;
+      case "generic":
+      default:
+        reasonInstruction =
+          "User feedback: Please generate a better version of this page. " +
+          "Keep the same scene, but improve composition, character appeal and clarity. " +
+          "Avoid any visual artifacts such as extra limbs, distorted faces or random objects.";
+        break;
+    }
 
-    // Payload
+    if (reason_note) {
+      reasonInstruction += `\nUser additional note: ${reason_note}`;
+    }
+
+
+    // 🔹 Slutlig regen-prompt
+    const regenPrompt = [
+      basePrompt,
+      "*** REGENERATION REQUEST ***",
+      "You will receive two input images:",
+      "Image 1: reference portrait of the main character. Use this strictly for identity (face, age, hairstyle, clothing style).",
+      "Image 2: the CURRENT page illustration that the user is unhappy with. Keep good ideas (pose, layout, background) but FIX the problems.",
+      "Create a NEW improved version of this page.",
+      "Always keep the main character's identity strictly consistent with Image 1.",
+      prev_b64
+        ? "Use Image 2 only as a rough guide for composition and environment. Do NOT copy its mistakes."
+        : "",
+      reasonInstruction
+    ].filter(Boolean).join("\n\n");
+
+    // Payload till Gemini
     const payload = {
       prompt: regenPrompt,
-      character_ref_b64: ref_image_b64, // IMAGE 1
-      prev_b64: prev_b64,               // IMAGE 2 (Nytt!)
+      character_ref_b64: ref_image_b64, // IMAGE 1 – huvudkaraktär
+      prev_b64: prev_b64 || null,       // IMAGE 2 – nuvarande felaktiga bild
       coherence_code: coherence_code || makeCoherenceCode(story),
     };
 
@@ -3955,8 +3997,8 @@ async function handleImageRegenerate(req, env) {
       payload.style_refs_b64 = style_refs_b64;
     }
 
-    // Anropa med 60s timeout (lite längre tid för enstaka regen är ok)
-    const img = await geminiImage(env, payload, 60000, 2); 
+    // Lite längre timeout för enstaka regen
+    const img = await geminiImage(env, payload, 60000, 2);
 
     if (!img?.image_url) return err("No image from Gemini", 502);
 
@@ -3970,6 +4012,7 @@ async function handleImageRegenerate(req, env) {
     return err(e?.message || "Image regeneration failed", 500);
   }
 }
+
 
 async function handleCover(req, env) {
   try {

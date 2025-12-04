@@ -864,6 +864,16 @@ textarea:focus {
   }
 
 }
+.regen-btn-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+}
+.regen-btn {
+  width: 100%;
+  justify-content: center;
+}
 
 
 /* Mindre mobiljusteringar */

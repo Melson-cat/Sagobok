@@ -601,8 +601,6 @@ function buildCard(item) {
   // Bild-wrapper
   const imgWrap = document.createElement("div");
   imgWrap.className = "imgwrap";
-
-  // dataset för page så fillCard hittar rätt
   imgWrap.dataset.page = item.page;
 
   if (!item.image_url) {
@@ -615,18 +613,39 @@ function buildCard(item) {
     imgWrap.appendChild(img);
   }
 
-  // Hover overlay regenerate – STARTA GÖMD
+  // 🔹 Hover overlay med flera val
   const over = document.createElement("div");
   over.className = "regen-overlay hidden";
 
-  const btn = document.createElement("button");
-  btn.className = "regen-btn";
-  btn.textContent = "Regenerera";
+  const btnWrap = document.createElement("div");
+  btnWrap.className = "regen-btn-group"; // valfri klass för styling
 
-  btn.onclick = () => regenerateOne(item.page, btn);
+  const btnGeneral = document.createElement("button");
+  btnGeneral.className = "regen-btn";
+  btnGeneral.textContent = "Generera om";
+  btnGeneral.onclick = () => regenerateOne(item.page, "generic");
 
+  const btnCharacter = document.createElement("button");
+  btnCharacter.className = "regen-btn";
+  btnCharacter.textContent = "Stämmer inte med hjälten";
+  btnCharacter.onclick = () => regenerateOne(item.page, "character_mismatch");
 
-  over.appendChild(btn);
+  const btnScene = document.createElement("button");
+  btnScene.className = "regen-btn";
+  btnScene.textContent = "Stämmer inte med scenen";
+  btnScene.onclick = () => regenerateOne(item.page, "scene_mismatch");
+
+  const btnStyle = document.createElement("button");
+  btnStyle.className = "regen-btn";
+  btnStyle.textContent = "Fel stil";
+  btnStyle.onclick = () => regenerateOne(item.page, "style_issue");
+
+  btnWrap.appendChild(btnGeneral);
+  btnWrap.appendChild(btnCharacter);
+  btnWrap.appendChild(btnScene);
+  btnWrap.appendChild(btnStyle);
+
+  over.appendChild(btnWrap);
   imgWrap.appendChild(over);
 
   // Text – redigerbar
@@ -635,7 +654,6 @@ function buildCard(item) {
   txt.contentEditable = "true";
   txt.textContent = item.text || "";
 
-  // Spara redigering till story-objektet
   txt.oninput = () => {
     const page = state.story.book.pages.find((p) => p.page === item.page);
     if (page) page.text = txt.textContent;
@@ -645,6 +663,7 @@ function buildCard(item) {
   article.appendChild(txt);
   return article;
 }
+
 
 
 async function fillCard(page, imgUrl, providerLabel = "") {
@@ -1110,8 +1129,51 @@ if (bare) {
     els.submitBtn.textContent = "Skapa förhandsvisning";
   }
 }
+
+async function chooseRegenReason() {
+  const msg =
+    "Varför vill du göra om bilden?\n\n" +
+    "1 = Ser inte ut som huvudkaraktären\n" +
+    "2 = Gör inte som texten beskriver\n" +
+    "3 = Något ser konstigt ut (extra armar, konstiga ansikten, m.m.)\n\n" +
+    "Skriv 1, 2 eller 3 (lämna tomt för att avbryta).";
+
+  const val = window.prompt(msg, "1");
+  if (!val) return null;
+
+  const v = val.trim();
+  if (v === "1") {
+    return {
+      code: "character_mismatch",
+      note: ""
+    };
+  }
+  if (v === "2") {
+    const extra = window.prompt(
+      "Vad stämmer inte med texten? (valfritt, men hjälper AI:n)",
+      ""
+    );
+    return {
+      code: "text_mismatch",
+      note: extra || ""
+    };
+  }
+  if (v === "3") {
+    const extra = window.prompt(
+      "Beskriv kort vad som ser konstigt ut (valfritt)",
+      ""
+    );
+    return {
+      code: "weird_artifacts",
+      note: extra || ""
+    };
+  }
+
+  // Ogiltigt val => avbryt
+  return null;
+}
 /* --------------------------- Single regenerate --------------------------- */
-async function regenerateOne(page) {
+async function regenerateOne(page, reasonCode = "generic") {
   if (!state.ref_b64 || !state.story) return;
 
   // Hindra dubbelklick / parallella requests per sida
@@ -1124,62 +1186,57 @@ async function regenerateOne(page) {
     return;
   }
 
+  // 🔹 Läs nuvarande (felaktiga) bild till b64 innan vi rensar
+  let currB64 = null;
+  const currentImgEl = wrap.querySelector("img");
+  if (currentImgEl?.src) {
+    try {
+      const du = await urlToDataURL(currentImgEl.src);
+      currB64 = dataUrlToBareB64(du);
+    } catch (err) {
+      console.warn("Kunde inte läsa nuvarande bild som b64:", err);
+    }
+  }
+
   // 1) Rensa befintligt visuellt innehåll
   wrap.querySelector(".img-fallback")?.remove();
   wrap.querySelector("img")?.remove();
   wrap.querySelector(".skeleton, .skeleton-box")?.remove();
 
-  // 2) Hämta overlay och lås den medan vi regenererar
+  // 2) Dölj overlay medan vi genererar
   const over = wrap.querySelector(".regen-overlay");
   if (over) {
     over.classList.add("hidden");
   }
 
-  // 3) Lägg till ny skeleton (samma stil som vid first-run)
+  // 3) Ny skeleton
   const sk = document.createElement("div");
   sk.className = "skeleton";
   wrap.prepend(sk);
 
-  // 4) Försök få prev_b64 för kontinuitet
-  let prevB64 = null;
   try {
-    const prevPageNum = page - 1;
-    if (prevPageNum > 0) {
-      const prevImgData = state.images_by_page.get(prevPageNum);
-      if (prevImgData) {
-        const urlToFetch = prevImgData.data_url || prevImgData.image_url;
-        if (urlToFetch) {
-          const du = await urlToDataURL(urlToFetch);
-          prevB64 = dataUrlToBareB64(du);
-        }
-      }
-    }
-  } catch (err) {
-    console.warn("Kunde inte hämta föregående bild för regen:", err);
-    // Vi fortsätter ändå utan prev_b64
-  }
-
-  try {
-
     const prevHash =
-  (state.hashes_by_page && state.hashes_by_page.get(page - 1)) || null;
+      (state.hashes_by_page && state.hashes_by_page.get(page - 1)) || null;
 
     const res = await fetch(`${API}/api/image/regenerate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-     body: JSON.stringify({
-  page,
-  story: state.story,
-  ref_image_b64: state.ref_b64,
-  prev_b64: prevB64,
-  style: state.form.style,
-  hashes: {
-    ref_hash: state.ref_hash || null,
-    prev_hash: prevHash,
-    curr_hash: null,
-  },
-}),
-
+      body: JSON.stringify({
+        page,
+        story: state.story,
+        ref_image_b64: state.ref_b64,         // huvudkaraktär
+        prev_b64: currB64,                    // nuvarande felaktiga bild
+        style: state.form.style,
+        coherence_code: state.coherence_code || null,
+        style_refs_b64: state.style_refs_b64 || null,
+        hashes: {
+          ref_hash: state.ref_hash || null,
+          prev_hash: prevHash,
+          curr_hash: null,
+        },
+        reason_code: reasonCode,              // 🔹 nyckeln här
+        reason_note: ""                       // kan fyllas senare om du vill ha fritext
+      }),
     });
 
     const j = await res.json().catch(() => ({}));
@@ -1187,34 +1244,31 @@ async function regenerateOne(page) {
       throw new Error(j?.error || `HTTP ${res.status}`);
     }
 
-    // Ta bort skeleton – fillCard sätter in nya bilden + visar overlay
+    // Ta bort skeleton – fillCard sätter in nya bilden + overlay-logik
     sk.remove();
     await fillCard(page, j.image_url, j.provider || "Gemini");
 
-   
-   // Uppdatera state (bild)
-state.images_by_page.set(page, {
-  image_url: j.image_url,
-  provider: j.provider || "Gemini",
-});
+    // Uppdatera state (bild)
+    state.images_by_page.set(page, {
+      image_url: j.image_url,
+      provider: j.provider || "Gemini",
+    });
 
-// 🔹 Uppdatera hash för sidan
-try {
-  const du = await urlToDataURL(j.image_url);
-  if (du) {
-    const hashHex = await imageDataUrlToHashHex(du);
-    if (!state.hashes_by_page) state.hashes_by_page = new Map();
-    state.hashes_by_page.set(page, hashHex || null);
-  }
-} catch (err) {
-  console.warn("Kunde inte uppdatera hash för regen page", page, err);
-}
-
+    // Uppdatera hash
+    try {
+      const du = await urlToDataURL(j.image_url);
+      if (du) {
+        const hashHex = await imageDataUrlToHashHex(du);
+        if (!state.hashes_by_page) state.hashes_by_page = new Map();
+        state.hashes_by_page.set(page, hashHex || null);
+      }
+    } catch (err) {
+      console.warn("Kunde inte uppdatera hash för regen page", page, err);
+    }
   } catch (e) {
     console.error("regenerateOne error", e);
     sk.remove();
 
-    // Visa tydlig fallback + lås inte fast kortet
     const fb = document.createElement("div");
     fb.className = "img-fallback";
     fb.innerHTML = `
@@ -1224,7 +1278,6 @@ try {
       </div>`;
     wrap.appendChild(fb);
 
-    // Lås upp overlay igen så användaren kan försöka på nytt
     if (over) over.classList.remove("hidden");
   } finally {
     regeneratingPages.delete(page);
