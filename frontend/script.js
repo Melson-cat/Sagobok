@@ -437,35 +437,42 @@ function stopQuips() {
   quipTimer = null;
   const q = document.querySelector(".status-quips");
   if (q) q.remove();
-}
-function setCategory(cat, save = true) {
-  // kids | pets | adult
-  const val =
-    cat === "pets"  ? "pets"  :
-    cat === "adult" ? "adult" :
-    "kids";
-
+}function setCategory(cat, save = true) {
+  const val = cat === "pets" ? "pets" : cat === "adult" ? "adult" : "kids";
   state.form.category = val;
+  document.body.dataset.theme = val; // kids / pets / adult
 
-  // 🔹 Växla tema (detta styr body[data-theme] → CSS-variabler)
-  document.body.dataset.theme = val;
-
-  // 🔹 Aktivera rätt knapp
   els.catKidsBtn?.classList.toggle("active", val === "kids");
   els.catPetsBtn?.classList.toggle("active", val === "pets");
   els.catAdultBtn?.classList.toggle("active", val === "adult");
 
-  // 🔹 Uppdatera fält (label, typ, hint) utifrån kategori
   const ageLabel = document.getElementById("ageLabel");
   const ageHint  = document.getElementById("ageHint");
 
-  if (!els.age) {
-    if (save) saveForm();
-    return;
-  }
+  const readingAgeLabel = document.querySelector('label[for="readingAge"]');
+  const readingAgeField = document.getElementById("readingAge");
+  const readingAgeHint  = readingAgeField
+    ? readingAgeField.closest(".field")?.querySelector(".hint")
+    : null;
+
+  // Standard-chipdefinition för barn/husdjur
+  const chipsKids = [
+    { text: "4–5",   key: "4-5" },
+    { text: "6–8",   key: "6-8" },
+    { text: "9–12",  key: "9-12" },
+    { text: "Familj", key: "familj" },
+  ];
+
+  // Vuxen-chip (vi behåller samma keys, bara annan text)
+  const chipsAdult = [
+    { text: "Lättsam & rolig",        key: "4-5" },
+    { text: "Varm & rörande",         key: "6-8" },
+    { text: "Busig & tokig",          key: "9-12" },
+    { text: "Minnesbok / familjeberättelse", key: "familj" },
+  ];
 
   if (val === "kids") {
-    // Barn: numerisk ålder
+    // Barn
     els.age.type = "number";
     els.age.min = String(MIN_AGE);
     els.age.max = String(MAX_AGE);
@@ -476,8 +483,19 @@ function setCategory(cat, save = true) {
     if (ageLabel) ageLabel.textContent = "Ålder (hjälte)";
     if (ageHint)  ageHint.textContent  = "Barnets ålder.";
 
+    if (readingAgeLabel) readingAgeLabel.textContent = "Läsålder";
+    if (readingAgeHint)  readingAgeHint.textContent  =
+      'Välj läsålder, eller välj "Familj" för att boken ska passa hela familjen.';
+
+    readingAgeSeg.forEach((btn, i) => {
+      const def = chipsKids[i];
+      if (!def) return;
+      btn.textContent = def.text;
+      btn.setAttribute("data-readage", def.key);
+    });
+
   } else if (val === "pets") {
-    // Husdjur: djurslag
+    // Husdjur
     els.age.type = "text";
     els.age.removeAttribute("min");
     els.age.removeAttribute("max");
@@ -488,8 +506,19 @@ function setCategory(cat, save = true) {
     if (ageLabel) ageLabel.textContent = "Djurslag";
     if (ageHint)  ageHint.textContent  = "Ange djurslag, t.ex. katt, hund eller kanin.";
 
-  } else if (val === "adult") {
-    // Vuxen: relation
+    if (readingAgeLabel) readingAgeLabel.textContent = "Läsålder";
+    if (readingAgeHint)  readingAgeHint.textContent  =
+      'Välj läsålder, eller välj "Familj" för att boken ska passa hela familjen.';
+
+    readingAgeSeg.forEach((btn, i) => {
+      const def = chipsKids[i];
+      if (!def) return;
+      btn.textContent = def.text;
+      btn.setAttribute("data-readage", def.key);
+    });
+
+  } else {
+    // Vuxen
     els.age.type = "text";
     els.age.removeAttribute("min");
     els.age.removeAttribute("max");
@@ -499,24 +528,23 @@ function setCategory(cat, save = true) {
 
     if (ageLabel) ageLabel.textContent = "Relation (hjälte)";
     if (ageHint)  ageHint.textContent  = "Ex: mamma, storebror, kollega, bästa vän.";
-  }
 
-  // 🔹 Läsålder-fältet:
-  // - Kids/pets: visa som vanligt
-  // - Adult: döp om (eller göm om du vill senare)
-  const raLabel = document.querySelector('label[for="readingAge"]');
-  const raHint  = document.querySelector('#readingAge + p.hint');
+    if (readingAgeLabel) readingAgeLabel.textContent = "Typ av bok (vuxen)";
+    if (readingAgeHint)  readingAgeHint.textContent  =
+      "Välj känsla – t.ex. lättsam, rörande eller minnesbok. Du kan beskriva mer i temat.";
 
-  if (val === "adult") {
-    if (raLabel) raLabel.textContent = "Typ av bok (vuxen)";
-    if (raHint)  raHint.textContent  = "T.ex. rolig & lättsam, rörande, busig, minnesbok. (Du kan beskriva mer i temat.)";
-  } else {
-    if (raLabel) raLabel.textContent = "Läsålder";
-    if (raHint)  raHint.textContent  = 'Välj läsålder, eller välj "Familj" för att boken ska passa hela familjen.';
+    readingAgeSeg.forEach((btn, i) => {
+      const def = chipsAdult[i];
+      if (!def) return;
+      btn.textContent = def.text;
+      // 🔑 behåll samma keys (4-5, 6-8, 9-12, familj) så backend slipper bry sig
+      btn.setAttribute("data-readage", def.key);
+    });
   }
 
   if (save) saveForm();
 }
+
 
 
 
@@ -1060,20 +1088,24 @@ async function onSubmit(e) {
   try {
     // 1) STORY
     const storyRes = await fetch(`${API}/api/story`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        name: state.form.name,
-        age: state.form.age,
-        reading_age: state.form.reading_age,
-        pages: STORY_PAGES, // <- låst
-        category: state.form.category,
-        style: state.form.style,
-        theme: state.form.theme,
-        traits: state.form.traits,
-        petSpecies: state.form.petSpecies || "",
-      }),
-    });
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    name: state.form.name,
+    age: state.form.age,
+    reading_age: state.form.reading_age,
+    pages: STORY_PAGES,
+    category: state.form.category,      // "kids" | "pets" | "adult"
+    style: state.form.style,
+    theme: state.form.theme,
+    traits: state.form.traits,
+    petSpecies: state.form.petSpecies || "",
+    relation: state.form.relation || "",          // 👈 NYTT
+    occasion: state.form.occasion || "",          // 👈 NYTT, om du använder det
+    occasion_custom: state.form.occasion_custom || "", // 👈 NYTT
+  }),
+});
+
     const storyData = await storyRes.json().catch(() => ({}));
     if (!storyRes.ok || storyData?.error) throw new Error(storyData?.error || `HTTP ${storyRes.status}`);
     state.story = storyData.story;

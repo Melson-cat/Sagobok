@@ -1959,24 +1959,41 @@ async function handleRefImage(req, env) {
 
 
 
-
-
-
-function heroDescriptor({ category, name, age, traits, petSpecies }) {
+function heroDescriptor({
+  category,
+  name,
+  age,
+  traits,
+  petSpecies,
+  relation,
+  occasionLabel,
+}) {
   const cat = (category || "kids").toLowerCase();
+  const nm = name || "Nova";
+  const t  = traits || (cat === "pets" ? "nyfiken, lekfull" : "modig, omtänksam");
 
   if (cat === "pets") {
     const species = (petSpecies || "katt").trim().toLowerCase();
-    return `HJÄLTE: ett ${species} vid namn ${name || "Nova"}; egenskaper: ${
-      traits || "nyfiken, lekfull"
-    }.`;
+    return `HJÄLTE: ett ${species} vid namn ${nm}; egenskaper: ${t}.`;
   }
 
+  if (cat === "adult") {
+    const rel = relation || "närstående vuxen (t.ex. mamma, partner, bästa vän)";
+    const occ = occasionLabel || "allmän kärleksfull present";
+
+    return [
+      `HJÄLTE: en vuxen person vid namn ${nm}.`,
+      `Relation till beställaren: ${rel}.`,
+      `Tillfälle / typ av bok: ${occ}.`,
+      `Egenskaper: ${t}.`,
+    ].join(" ");
+  }
+
+  // default: barn
   const a = parseInt(age || 6, 10);
-  return `HJÄLTE: ett barn vid namn ${name || "Nova"} (${a} år), egenskaper: ${
-    traits || "modig, omtänksam"
-  }.`;
+  return `HJÄLTE: ett barn vid namn ${nm} (${a} år), egenskaper: ${t}.`;
 }
+
 
 
 /* ---------------------- Coherence + Wardrobe helpers ---------------------- */
@@ -3576,8 +3593,17 @@ async function handleStory(req, env) {
 
     const occasionLabel = buildOccasionLabel(occasion, occasion_custom);
 
-    // 1) Bygg karaktärssträngar (MISSADES I DIN SNIPPET)
-    const mainChar = heroDescriptor({ category: cat, name, age, traits, petSpecies });
+    // 1) Bygg karaktärssträngar
+    const mainChar = heroDescriptor({
+  category: cat,
+  name,
+  age,
+  traits,
+  petSpecies,
+  relation,
+  occasionLabel,
+});
+
 
     const extrasText =
       Array.isArray(extraCharacters) && extraCharacters.length > 0
