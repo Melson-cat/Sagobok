@@ -1306,109 +1306,92 @@ VIKTIGT
 • Ingen extra text utanför JSON. Endast giltig JSON.
 
 `;
-
 const STORY_SYS = `
-Du är ett sammansatt kreativt team: FÖRFATTARE + REGISSÖR.
-Du producerar en komplett illustrerad bok baserad på en OUTLINE.
+Du är ett kreativt team (FÖRFATTARE + REGISSÖR) som producerar en illustrerad bok (barn, husdjur eller vuxen) baserad på en outline.
 
-Boken ska vara filmisk, emotionellt engagerande och full av visuella stunder som kan illustreras tydligt.
+INPUT: En outline med dramaturgi (home → departure → adventure → trial → climax → epilogue).
 
-===================================
-      SAMMANLAGDA MÅL
-===================================
+===========================
+ FÖRFATTAREN – DITT UPPDRAG
+===========================
 
-• 16 sidor totalt (page 1–16).
-• Varje sida har en unik visuell scen.
-• Varje scen har en tydlig fysisk handling (action_visual).
-• Boken följer den dramaturgi som OUTLINE ger (home → departure → adventure → trial → climax → epilogue).
+• Skriv en engagerande berättelse på svenska.
+• EXAKT 16 sidor.
+• Varje sida: 5–7 meningar i fältet "text".
+• Storyn måste följa outline-faserna i rätt ordning.
 
-===================================
-          FÖRFATTAREN
-===================================
+HÅRD SIDFÖRDELNING (MÅSTE FÖLJAS):
+- Page 1–2 = "home" + "departure"
+- Page 3–15 = äventyr:
+   • introduction till platsen
+   • incident/problem
+   • trial (något går fel)
+   • climax (svåraste momentet)
+   • resolution
+- Page 16 = epilog
+Ingen sida utanför denna struktur.
 
-• Skriv texten på SVENSKA.
-• Varje sida (1–16) ska ha 5–7 meningar.
-• Tänk filmiskt: ljus, miljö, rörelse, detaljer.
-• Alla adventuresidor (3–15) måste innehålla konkret handling – ej vardagsprat.
-• Inga transportsträckor: varje sida måste ge en stark bild.
+PRIMARY ACTION / KEYFRAME (VIKTIGT):
+• För VARJE sida ska du välja EN (1) tydlig fysisk nyckelhandling – en "keyframe" som kan illustreras.
+  Exempel: "Jussan hoppar i poolen", "kameran faller i vattnet", "Jussan sträcker sig mot delfinerna".
+• Denna huvudhandling måste:
+  - nämnas tydligt i "text" (på svenska),
+  - beskrivas i "scene_en" (på engelska, som en filmisk stillbild),
+  - och sammanfattas i "action_visual" (på engelska, 3–8 ord).
 
-===================================
-           REGISSÖREN
-===================================
+• Om det händer flera saker på sidan:
+  - välj EN viktigaste, mest visuellt starka handling,
+  - låt övriga händelser vara stöd eller bakgrund, inte huvudfokus.
 
-Du ansvarar för bildinstruktionerna:
+VIKTIGT:
+• Äventyret måste innehålla riktiga händelser och visuella moment.
+• Minst tre distinkta set pieces med handling (inte småprat):
+  exempel: rädda någon, hitta något, klättra, gå vilse, storm, hinder.
+• Hjälten ska befinna sig på äventyrsplatsen från sida 3 till 15 – inga hemmascener där.
 
-1) BIBLE
-• Skapa "bible" med:
-  – main_character (namn, kort beskrivning)
-  – wardrobe = EN tydlig och konsekvent engelsk outfitbeskrivning
-  – secondary_characters (endast om någon syns på 3+ sidor)
-  – setting: plats + kort visuell beskrivning
+===========================
+ REGISSÖREN – DITT UPPDRAG
+===========================
 
-2) Varje page (1–16) MÅSTE ha:
-• page (1–16, unik)
-• phase (home, departure, adventure, trial, climax, epilogue)
-• text (svenska, 5–7 meningar)
-• scene (kort scen på svenska)
-• scene_en (kort VISUELL scenbeskrivning på engelska, börjar med hjälten)
-• camera (wide | medium | close-up | low-angle | high-angle | over-the-shoulder)
-• action_visual (EN tydlig fysisk handling, 3–10 ord, engelska)
-• location (platsen scenen utspelas på)
-• time_of_day
-• weather
+• Skapa en visuell plan (“bible”) + bildinstruktioner för varje page.
+• Alla scener måste vara visuellt distinkta.
+• "scene", "scene_en" och "action_visual" måste vara direkt kopplade till den valda PRIMARY ACTION för sidan.
 
-===================================
-     HÅRDA STRUKTURKRAV
-===================================
+WARDROBE (kritisk):
+• "wardrobe" i bible ska vara en konsekvent, konkret engelsk outfitbeskrivning
+  (fungerar som en direkt prompt till AI-bildgeneratorn).
+• Wardrobe får inte ändras mellan sidorna, om inget annat uttryckligen motiveras i texten.
 
-• EXAKT 16 pages – ingen mer, ingen mindre.
-• page 1–2 → home + departure
-• page 3–15 → ENDAST adventure (platsen där äventyret utspelas)
-   – minst 3 starka visuella set pieces
-   – minst 1 trial (misslyckande)
-   – minst 1 climax (största utmaningen)
-• page 16 → epilogue (lugnt, avtonande, emotionellt)
+SCENE_EN:
+• Måste börja med hjälten (t.ex. "Jussan ...").
+• Får inte beskriva färg/utseende – bara miljö, ljus, handling, rörelse.
+• Engelska, 1–2 meningar.
+• Beskriv EN tydlig bildruta (en stillbild), inte en hel sekvens.
+• SCENE_EN ska utgå från den PRIMARY ACTION du valt för sidan – samma moment i tiden som "action_visual" beskriver.
 
-===================================
-   REGLER FÖR SCENE_EN
-===================================
+ACTION_VISUAL:
+• EN (1) tydlig fysisk handling per sida.
+• Engelska, 3–8 ord.
+• Beskriv hjälten i aktiv rörelse (ger en konkret pose/gest).
+  Exempel: "jumping into the pool", "reaching for falling camera".
+• HÅRDA REGLER:
+  - Endast EN huvudhandling.
+  - Använd inte "and", "&", "then" eller kommatecken för att binda ihop två handlingar.
+  - Inga kedjor som "slipping on moss, reaching for camera".
+  - Välj EN av dessa och gör den till PRIMARY ACTION.
 
-• Måste börja med hjälten.
-• Måste beskriva MILJÖ, LJUS och HANDLING.
-• Får INTE beskriva:
-  – hårfärg
-  – ansiktsdrag
-  – exakta färger på kläder
-  – realistisk stil (“realistic”, “high detail photo”, etc.)
+CAMERA:
+• EN av: "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
 
-===================================
-   REGLER FÖR ACTION_VISUAL
-===================================
+BIROLLER:
+• Om en karaktär förekommer i 3+ sidor ska de ligga i "bible.secondary_characters".
+• Deras roll + relation + igenkänning ska vara konsekvent.
 
-• EN fysisk handling (3–10 ord).  
-• Ingen symbolik, ingen inre monolog.  
-• Handling måste kunna ritas tydligt.  
+===========================
+ JSON-STRUKTUR (OBLIGATORISKT)
+===========================
 
-Exempel OK:
-- "jumping across a narrow ledge"
-- "reaching toward drifting map"
-- "hugging partner tightly"
-- "holding onto rocking boat rail"
-
-===================================
-   REGLER FÖR BIBLE.WARDROBE
-===================================
-
-• Exakt samma outfit hela boken.
-• Engelska.
-• Stilneutral (ingen genre), t.ex:
-  "red scarf, beige linen shirt, dark green hiking pants, brown boots"
-
-===================================
-           JSON-OUTPUT
-===================================
-
-Returnera EXAKT detta (i rätt struktur):
+Du MÅSTE returnera giltig JSON med följande struktur:
 
 {
   "book": {
@@ -1418,7 +1401,7 @@ Returnera EXAKT detta (i rätt struktur):
       "main_character": {
         "name": string,
         "description": string,
-        "wardrobe": string
+        "wardrobe": string  // engelsk, konsekvent outfitbeskrivning för hjälten
       },
       "secondary_characters": [
         {
@@ -1435,22 +1418,45 @@ Returnera EXAKT detta (i rätt struktur):
     },
     "pages": [
       {
-        "page": number,
-        "phase": string,
-        "text": string,
-        "scene": string,
-        "scene_en": string,
-        "camera": string,
-        "action_visual": string,
-        "location": string,
-        "time_of_day": string,
-        "weather": string
+        "page": number,            // HÅRD REGEL: heltal 1–16, 1-baserad ordning
+        "phase": string,           // t.ex. "home", "departure", "adventure", "trial", "climax", "resolution", "epilogue"
+        "text": string,            // 5–7 meningar på svenska, inkluderar PRIMARY ACTION tydligt
+        "scene": string,           // kort scenbeskrivning på svenska
+        "scene_en": string,        // kort scenbeskrivning på engelska, börjar med hjälten, samma moment som ACTION_VISUAL
+        "camera": string,          // EN av: "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder"
+        "action_visual": string,   // EN tydlig fysisk handling, engelska, 3–8 ord, utan "and"/","
+        "location": string,        // plats/miljö för scenen
+        "time_of_day": string,     // t.ex. "morning", "afternoon", "sunset", "night"
+        "weather": string          // t.ex. "sunny", "cloudy", "rainy", "stormy", "snowy"
       }
     ]
   }
 }
 
-Inga extra fält. Ingen text utanför JSON.
+HÅRDA KRAV PÅ "pages":
+• "pages" MÅSTE innehålla EXAKT 16 objekt.
+• Varje objekt i "pages" MÅSTE ha fältet "page".
+• "page" MÅSTE vara ett heltal 1–16.
+• "page"-numren MÅSTE vara unika och spegla den faktiska ordningen:
+  - page 1 och 2: home + departure
+  - page 3 till 15: äventyr på platsen (ingen hemmascen)
+  - page 16: epilog
+• Fältet "text" MÅSTE finnas på alla 16 sidor och den valda PRIMARY ACTION
+  måste gå att tydligt identifiera i texten.
+• "scene_en" och "action_visual" måste beskriva samma PRIMARY ACTION.
+
+===========================
+ HÅRDA REGLER
+===========================
+
+• Exakt 16 sidor.
+• Följ outline-faserna i ordning.
+• Max 2 hemma-sidor (home + departure) + 1 epilog. Resten måste vara äventyr på platsen.
+• Tydlig handling på varje sida (inte upprepning, inte utfyllnad).
+• En (1) PRIMARY ACTION per sida som bär bilden.
+• Varje sida ska vara visuellt unik (miljö, vinkel, handling).
+• "page"-fältet är obligatoriskt på varje sida och får aldrig utelämnas.
+• Endast giltig JSON i svaret – ingen extra text, ingen förklaring utanför JSON.
 `;
 
 
@@ -1822,54 +1828,79 @@ function deriveWardrobeSignature(story) {
 }
 
 
-
-
-
 function buildCoverPrompt({ style, story, characterName, wardrobe_signature, coherence_code }) {
-  const sGuard      = styleGuard(style);
-  const theme       = story?.book?.theme || "";
-  const coh         = coherence_code || makeCoherenceCode(story);
-  const hero        = story?.book?.bible?.main_character || {};
-  const age         = hero?.age || 5;
-  const firstScene  = story?.book?.pages?.[0]?.scene_en || "";
-  const category    = story?.book?.category || "kids";
+  const sGuard     = styleGuard(style);
+  const coh        = coherence_code || makeCoherenceCode(story);
+  const hero       = story?.book?.bible?.main_character || {};
+  const firstScene = story?.book?.pages?.[0]?.scene_en || "";
+  const category   = (story?.book?.category || "kids").toLowerCase();
 
-  const hairMatch = (hero?.physique || "").match(/\b(blond|blonde|brown|black|dark|light|red|ginger)\b/i);
-  const hairCue   = hairMatch ? ` Hair color: ${hairMatch[0].toLowerCase()}.` : "";
+  const age        = hero?.age || 5;
+  const relation   = hero?.relation || "close adult loved one (e.g. partner, spouse, best friend)";
+  const theme      = story?.book?.theme || "";
 
-  // --- 🧒 Barnbok (default) ---
-  if (category !== "pets") {
+  const hairMatch  = (hero?.physique || "").match(/\b(blond|blonde|brown|black|dark|light|red|ginger)\b/i);
+  const hairCue    = hairMatch ? ` Hair color: ${hairMatch[0].toLowerCase()}.` : "";
+
+  // 🐾 HUSDJUR – oförändrat i princip
+  if (category === "pets") {
     return [
       sGuard,
-      "BOOK COVER — Create a cinematic front cover that MATCHES the interior style and identity 1:1.",
-      `Always include the main hero (${characterName}). Follow the reference EXACTLY: same face structure, hairstyle, hair length, and child proportions, age ≈ ${age}.${hairCue}`,
-      "Do NOT change hair color/length. Do NOT age the hero into a teen/adult. No makeup.",
+      "BOOK COVER — Create a cinematic, cozy front cover that MATCHES the interior style and world 1:1.",
+      `The protagonist is a pet (animal) named ${characterName}. Focus clearly on the animal; it should be the central figure of the scene.`,
+      "Do NOT include human children or adults unless specifically part of the story.",
+      "Keep the animal identical to the interior reference: same breed, fur color, proportions, and expression.",
       wardrobe_signature
-        ? `WARDROBE: ${wardrobe_signature}. Keep the identical outfit and base color; do not redesign or recolor.`
-        : "Keep outfit/identity identical to the reference; do not redesign or recolor.",
+        ? `WARDROBE / ACCESSORY (if applicable): ${wardrobe_signature}. Keep consistent with interiors.`
+        : "",
       "Square (1:1). No text or logos.",
-      firstScene ? `Background/environment should resemble: ${firstScene} (opening wide shot variant).` : "",
-      "Imagine this as the opening shot of the same animated movie as the interior pages (same lighting/tone/palette).",
+      firstScene ? `Environment hint: ${firstScene}` : "",
+      "Mood: warm, soft light, heartwarming, inviting composition suitable for a storybook about animals.",
       `COHERENCE_CODE:${coh}`
     ].filter(Boolean).join("\n");
   }
 
-  // --- 🐾 Husdjur ---
+  // 🧑‍🎓 / ❤️ VUXENBOK
+  if (category === "adult") {
+    return [
+      sGuard,
+      "BOOK COVER — Create a cinematic front cover that MATCHES the interior style and the hero's identity 1:1.",
+      `Target: an adult person named ${characterName}, depicted as the author's ${relation}.`,
+      "You must preserve the real identity from the reference: same face structure, features, age range (clearly adult), hairstyle and hair length.",
+      hairCue ? `Do NOT change hair color or length.${hairCue}` : "Do NOT change hair color or hair length.",
+      "Do NOT de-age the hero into a child or teen. No doll-like child proportions.",
+      "Do NOT genericize the face into a random model; keep it recognisably the same adult person as in the reference portrait.",
+      wardrobe_signature
+        ? `WARDROBE: ${wardrobe_signature}. Keep the identical outfit and base colors; do not redesign or recolor.`
+        : "Keep outfit/identity identical to the reference; do not redesign or recolor.",
+      "Square (1:1). No text or logos.",
+      firstScene
+        ? `Background/environment should loosely echo the world of the story, for example: ${firstScene}`
+        : "",
+      theme
+        ? `Overall mood should reflect the book's theme: ${theme}`
+        : "",
+      "Imagine this as the poster frame for the same film as the interior pages – same lighting, tone and color palette.",
+      `COHERENCE_CODE:${coh}`
+    ].filter(Boolean).join("\n");
+  }
+
+  // 🧒 BARNBOK (kids – default)
   return [
     sGuard,
-    "BOOK COVER — Create a cinematic, cozy front cover that MATCHES the interior style and world 1:1.",
-    `The protagonist is a pet (animal) named ${characterName}. Focus clearly on the animal; it should be the central figure of the scene.`,
-    "Do NOT include human children or adults unless specifically part of the story.",
-    "Keep the animal identical to the interior reference: same breed, fur color, proportions, and expression.",
+    "BOOK COVER — Create a cinematic front cover that MATCHES the interior style and identity 1:1.",
+    `Always include the main hero (${characterName}). Follow the reference EXACTLY: same face structure, hairstyle, hair length, and child proportions, age ≈ ${age}.${hairCue}`,
+    "Do NOT change hair color/length. Do NOT age the hero into a teen/adult. No makeup.",
     wardrobe_signature
-      ? `WARDROBE / ACCESSORY (if applicable): ${wardrobe_signature}. Keep consistent with interiors.`
-      : "",
+      ? `WARDROBE: ${wardrobe_signature}. Keep the identical outfit and base color; do not redesign or recolor.`
+      : "Keep outfit/identity identical to the reference; do not redesign or recolor.",
     "Square (1:1). No text or logos.",
-    firstScene ? `Environment hint: ${firstScene}` : "",
-    "Mood: warm, soft light, heartwarming, inviting composition suitable for a storybook about animals.",
+    firstScene ? `Background/environment should resemble: ${firstScene} (opening wide shot variant).` : "",
+    "Imagine this as the opening shot of the same animated movie as the interior pages (same lighting/tone/palette).",
     `COHERENCE_CODE:${coh}`
   ].filter(Boolean).join("\n");
 }
+
 
 
 
@@ -3478,32 +3509,31 @@ Inga extra fält, inga kommentarer, ingen text utanför JSON.
     return err(e?.message || "images/next failed", 500);
   }
 }
-
 async function handleImageRegenerate(req, env) {
   try {
     const {
       story,
       page,
       ref_image_b64,
-      prev_b64,          // 🔹 används nu som "nuvarande felaktiga bild"
+      prev_b64,          // nuvarande bild
       style,
       coherence_code,
       style_refs_b64,
-      reason_code,       // 🔹 NYTT
-      reason_note        // 🔹 NYTT
+      reason_code,
+      reason_note
     } = await req.json().catch(() => ({}));
 
     if (!story?.book?.pages) return err("Missing story.pages", 400);
-    if (page === undefined || page === null) return err("Missing page", 400);
     if (!ref_image_b64) return err("Missing ref_image_b64", 400);
+    if (!Number.isFinite(page)) return err("Missing/invalid page", 400);
 
     const pages = story.book.pages;
-    const target = pages.find((p) => p.page === page);
+    const target = pages.find(p => p.page === page);
     if (!target) return err(`Page ${page} not found`, 404);
 
     const heroName = story.book.bible?.main_character?.name || "Hero";
 
-    // Hämta garderob (samma logik som handleImagesNext)
+    // Garderob (samma logik som images/next)
     const bibleWardrobe = story.book.bible?.wardrobe
       ? (Array.isArray(story.book.bible.wardrobe)
           ? story.book.bible.wardrobe.join(", ")
@@ -3511,7 +3541,7 @@ async function handleImageRegenerate(req, env) {
       : null;
     const wardrobe = bibleWardrobe || deriveWardrobeSignature(story);
 
-    // Bas-prompten för sidan
+    // Basprompt = “hur sidan ska se ut” (fortfarande viktig)
     const basePrompt = buildFramePrompt({
       style: style || story.book.style || "cartoon",
       story,
@@ -3521,60 +3551,115 @@ async function handleImageRegenerate(req, env) {
       coherence_code: coherence_code || makeCoherenceCode(story),
     });
 
-    // 🔹 Bygg en extra instruktion baserat på vald anledning
-       let reasonInstruction = "";
+    // ----- REASON-SPECIFIK INSTRUKTION -----
+    let reasonBlock = "*** REGENERATION REQUEST ***\n";
+
     switch (reason_code) {
       case "character_mismatch":
-        reasonInstruction =
-          "User feedback: The character in the current page image does NOT look like the main character. " +
-          "Redraw the character so face, age, hairstyle and clothing match the reference portrait very closely. " +
-          "Keep pose and background if they are otherwise correct.";
+        reasonBlock += [
+          "User feedback: The hero in the current image does NOT look like the main character.",
+          "",
+          "GOAL:",
+          "- Fix ONLY the hero's physical identity so it matches Image 1 exactly.",
+          "",
+          "HARD RULES:",
+          "- KEEP the same composition, pose, camera angle, background and lighting from Image 2.",
+          "- CHANGE ONLY the hero's face, body proportions, age impression, hairstyle, skin/fur color and clothing details to match Image 1.",
+          "- Do NOT move characters around, do NOT change the environment or action.",
+        ].join("\n");
         break;
-      case "scene_mismatch":
-        reasonInstruction =
-          "User feedback: The image does NOT match the story text for this page. " +
-          "Adjust the scene so it accurately reflects the events, action, setting and details described in this page.";
-        break;
+
       case "style_issue":
-        reasonInstruction =
-          "User feedback: The overall style feels wrong (colors, rendering style, mood). " +
-          "Fix the style so it matches the book's intended style and looks visually consistent with other pages, " +
-          "while keeping the core content and composition.";
+        reasonBlock += [
+          "User feedback: The style of the current image feels wrong.",
+          "",
+          "GOAL:",
+          "- Keep the same scene, pose, camera, and character identity as Image 2.",
+          "- Redraw the image in the correct book style.",
+          "",
+          "HARD RULES:",
+          "- KEEP: composition, character positions, anatomy, expressions, environment layout.",
+          "- KEEP: the hero's identity as defined by Image 1.",
+          "- CHANGE: rendering style only (colors, shading, line style, texture, level of detail) so it fits the STYLE section of the prompt.",
+          "- Do NOT move the camera, do NOT change the action, do NOT add or remove characters.",
+        ].join("\n");
         break;
+
+      case "scene_mismatch":
+        reasonBlock += [
+          "User feedback: The scene does NOT match the story text for this page.",
+          "",
+          "GOAL:",
+          "- Make the image accurately depict the events, action, setting and details of this page.",
+          "",
+          "HARD RULES:",
+          "- KEEP: the hero's identity exactly as in Image 1.",
+          "- KEEP: the overall illustration style consistent with the book.",
+          "- ALLOW CHANGES: environment, props, supporting characters, hero pose and camera angle, so that the image matches the page description.",
+          "- Do NOT change the hero into a different person or pet.",
+        ].join("\n");
+        break;
+
       case "generic":
       default:
-        reasonInstruction =
-          "User feedback: Please generate a better version of this page. " +
-          "Keep the same scene, but improve composition, character appeal and clarity. " +
-          "Avoid any visual artifacts such as extra limbs, distorted faces or random objects.";
+        reasonBlock += [
+          "User feedback: Please generate a better version of this page.",
+          "",
+          "GOAL:",
+          "- Keep the same story moment, but improve clarity, composition and appeal.",
+          "",
+          "RULES:",
+          "- KEEP: hero identity as in Image 1, and the same general scene content (same moment in the story).",
+          "- ALLOW: moderate changes to camera, pose, and environment to make the image clearer and more beautiful.",
+        ].join("\n");
         break;
     }
 
     if (reason_note) {
-      reasonInstruction += `\nUser additional note: ${reason_note}`;
+      reasonBlock += `\n\nUser additional note: ${reason_note}`;
     }
 
+    // ----- HUR BILDERNA SKA TOLKAS -----
+    const imageInputsBlock = [
+      "*** IMAGE INPUTS ***",
+      "Image 1: reference portrait of the main character (STRICT identity truth).",
+      prev_b64
+        ? "Image 2: current page illustration that the user is unhappy with."
+        : "Image 2: (not provided for this request).",
+      "",
+      "Always keep the hero's identity consistent with Image 1."
+    ].join("\n");
 
-    // 🔹 Slutlig regen-prompt
+    // För vissa reason vill vi uttryckligen undvika för stora skillnader,
+    // för andra är det ok med tydlig skillnad:
+    let similarityBlock = "";
+
+    if (reason_code === "character_mismatch" || reason_code === "style_issue") {
+      similarityBlock = [
+        "*** SIMILARITY vs CHANGE ***",
+        "- The new image should be RECOGNIZABLY the same scene as Image 2.",
+        "- Do NOT radically change the layout, number of characters, or story moment.",
+      ].join("\n");
+    } else if (reason_code === "scene_mismatch" || reason_code === "generic") {
+      similarityBlock = [
+        "*** SIMILARITY vs CHANGE ***",
+        "- The new image should still depict the SAME story moment,",
+        "  but you may change composition, pose and environment as needed.",
+        "- Focus on making the scene accurate and visually readable.",
+      ].join("\n");
+    }
+
     const regenPrompt = [
       basePrompt,
-      "*** REGENERATION REQUEST ***",
-      "You will receive two input images:",
-      "Image 1: reference portrait of the main character. Use this strictly for identity (face, age, hairstyle, clothing style).",
-      "Image 2: the CURRENT page illustration that the user is unhappy with. Keep good ideas (pose, layout, background) but FIX the problems.",
-      "Create a NEW improved version of this page.",
-      "Always keep the main character's identity strictly consistent with Image 1.",
-      prev_b64
-        ? "Use Image 2 only as a rough guide for composition and environment. Do NOT copy its mistakes."
-        : "",
-      reasonInstruction
+      reasonBlock,
+      similarityBlock,
+      imageInputsBlock,
     ].filter(Boolean).join("\n\n");
 
-    // Payload till Gemini
     const payload = {
       prompt: regenPrompt,
-      character_ref_b64: ref_image_b64, // IMAGE 1 – huvudkaraktär
-      prev_b64: prev_b64 || null,       // IMAGE 2 – nuvarande felaktiga bild
+      character_ref_b64: ref_image_b64,
+      prev_b64: prev_b64 || null,
       coherence_code: coherence_code || makeCoherenceCode(story),
     };
 
@@ -3582,14 +3667,11 @@ async function handleImageRegenerate(req, env) {
       payload.style_refs_b64 = style_refs_b64;
     }
 
-    // Lite längre timeout för enstaka regen
     const img = await geminiImage(env, payload, 60000, 2);
-
     if (!img?.image_url) return err("No image from Gemini", 502);
 
     return ok({
       page,
-      prompt: regenPrompt,
       image_url: img.image_url,
       provider: img.provider || "google",
     });
