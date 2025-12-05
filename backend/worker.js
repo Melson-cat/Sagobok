@@ -38,7 +38,7 @@ export const DEFAULT_BLEED_MM = 3;
 
 
 /* ------------------------------ Globals ------------------------------ */
-const OPENAI_MODEL = "gpt-4o-mini";
+const OPENAI_MODEL = "gpt-5-mini";
 
 /* ------------------------------- CORS -------------------------------- */
 const CORS = {
@@ -991,6 +991,7 @@ async function openaiJSON(env, system, user) {
       model: OPENAI_MODEL,
       response_format: { type: "json_object" },
       temperature: 0.6,
+      max_output_tokens: 8000,
       messages: [
         { role: "system", content: sys },
         { role: "user", content: usr },
