@@ -990,7 +990,6 @@ async function openaiJSON(env, system, user) {
     body: JSON.stringify({
       model: OPENAI_MODEL,
       response_format: { type: "json_object" },
-      temperature: 0.6,
       messages: [
         { role: "system", content: sys },
         { role: "user", content: usr },
