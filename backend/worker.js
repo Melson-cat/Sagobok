@@ -1214,17 +1214,26 @@ function styleGuard(style = "cartoon") {
         
   }
 }
-
 const OUTLINE_SYS = `
-Du är en barnboksförfattare och dramaturg. Du hjälper till att skapa en disposition ("outline") för en svensk illustrerad barnbok.
+Du är en professionell dramaturg och barnboksförfattare. Du skapar en tydlig, filmisk och visuellt driven OUTLINE som sedan används för att skapa en 16-sidig illustrerad bok.
 
-Du får i user-meddelandet:
-- Hjältens typ (barn eller husdjur)
-- Namn + ev. ålder
-- Tema, plats, stil och kategori ("kids" eller "pets")
+Användaren ger:
+- Hjältens typ (child eller pet)
+- Namn (+ ev. ålder)
+- Tema, stil, kategori (kids eller pets)
+- Miljö / plats
+- Allmän ton och känsla
 
-DIN UPPGIFT:
-Skapa en engagerande, filmisk outline med tydlig dramaturgi.
+=====================
+   DITT UPPDRAG
+=====================
+
+Skapa en engagerande OUTLINE med:
+• tydlig dramaturgi
+• visuella händelser
+• levande miljöer
+• konkreta hinder och utmaningar
+• ett emotionellt tema
 
 RETURNERA EXAKT:
 {
@@ -1234,10 +1243,10 @@ RETURNERA EXAKT:
     "reading_age": number,
     "tone": string,
     "motif": string,
-    "category": "kids" | "pets",
+    "category": "kids" | "pets" | "adult",
     "hero": {
       "name": string,
-      "kind": "child" | "pet",
+      "kind": "child" | "pet" | "adult",
       "species": string | null,
       "age": number | null
     },
@@ -1257,93 +1266,149 @@ RETURNERA EXAKT:
   }
 }
 
-REGLER FÖR STRUCTURE / DRAMATURGI
-- Boken ska passa 16 sidor totalt.
-- Fördela kapitel så att:
-  • "home" + "departure" tillsammans = max 1–2 sidor  
-  • "epilogue" = max 1 sida  
-  • ALLA andra sidor = äventyr ("adventure", "trial", "climax")
-- Outlinen måste inkludera:
-  • ett centralt problem (stakes)
-  • en trial (första misslyckade försök)
-  • ett klimax (svåraste punkten)
-  • en lösning
-- Händelserna ska vara dramatiska och visuella, inte vardagliga:
-  Ex: storm, vilse, rädda någon, tappad viktig sak, hinder i miljön, farliga vägar.
+=====================
+    STRUKTURKRAV
+=====================
 
-KATEGORI-REGLER:
-- category = "kids": hero.kind = "child", species = null, age ≈ barnets ålder.
-- category = "pets": hero.kind = "pet", species = t.ex. "cat", "dog", "rabbit".
+Total längd: 16 sidor.
 
-RETURNERA ENDAST GILTIG JSON. INGA kommentarer eller extra text.
+SIDFÖRDELNING:
+- Page 1–2: "home" + "departure"
+- Page 3–15: äventyr
+   • visuella set-pieces
+   • konkreta handlingar, hinder, problem
+   • minst en "trial" (misslyckande)
+   • ett "climax" (svåraste utmaningen)
+- Page 16: "epilogue"
+
+OUTLINE MÅSTE INNEHÅLLA:
+• Ett centralt problem eller mål
+• Ett tydligt hinder som skapar en "trial"
+• En dramatisk vändpunkt i "climax"
+• En lösning i epilogen
+• Konkreta visuella platser och moment (för bildgenerering)
+
+=====================
+   KATEGORI-REGLER
+=====================
+
+◼ kids → hero.kind = "child", species = null, age ≈ barnets ålder  
+◼ pets → hero.kind = "pet", species = katt/hund etc.  
+◼ adult → hero.kind = "adult", mer emotionell ton, fortfarande visuellt driven
+
+=====================
+VIKTIGT
+=====================
+
+• Skriv visuellt: scener, platser, rörelse, handling.  
+• Inga "vaghetsbeskrivningar" — allt ska gå att illustrera.  
+• Minst tre stora visuella händelser/set pieces i "adventure".  
+• Ingen extra text utanför JSON. Endast giltig JSON.
 
 `;
 
 const STORY_SYS = `
-Du är ett kreativt team (FÖRFATTARE + REGISSÖR) som producerar en illustrerad barnbok baserad på en outline.
+Du är ett sammansatt kreativt team: FÖRFATTARE + REGISSÖR.
+Du producerar en komplett illustrerad bok baserad på en OUTLINE.
 
-INPUT: En outline med dramaturgi (home → departure → adventure → trial → climax → epilogue).
+Boken ska vara filmisk, emotionellt engagerande och full av visuella stunder som kan illustreras tydligt.
 
-===========================
- FÖRFATTAREN – DITT UPPDRAG
-===========================
+===================================
+      SAMMANLAGDA MÅL
+===================================
 
-• Skriv en engagerande berättelse på svenska.
-• EXAKT 16 sidor.
-• Varje sida: 5–7 meningar i fältet "text".
-• Storyn måste följa outline-faserna i rätt ordning.
+• 16 sidor totalt (page 1–16).
+• Varje sida har en unik visuell scen.
+• Varje scen har en tydlig fysisk handling (action_visual).
+• Boken följer den dramaturgi som OUTLINE ger (home → departure → adventure → trial → climax → epilogue).
 
-HÅRD SIDFÖRDELNING (MÅSTE FÖLJAS):
-- Page 1–2 = "home" + "departure"
-- Page 3–15 = äventyr:
-   • introduction till platsen
-   • incident/problem
-   • trial (något går fel)
-   • climax (svåraste momentet)
-   • resolution
-- Page 16 = epilog
-Ingen sida utanför denna struktur.
+===================================
+          FÖRFATTAREN
+===================================
 
-VIKTIGT:
-• Äventyret måste innehålla riktiga händelser och visuella moment.
-• Minst tre distinkta set pieces med handling (inte småprat):
-  exempel: rädda någon, hitta något, klättra, gå vilse, storm, hinder.
-• Hjälten ska befinna sig på äventyrsplatsen från sida 3 till 15 – inga hemmascener där.
+• Skriv texten på SVENSKA.
+• Varje sida (1–16) ska ha 5–7 meningar.
+• Tänk filmiskt: ljus, miljö, rörelse, detaljer.
+• Alla adventuresidor (3–15) måste innehålla konkret handling – ej vardagsprat.
+• Inga transportsträckor: varje sida måste ge en stark bild.
 
-===========================
- REGISSÖREN – DITT UPPDRAG
-===========================
+===================================
+           REGISSÖREN
+===================================
 
-• Skapa en visuell plan (“bible”) + bildinstruktioner för varje page.
-• Alla scener måste vara visuellt distinkta.
-• "scene", "scene_en" och "action_visual" måste vara direkt kopplade till handlingen på sidan.
+Du ansvarar för bildinstruktionerna:
 
-WARDROBE (kritisk):
-• "wardrobe" i bible ska vara en konsekvent, konkret engelsk outfitbeskrivning
-  (fungerar som en direkt prompt till AI-bildgeneratorn).
-• Wardrobe får inte ändras mellan sidorna, om inget annat uttryckligen motiveras i texten.
+1) BIBLE
+• Skapa "bible" med:
+  – main_character (namn, kort beskrivning)
+  – wardrobe = EN tydlig och konsekvent engelsk outfitbeskrivning
+  – secondary_characters (endast om någon syns på 3+ sidor)
+  – setting: plats + kort visuell beskrivning
 
-SCENE_EN:
+2) Varje page (1–16) MÅSTE ha:
+• page (1–16, unik)
+• phase (home, departure, adventure, trial, climax, epilogue)
+• text (svenska, 5–7 meningar)
+• scene (kort scen på svenska)
+• scene_en (kort VISUELL scenbeskrivning på engelska, börjar med hjälten)
+• camera (wide | medium | close-up | low-angle | high-angle | over-the-shoulder)
+• action_visual (EN tydlig fysisk handling, 3–10 ord, engelska)
+• location (platsen scenen utspelas på)
+• time_of_day
+• weather
+
+===================================
+     HÅRDA STRUKTURKRAV
+===================================
+
+• EXAKT 16 pages – ingen mer, ingen mindre.
+• page 1–2 → home + departure
+• page 3–15 → ENDAST adventure (platsen där äventyret utspelas)
+   – minst 3 starka visuella set pieces
+   – minst 1 trial (misslyckande)
+   – minst 1 climax (största utmaningen)
+• page 16 → epilogue (lugnt, avtonande, emotionellt)
+
+===================================
+   REGLER FÖR SCENE_EN
+===================================
+
 • Måste börja med hjälten.
-• Får inte beskriva färg/utseende – bara miljö, ljus, handling, rörelse.
-• Engelska, 1–2 meningar.
+• Måste beskriva MILJÖ, LJUS och HANDLING.
+• Får INTE beskriva:
+  – hårfärg
+  – ansiktsdrag
+  – exakta färger på kläder
+  – realistisk stil (“realistic”, “high detail photo”, etc.)
 
-ACTION_VISUAL:
-• EN tydlig fysisk handling per sida.
-• 3–10 ord, engelska, direkt kopplat till sidans text.
+===================================
+   REGLER FÖR ACTION_VISUAL
+===================================
 
-CAMERA:
-• EN av: "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder".
+• EN fysisk handling (3–10 ord).  
+• Ingen symbolik, ingen inre monolog.  
+• Handling måste kunna ritas tydligt.  
 
-BIROLLER:
-• Om en karaktär förekommer i 3+ sidor ska de ligga i "bible.secondary_characters".
-• Deras roll + relation + igenkänning ska vara konsekvent.
+Exempel OK:
+- "jumping across a narrow ledge"
+- "reaching toward drifting map"
+- "hugging partner tightly"
+- "holding onto rocking boat rail"
 
-===========================
- JSON-STRUKTUR (OBLIGATORISKT)
-===========================
+===================================
+   REGLER FÖR BIBLE.WARDROBE
+===================================
 
-Du MÅSTE returnera giltig JSON med följande struktur:
+• Exakt samma outfit hela boken.
+• Engelska.
+• Stilneutral (ingen genre), t.ex:
+  "red scarf, beige linen shirt, dark green hiking pants, brown boots"
+
+===================================
+           JSON-OUTPUT
+===================================
+
+Returnera EXAKT detta (i rätt struktur):
 
 {
   "book": {
@@ -1353,7 +1418,7 @@ Du MÅSTE returnera giltig JSON med följande struktur:
       "main_character": {
         "name": string,
         "description": string,
-        "wardrobe": string  // engelsk, konsekvent outfitbeskrivning för hjälten
+        "wardrobe": string
       },
       "secondary_characters": [
         {
@@ -1370,42 +1435,22 @@ Du MÅSTE returnera giltig JSON med följande struktur:
     },
     "pages": [
       {
-        "page": number,            // HÅRD REGEL: heltal 1–16, 1-baserad ordning
-        "phase": string,           // t.ex. "home", "departure", "adventure", "trial", "climax", "resolution", "epilogue"
-        "text": string,            // 5–7 meningar på svenska
-        "scene": string,           // kort scenbeskrivning på svenska
-        "scene_en": string,        // kort scenbeskrivning på engelska, börjar med hjälten
-        "camera": string,          // EN av: "wide", "medium", "close-up", "low-angle", "high-angle", "over-the-shoulder"
-        "action_visual": string,   // EN tydlig fysisk handling, engelska, 3–10 ord
-        "location": string,        // plats/miljö för scenen
-        "time_of_day": string,     // t.ex. "morning", "afternoon", "sunset", "night"
-        "weather": string          // t.ex. "sunny", "cloudy", "rainy", "stormy", "snowy"
+        "page": number,
+        "phase": string,
+        "text": string,
+        "scene": string,
+        "scene_en": string,
+        "camera": string,
+        "action_visual": string,
+        "location": string,
+        "time_of_day": string,
+        "weather": string
       }
     ]
   }
 }
 
-HÅRDA KRAV PÅ "pages":
-• "pages" MÅSTE innehålla EXAKT 16 objekt.
-• Varje objekt i "pages" MÅSTE ha fältet "page".
-• "page" MÅSTE vara ett heltal 1–16.
-• "page"-numren MÅSTE vara unika och spegla den faktiska ordningen:
-  - page 1 och 2: home + departure
-  - page 3 till 15: äventyr på platsen (ingen hemmascen)
-  - page 16: epilog
-• Fältet "text" MÅSTE finnas på alla 16 sidor.
-
-===========================
- HÅRDA REGLER
-===========================
-
-• Exakt 16 sidor.
-• Följ outline-faserna i ordning.
-• Max 2 hemma-sidor (home + departure) + 1 epilog. Resten måste vara äventyr på platsen.
-• Tydlig handling på varje sida (inte upprepning, inte utfyllnad).
-• Varje sida ska vara visuellt unik (miljö, vinkel, handling).
-• "page"-fältet är obligatoriskt på varje sida och får aldrig utelämnas.
-• Endast giltig JSON i svaret – ingen extra text, ingen förklaring utanför JSON.
+Inga extra fält. Ingen text utanför JSON.
 `;
 
 
@@ -1619,8 +1664,7 @@ function deriveWardrobeSignature(story) {
   ? `a ${base} dress with subtle ${accent} accents (keep the same outfit and base color on every page; do not redesign or recolor it)`
   : `a ${base} sweater and ${accent} pants (keep the same outfit and base color on every page; do not redesign or recolor them)`;
 
-}
-function buildFramePrompt({
+}function buildFramePrompt({
   style,
   story,
   page,
@@ -1631,7 +1675,9 @@ function buildFramePrompt({
   const category = (story?.book?.category || "kids").toLowerCase();
   const isPet = category === "pets";
   const isAdult = category === "adult";
+  const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
 
+  // ---- Resolve wardrobe ----
   const wardrobe = story?.book?.bible?.wardrobe
     ? (Array.isArray(story.book.bible.wardrobe)
         ? story.book.bible.wardrobe.join(", ")
@@ -1640,209 +1686,141 @@ function buildFramePrompt({
 
   const main = story?.book?.bible?.main_character || {};
   const age = main.age || 5;
-  const relation = main.relation || "närstående vuxen (t.ex. mamma, partner, bästa vän)";
-  const occLabel = story?.book?.bible?.occasion_label || "";
+  const relation = main.relation || "närstående vuxen";
 
+  const occLabel = story?.book?.bible?.occasion_label || "";
   const coh = coherence_code || makeCoherenceCode(story);
 
-  // 1) INPUT GUIDE – flera bilder + text
-  const inputGuide = [
-    `*** INPUT GUIDE ***`,
-    `You receive IMAGE 1, optionally IMAGE 2, and this text prompt.`,
-    ``,
-    `IMAGE 1: The "MASTER IDENTITY REFERENCE" for the main hero (visual truth).`,
-    `IMAGE 2: Previous story frame from the SAME book.`,
-    ``,
-    `Use IMAGE 1 ONLY for the hero's physical appearance and clothing.`,
-    `Use IMAGE 2 ONLY for story continuity (environment, lighting, mood, rough composition).`,
-    ``,
-    `TEXT (below): Description of the NEXT scene you must create.`,
-  ].join("\n");
-
-  // 2) FORMAT – för att undvika split-screen / collage
-  const formatRules = [
-    `*** COMPOSITION RULES (CRITICAL) ***`,
-    `1. SINGLE IMAGE ONLY: Do NOT create a collage, grid, or split-screen.`,
-    `2. FULL FRAME: The scene must fill the entire square canvas.`,
-    `3. NO INSETS: Do not put the reference face in a corner or as a small overlay.`,
-    `4. INTEGRATION: The hero must be IN the scene, interacting with the light, depth, and environment.`,
-  ].join("\n");
-
-  // 3) IDENTITY – olika text för barn / djur / vuxen
-  let identityLines;
+  /* --------------------------------------------------------------------------
+     1. IDENTITY BLOCK – kortare, starkare, mindre risk för realism-drift
+  -------------------------------------------------------------------------- */
+  let identityBlock = "";
   if (isPet) {
-    identityLines = [
-      `*** 1. IDENTITY (Source: IMAGE 1) ***`,
-      `Target: A pet animal named ${characterName}.`,
-      `CRITICAL: You must match the animal in IMAGE 1 exactly. Do NOT let the art style override the appearance.`,
-      `Match these traits with perfect accuracy:`,
-      `- Species and breed.`,
-      `- Fur color and pattern.`,
-      `- Head and face shape.`,
-      `- Eyes (shape, spacing, size, and color).`,
-      `- Nose and mouth proportions.`,
-      `- Body type and proportions (no extra limbs).`,
-      ``,
-      `ABSOLUTE RULE: If IMAGE 1 and any text description conflict,`,
-      `→ IMAGE 1 is the ONLY source of truth for physical appearance.`,
-    ];
+    identityBlock = [
+      `*** IDENTITY (IMAGE 1 = TRUTH) ***`,
+      `Target: A pet named ${characterName}.`,
+      `Match IMAGE 1 exactly: breed, fur pattern, face shape, proportions.`,
+      `If IMAGE 1 conflicts with text → IMAGE 1 ALWAYS wins.`
+    ].join("\n");
   } else if (isAdult) {
-    identityLines = [
-      `*** 1. IDENTITY (Source: IMAGE 1) ***`,
-      `Target: An adult person named ${characterName}, described as the author's ${relation}.`,
-      `The illustration style may be stylized, but the identity must clearly match IMAGE 1.`,
-      ``,
-      `ABSOLUTE RULE: If IMAGE 1 and any text description conflict,`,
-      `→ IMAGE 1 is the ONLY source of truth for physical appearance.`,
-      occLabel
-        ? `The overall mood and expressions should fit that this is a special gift for ${occLabel}.`
-        : "",
-    ];
+    identityBlock = [
+      `*** IDENTITY (IMAGE 1 = TRUTH) ***`,
+      `Target: An adult named ${characterName}, described as the author's ${relation}.`,
+      `Identity must clearly match IMAGE 1, even in stylized mode.`,
+      `If IMAGE 1 conflicts with text → IMAGE 1 ALWAYS wins.`,
+      occLabel ? `Context: This is a gift for ${occLabel}.` : ""
+    ].join("\n");
   } else {
-    identityLines = [
-      `*** 1. IDENTITY (Source: IMAGE 1) ***`,
-      `Target: A child named ${characterName}, age approx ${age}.`,
-      `CRITICAL: You must match the child in IMAGE 1 exactly. Do NOT let the chosen art style override the real appearance!`,
-      ``,
-      `ABSOLUTE RULE: If IMAGE 1 and any text description conflict,`,
-      `→ IMAGE 1 is the ONLY source of truth for physical appearance.`,
-    ];
+    identityBlock = [
+      `*** IDENTITY (IMAGE 1 = TRUTH) ***`,
+      `Target: A child named ${characterName}, approx age ${age}.`,
+      `Match IMAGE 1 exactly for face, hair, proportions.`,
+      `If IMAGE 1 conflicts with text → IMAGE 1 ALWAYS wins.`
+    ].join("\n");
   }
-  const identitySection = identityLines.filter(Boolean).join("\n");
 
-  // 4) WARDROBE – lås kläder
-  const wardrobeSection = [
-    `*** 2. WARDROBE (Strict Text Rule) ***`,
-    `The hero MUST wear the SAME outfit on every page.`,
-    `Wardrobe description: ${wardrobe}.`,
-    `Do NOT change garment type, main colors, or patterns.`,
-    `If previous frames show clothing mistakes, IGNORE those mistakes and follow this wardrobe description instead.`,
+  /* --------------------------------------------------------------------------
+     2. WARDROBE – stramare
+  -------------------------------------------------------------------------- */
+  const wardrobeBlock = [
+    `*** WARDROBE (LOCKED) ***`,
+    `Hero must wear the SAME outfit on every page.`,
+    `Outfit: ${wardrobe}.`,
+    `Do NOT alter colors, patterns or garment type.`,
   ].join("\n");
 
-  // 5) CONTINUITY + ANTI-STAGNATION
-  const continuitySection = [
-    `*** 3. CONTINUITY vs NEW ACTION (Sources: IMAGE 2 and context) ***`,
-    `IMAGE 2 shows what happened a moment ago in the story.`,
+  /* --------------------------------------------------------------------------
+     3. CONTINUITY vs NEW MOMENT – kortare & bättre för modeller
+  -------------------------------------------------------------------------- */
+  const continuityBlock = [
+    `*** CONTINUITY (IMAGE 2) ***`,
+    `Keep from IMAGE 2:`,
+    `- Environment mood, overall lighting, rough spatial layout.`,
     ``,
-    `KEEP from IMAGE 2:`,
-    `- Environment style and recurring props.`,
-    `- Global lighting and color mood.`,
+    `Change from IMAGE 2:`,
+    `- NEW camera composition.`,
+    `- NEW hero pose.`,
+    `- NEW moment in time.`,
     ``,
-    `DISCARD from IMAGE 2:`,
-    `- The exact pose of the hero.`,
-    `- The exact camera angle and framing.`,
-    ``,
-    `CHANGE in the NEW frame:`,
-    `- You MUST create a significantly different composition than IMAGE 2.`,
-    `- Always move the story forward with a NEW moment in time.`,
+    `Never copy the previous pose or framing.`
   ].join("\n");
 
-  // 6) Kort historik (som du hade)
-  const pages = Array.isArray(story?.book?.pages) ? story.book.pages : [];
+  /* --------------------------------------------------------------------------
+     4. SHORT HISTORY (last 1–2 pages)
+  -------------------------------------------------------------------------- */
+  let history = "";
   const idx = pages.findIndex((p) => p.page === page.page);
-  let historySection = "";
-
   if (idx > 0) {
-    const MAX_HISTORY_PAGES = 2;
-    const start = Math.max(0, idx - MAX_HISTORY_PAGES);
-    const chunks = [];
-
+    const start = Math.max(0, idx - 2);
+    const items = [];
     for (let i = start; i < idx; i++) {
-      const p = pages[i];
-      const raw = p.scene_en || p.scene || p.text || "";
-      if (!raw) continue;
-
-      const desc =
-        raw.length > 280
-          ? raw.slice(0, 280) + " …"
-          : raw;
-
-      chunks.push(`PAGE ${p.page}: ${desc}`);
+      const raw = pages[i].scene_en || pages[i].scene || pages[i].text || "";
+      const trimmed = raw.length > 200 ? raw.slice(0, 200) + " …" : raw;
+      items.push(`Page ${pages[i].page}: ${trimmed}`);
     }
-
-    if (chunks.length) {
-      historySection = [
-        `*** 3b. STORY SO FAR (last ${chunks.length} pages) ***`,
-        ...chunks,
-      ].join("\n");
+    if (items.length) {
+      history = [`*** STORY SO FAR ***`, ...items].join("\n");
     }
   }
 
-  // 7) NY SCEN
+  /* --------------------------------------------------------------------------
+     5. CURRENT SCENE BLOCK – gjort mer *neutral* och mindre fotoorienterat
+  -------------------------------------------------------------------------- */
   const sceneBlock = [
-    `*** 4. NEW SCENE SPECIFICATION (Current Page ${page.page}) ***`,
+    `*** NEW SCENE (Page ${page.page}) ***`,
     page.scene_en
-      ? `VISUAL DESCRIPTION (environment + action, NOT appearance changes): ${page.scene_en}`
+      ? `Scene summary: ${page.scene_en}`
       : "",
     page.action_visual
-      ? `ACTION: ${page.action_visual}`
-      : "ACTION: The hero is clearly doing something active in the scene.",
-    page.camera
-      ? `CAMERA HINT: ${page.camera}`
-      : "CAMERA HINT: dynamic, cinematic framing.",
-    page.location ? `LOCATION: ${page.location}` : "",
-    page.time_of_day ? `TIME OF DAY: ${page.time_of_day}` : "",
-    page.weather ? `WEATHER: ${page.weather}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+      ? `Action: ${page.action_visual}`
+      : "",
+    page.location ? `Location: ${page.location}` : "",
+    page.time_of_day ? `Time: ${page.time_of_day}` : "",
+    page.weather ? `Weather: ${page.weather}` : "",
+    page.camera ? `Suggested camera: ${page.camera}` : "",
+  ].filter(Boolean).join("\n");
 
-  // 8) MANDATORY ACTION
+  /* --------------------------------------------------------------------------
+     6. ACTION PRIORITY – kortare, hårdare
+  -------------------------------------------------------------------------- */
   const actionBlock = [
-    `*** 4b. MANDATORY ACTION (Hard Constraint) ***`,
-    `You MUST illustrate the exact physical action described for this page.`,
-    `This section overrides ALL other instructions, including continuity from Image 2.`,
-    ``,
-    `Required action:`,
-    `→ ${page.action_visual || page.scene_en || "The hero must perform a clear action visible in the scene."}`,
-    ``,
-    `STRICT RULES:`,
-    `- Do NOT replace the required action with a neutral standing pose.`,
-    `- Do NOT reinterpret the action in a symbolic way.`,
-    `- Do NOT simply continue the motion from Image 2 if the new action is different.`,
-    ``,
-    `If the text says "jumping":`,
-    `- The hero MUST be shown in mid-air. Not standing before/after.`,
-    ``,
-    `When combining with scene_en:`,
-    `- The required action (above) is the PRIMARY TRUTH.`,
+    `*** ACTION (MUST SHOW) ***`,
+    `${page.action_visual || "Hero performs a clear, physical action."}`,
+    `This action OVERRIDES all other considerations.`,
+    `Do NOT replace action with idle posing.`,
   ].join("\n");
 
-  // 9) STIL
-  const styleSection = [
-    `*** 5. STYLE & FORMAT ***`,
-    `Art Style: ${styleGuard(style)}`,
-    `Format: Square (1:1).`,
-    `Do NOT add text, speech bubbles, or logos.`,
-    `Avoid flat, boring compositions. Use depth, perspective, and lighting.`,
-    ``,
-    `NEGATIVE PROMPT:`,
-    `- No off-model faces.`,
-    `- No changes to hair color or hairstyle.`,
-    `- No teen/adult anatomy for the child hero when category is "kids".`,
-    `- No extra limbs, no duplicated hero.`,
+  /* --------------------------------------------------------------------------
+     7. STYLE – SIST (viktigt!)
+  -------------------------------------------------------------------------- */
+  const styleBlock = [
+    `*** STYLE ***`,
+    styleGuard(style),
+    `Format: Square 1:1.`,
+    `Do NOT add text, speech bubbles, UI or borders.`,
   ].join("\n");
 
+  /* --------------------------------------------------------------------------
+     FINAL ASSEMBLY
+  -------------------------------------------------------------------------- */
   return [
-    inputGuide,
-    formatRules,
-    "---",
-    identitySection,
+    identityBlock,
     "",
-    wardrobeSection,
+    wardrobeBlock,
     "",
-    continuitySection,
-    historySection ? "\n" + historySection : "",
+    continuityBlock,
     "",
+    history ? history + "\n" : "",
     sceneBlock,
     "",
     actionBlock,
     "",
-    styleSection,
+    styleBlock,
     "",
-    `COHERENCE_CODE: ${coh}`,
+    `COHERENCE_CODE: ${coh}`
   ].join("\n");
 }
+
 
 
 
@@ -3374,21 +3352,19 @@ Inga extra fält, inga kommentarer, ingen text utanför JSON.
   } catch (e) {
     return err(e?.message || "Story generation failed", 500);
   }
-}
-
-async function handleImagesNext(req, env) {
+}async function handleImagesNext(req, env) {
   try {
     const {
       style = "cartoon",
       story,
       page,
-      ref_image_b64, // IMAGE 1 – referens (hjältens identitet)
-      prev_b64,      // IMAGE 2 – senaste sida (om finns)
+      ref_image_b64,     // IMAGE 1
+      prev_b64,          // IMAGE 2
       coherence_code,
       style_refs_b64,
     } = await req.json().catch(() => ({}));
 
-    // --- 0. Grundkoll ---
+    // ---- 0. Validate ----
     if (!story?.book?.pages) return err("Missing story.pages", 400);
     if (!ref_image_b64) return err("Missing ref_image_b64", 400);
     if (!Number.isFinite(page)) return err("Missing/invalid page", 400);
@@ -3399,90 +3375,81 @@ async function handleImagesNext(req, env) {
 
     const heroName = story.book.bible?.main_character?.name || "Hero";
 
-    // --- 1. Garderob (bibeln vinner, annars derivat) ---
+    // ---- 1. Wardrobe resolution ----
     const bibleWardrobe = story.book.bible?.wardrobe
-      ? Array.isArray(story.book.bible.wardrobe)
-        ? story.book.bible.wardrobe.join(", ")
-        : story.book.bible.wardrobe
+      ? (Array.isArray(story.book.bible.wardrobe)
+          ? story.book.bible.wardrobe.join(", ")
+          : story.book.bible.wardrobe)
       : null;
 
     const wardrobe = bibleWardrobe || deriveWardrobeSignature(story);
 
-    // --- 2. Textuell kontext: föregående + senaste 3 sidor ---
+    // ---- 2. Previous page ≈ continuity text ----
     const idx = pages.findIndex((p) => p.page === page);
     const prevPg = idx > 0 ? pages[idx - 1] : null;
-    const prevSceneEn =
-      prevPg?.scene_en || prevPg?.scene || prevPg?.text || "";
 
-    const contextStart = Math.max(0, idx - 3);
-    const recentPages = pages.slice(contextStart, idx);
-
-    const storyContextBlock = recentPages.length
-      ? [
-          "STORY SO FAR (previous pages):",
-          ...recentPages.map((p) =>
-            `- Page ${p.page}: ${(p.scene_en || p.scene || p.text || "")
-              .replace(/\s+/g, " ")
-              .trim()}`
-          ),
-        ].join("\n")
+    const prevSceneEn = prevPg?.scene_en
+      ? prevPg.scene_en.replace(/\s+/g, " ").trim()
       : "";
 
-    // --- 3. Bas-prompt (sid-objekt) ---
+    // (NO long "story so far" block — det stör stil)
+    // Vi använder bara immediate previous för kontext.
+
+
+    // ---- 3. Build base prompt (your improved version) ----
     const basePrompt = buildFramePrompt({
       style,
       story,
-      page: pg, // hela sid-objektet
+      page: pg,
       characterName: heroName,
       wardrobe_signature: wardrobe,
       coherence_code,
     });
 
-    // --- 4. Bildinstruktioner ---
-    const imageRefLines = [
-      "*** IMAGE REFERENCES ***",
-      "IMAGE 1: Main hero identity (MASTER reference).",
-      "- Use IMAGE 1 ONLY for hero's face, body, fur/skin, proportions, and clothing.",
-      "- If text and IMAGE 1 conflict, IMAGE 1 wins for appearance.",
+
+    // ---- 4. Minimal image reference section (IMPORTANT) ----
+    const imageRefBlock = [
+      `*** IMAGE REFS ***`,
+      `IMAGE 1 = HERO identity (appearance ALWAYS follows IMAGE 1).`,
     ];
 
     if (prev_b64) {
-      imageRefLines.push(
-        "",
-        "IMAGE 2: Previous story frame (environment + mood).",
-        "- Use IMAGE 2 ONLY for environment style, lighting and general continuity.",
-        "- DO NOT copy the exact pose or framing.",
-        "- Create a NEW moment that continues the story."
+      imageRefBlock.push(
+        `IMAGE 2 = Previous frame (environment + lighting ONLY).`,
+        `Do NOT copy pose or camera.`
       );
     }
 
-    const imageRefsBlock = imageRefLines.join("\n");
+    const imgRef = imageRefBlock.join("\n");
 
-    // --- 5. CONTINUATION-block ---
+
+    // ---- 5. Continuation — simplified & model-friendly ----
     const continuation = prevSceneEn
-      ? [
-          "*** CONTINUATION ***",
-          `Previous action: "${prevSceneEn.replace(/\s+/g, " ").trim()}"`,
-          "Now create the NEXT visual moment in the story.",
-        ].join("\n")
-      : [
-          "*** CONTINUATION ***",
-          "This is the first visible moment in the story. Start the visual narrative.",
-        ].join("\n");
+      ? `*** CONTINUATION ***\nNext moment after: "${prevSceneEn}"`
+      : `*** CONTINUATION ***\nThis is the FIRST visible moment in the story.`;
 
-    // --- 6. Slutlig prompt ---
-    const promptParts = [basePrompt, imageRefsBlock];
-    if (storyContextBlock) promptParts.push(storyContextBlock);
-    promptParts.push(continuation);
 
-    const prompt = promptParts.join("\n\n");
+    // ---- 6. Assemble final prompt ----
+    // IMPORTANT ORDER:
+    // 1. Base prompt (identity, wardrobe, style locked)
+    // 2. Continuation (minimal)
+    // 3. Image references LAST (reduces style-shift!)
+    const prompt = [
+      basePrompt,
+      "",
+      continuation,
+      "",
+      imgRef
+    ].join("\n");
+
     console.log("[IMAGES/NEXT] prompt (truncated):", prompt.slice(0, 400));
 
-    // --- 7. Payload till geminiImage ---
+
+    // ---- 7. Build payload to Gemini / Fal / Flux ----
     const payload = {
       prompt,
-      character_ref_b64: ref_image_b64,             // IMAGE 1
-      prev_b64: prev_b64 || undefined,              // IMAGE 2 (om finns)
+      character_ref_b64: ref_image_b64,
+      prev_b64: prev_b64 || undefined,
       coherence_code: coherence_code || makeCoherenceCode(story),
     };
 
@@ -3490,6 +3457,8 @@ async function handleImagesNext(req, env) {
       payload.style_refs_b64 = style_refs_b64;
     }
 
+
+    // ---- 8. Call image backend ----
     const g = await geminiImage(env, payload, 35000, 2);
     if (!g?.image_url) return err("No image from Gemini", 502);
 
@@ -3498,14 +3467,12 @@ async function handleImagesNext(req, env) {
       g_b64_len: g.b64 ? g.b64.length : null,
     });
 
-    const finalImageUrl = g.image_url;
-    const finalProvider = g.provider || "gemini";
-
     return ok({
       page,
-      image_url: finalImageUrl,
-      provider: finalProvider,
+      image_url: g.image_url,
+      provider: g.provider || "gemini",
     });
+
   } catch (e) {
     console.error("[IMAGES/NEXT] error:", e?.message || e);
     return err(e?.message || "images/next failed", 500);
