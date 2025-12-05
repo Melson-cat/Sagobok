@@ -991,7 +991,7 @@ async function openaiJSON(env, system, user) {
       model: OPENAI_MODEL,
       response_format: { type: "json_object" },
       temperature: 0.6,
-      max_output_tokens: 8000,
+      max_output_tokens: 8500,
       messages: [
         { role: "system", content: sys },
         { role: "user", content: usr },
